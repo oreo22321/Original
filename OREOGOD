@@ -1,0 +1,373 @@
+local Roact = require(game:GetService("ReplicatedStorage").Roact) 
+local Players = game:GetService("Players")
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local FlyEvent = ReplicatedStorage:WaitForChild("FlyEvent") -- ServerScriptServiceと連携
+
+-- 現在のプレイヤーのHumanoidを取得
+local function getHumanoid()
+    if Player and Player.Character then
+        return Player.Character:FindFirstChildOfClass("Humanoid")
+    end
+    return nil
+end
+
+-- Fly機能のローカル制御 (W, A, S, Dキーで飛行)
+local function setFlyMode(enabled, speed)
+    local humanoid = getHumanoid()
+    if not humanoid then return end
+
+    if enabled then
+        -- クライアント側で飛行状態を設定
+        humanoid.PlatformStand = true
+        humanoid.WalkSpeed = speed
+    else
+        -- 飛行を終了
+        humanoid.PlatformStand = false
+        humanoid.WalkSpeed = 16 -- デフォルト速度に戻す
+    end
+    
+    -- サーバーにも通知
+    FlyEvent:FireServer("ToggleFly", enabled)
+    Player:SetAttribute("IsFlying", enabled)
+end
+
+-- ---------------------------------------------------------
+-- Roactコンポーネント (Slider, SettingsPanel)
+-- ---------------------------------------------------------
+
+-- スライダーコンポーネント (変更なし、ただしMin/Maxは0-100/200に戻す)
+local Slider = Roact.Component:extend("Slider")
+function Slider:render()
+    local props = self.props
+    local title = props.Title
+    local currentValue = props.CurrentValue 
+    local onValueChanged = props.OnValueChanged
+    local minValue = props.MinValue or 0
+    local maxValue = props.MaxValue or 100
+
+    return Roact.createElement("Frame", {
+        Size = UDim2.new(1, -20, 0, 40),
+        Position = UDim2.new(0.5, 0, 0, 0),
+        LayoutOrder = props.LayoutOrder,
+        AnchorPoint = Vector2.new(0.5, 0),
+        BackgroundColor3 = Color3.new(0.35, 0.35, 0.35),
+    }, {
+        Title = Roact.createElement("TextLabel", {
+            Text = title .. ": " .. string.format("%.0f", currentValue) .. " (" .. minValue .. "-" .. maxValue .. ")",
+            Size = UDim2.new(0.5, 0, 1, 0),
+            Position = UDim2.new(0, 5, 0, 0),
+            AnchorPoint = Vector2.new(0, 0),
+            BackgroundColor3 = Color3.new(0.35, 0.35, 0.35),
+            TextColor3 = Color3.new(1, 1, 1),
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }),
+        InputBox = Roact.createElement("TextBox", {
+            Size = UDim2.new(0.45, 0, 0.7, 0),
+            Position = UDim2.new(1, -5, 0.5, 0),
+            AnchorPoint = Vector2.new(1, 0.5),
+            BackgroundColor3 = Color3.new(0.2, 0.2, 0.2),
+            Text = tostring(math.floor(currentValue)),
+            TextEditable = true,
+            
+            Event = {
+                FocusLost = function(textBox, enterPressed)
+                    if enterPressed then
+                        local newValue = tonumber(textBox.Text)
+                        if newValue then
+                            local clampedValue = math.min(maxValue, math.max(minValue, newValue))
+                            onValueChanged(clampedValue)
+                        end
+                    end
+                end,
+            }
+        })
+    })
+end
+
+-- トグルボタンコンポーネント
+local ToggleButton = Roact.Component:extend("ToggleButton")
+function ToggleButton:render()
+    local props = self.props
+    local title = props.Title
+    local isToggled = props.IsToggled
+    local onClick = props.OnClick
+
+    local buttonColor = isToggled and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(150, 0, 0) -- 緑/赤
+    local statusText = isToggled and "ON" or "OFF"
+
+    return Roact.createElement("TextButton", {
+        Size = UDim2.new(1, -20, 0, 40),
+        Position = UDim2.new(0.5, 0, 0, 0),
+        LayoutOrder = props.LayoutOrder,
+        AnchorPoint = Vector2.new(0.5, 0),
+        BackgroundColor3 = buttonColor,
+        TextColor3 = Color3.new(1, 1, 1),
+        Text = title .. ": " .. statusText,
+        Event = {
+            MouseButton1Click = onClick
+        }
+    })
+end
+
+
+local SettingsPanel = Roact.Component:extend("SettingsPanel")
+
+function SettingsPanel:init()
+    local initialSpeed = 16 
+    local initialJumpPower = 50 
+    local initialFlySpeed = 50 
+
+    self:setState({
+        isVisible = false,
+        activeTab = 1,
+        color = Color3.new(0.3, 0.3, 0.3),
+        walkSpeed = initialSpeed,
+        jumpPower = initialJumpPower,
+        isFlying = false,          -- 新しい状態：飛行トグル
+        flySpeed = initialFlySpeed, -- 新しい状態：飛行速度
+    })
+    
+    RunService.Heartbeat:Wait()
+    local humanoid = getHumanoid()
+    if humanoid then
+        humanoid.WalkSpeed = initialSpeed
+        humanoid.JumpPower = initialJumpPower
+    end
+end
+
+---------------------------------------------------------
+-- タブの内容をレンダリングする関数群 (一部省略)
+---------------------------------------------------------
+
+-- タブ1: 色設定 (省略 - 変更なし)
+local function renderColorTab(state, onColorChanged)
+    -- ... (前のコードのrenderColorTabの内容) ...
+    return Roact.createElement("Frame", {
+        Size = UDim2.new(1, 0, 1, -30), -- タブボタンのスペースを確保
+        Position = UDim2.new(0, 0, 0, 30),
+        BackgroundColor3 = Color3.new(0.2, 0.2, 0.2),
+    }, {
+        ListLayout = Roact.createElement("UIListLayout", {
+            Padding = UDim.new(0, 10),
+            FillDirection = Enum.FillDirection.Vertical,
+            HorizontalAlignment = Enum.HorizontalAlignment.Center,
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        }),
+        RSlider = Roact.createElement(Slider, {
+            LayoutOrder = 1, Title = "赤 (R)", MinValue = 0, MaxValue = 255, 
+            CurrentValue = state.color.R * 255,
+            OnValueChanged = function(value) onColorChanged("R", value / 255) end
+        }),
+        GSlider = Roact.createElement(Slider, {
+            LayoutOrder = 2, Title = "緑 (G)", MinValue = 0, MaxValue = 255, 
+            CurrentValue = state.color.G * 255,
+            OnValueChanged = function(value) onColorChanged("G", value / 255) end
+        }),
+        BSlider = Roact.createElement(Slider, {
+            LayoutOrder = 3, Title = "青 (B)", MinValue = 0, MaxValue = 255, 
+            CurrentValue = state.color.B * 255,
+            OnValueChanged = function(value) onColorChanged("B", value / 255) end
+        }),
+    })
+end
+
+-- タブ2: 能力設定 (省略 - 変更なし)
+local function renderAbilityTab(state, onAbilityChanged)
+    -- ... (前のコードのrenderAbilityTabの内容) ...
+    return Roact.createElement("Frame", {
+        Size = UDim2.new(1, 0, 1, -30),
+        Position = UDim2.new(0, 0, 0, 30),
+        BackgroundColor3 = Color3.new(0.2, 0.2, 0.2),
+    }, {
+        ListLayout = Roact.createElement("UIListLayout", {
+            Padding = UDim.new(0, 10),
+            FillDirection = Enum.FillDirection.Vertical,
+            HorizontalAlignment = Enum.HorizontalAlignment.Center,
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        }),
+        SpeedSlider = Roact.createElement(Slider, {
+            LayoutOrder = 1, Title = "移動速度", MinValue = 0, MaxValue = 100, 
+            CurrentValue = state.walkSpeed,
+            OnValueChanged = function(value) onAbilityChanged("WalkSpeed", value) end
+        }),
+        JumpSlider = Roact.createElement(Slider, {
+            LayoutOrder = 2, Title = "ジャンプ力", MinValue = 0, MaxValue = 200, 
+            CurrentValue = state.jumpPower,
+            OnValueChanged = function(value) onAbilityChanged("JumpPower", value) end
+        }),
+    })
+end
+
+-- タブ3: Fly設定 (新規追加)
+local function renderFlyTab(state, onFlyChanged)
+    return Roact.createElement("Frame", {
+        Size = UDim2.new(1, 0, 1, -30),
+        Position = UDim2.new(0, 0, 0, 30),
+        BackgroundColor3 = Color3.new(0.2, 0.2, 0.2),
+    }, {
+        ListLayout = Roact.createElement("UIListLayout", {
+            Padding = UDim.new(0, 10),
+            FillDirection = Enum.FillDirection.Vertical,
+            HorizontalAlignment = Enum.HorizontalAlignment.Center,
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        }),
+        
+        -- Flyトグル
+        FlyToggle = Roact.createElement(ToggleButton, {
+            LayoutOrder = 1,
+            Title = "フライトグル",
+            IsToggled = state.isFlying,
+            OnClick = function()
+                onFlyChanged("Toggle", not state.isFlying)
+            end
+        }),
+
+        -- 飛行速度スライダー
+        FlySpeedSlider = Roact.createElement(Slider, {
+            LayoutOrder = 2,
+            Title = "飛行速度",
+            CurrentValue = state.flySpeed,
+            MinValue = 16,
+            MaxValue = 150,
+            OnValueChanged = function(value)
+                onFlyChanged("Speed", value)
+            end
+        }),
+    })
+end
+
+
+function SettingsPanel:render()
+    local state = self.state
+
+    local function togglePanel()
+        self:setState({ isVisible = not state.isVisible })
+    end
+
+    -- 色スライダーの値が変更されたときに呼ばれる関数 (省略)
+    local function onColorChanged(colorComponent, newValue)
+        local currentColor = state.color
+        local newColor = Color3.new(currentColor.R, currentColor.G, currentColor.B)
+        if colorComponent == "R" then
+            newColor = Color3.new(newValue, newColor.G, newColor.B)
+        elseif colorComponent == "G" then
+            newColor = Color3.new(newColor.R, newValue, newColor.B)
+        elseif colorComponent == "B" then
+            newColor = Color3.new(newColor.R, newColor.G, newValue)
+        end
+        self:setState({ color = newColor })
+    end
+    
+    -- 能力スライダーの値が変更されたときに呼ばれる関数
+    local function onAbilityChanged(ability, newValue)
+        local humanoid = getHumanoid()
+        
+        if ability == "WalkSpeed" then
+            self:setState({ walkSpeed = newValue })
+            if humanoid and not state.isFlying then -- 飛行中は通常速度を変えない
+                humanoid.WalkSpeed = newValue
+            end
+        elseif ability == "JumpPower" then
+            self:setState({ jumpPower = newValue })
+            if humanoid then
+                humanoid.JumpPower = newValue
+            end
+        end
+    end
+    
+    -- Fly設定が変更されたときに呼ばれる関数
+    local function onFlyChanged(action, value)
+        if action == "Toggle" then
+            self:setState({ isFlying = value })
+            setFlyMode(value, state.flySpeed) -- Fly機能の実行/停止
+            FlyEvent:FireServer("ToggleFly", value) -- サーバーに通知
+            
+        elseif action == "Speed" then
+            self:setState({ flySpeed = value })
+            if state.isFlying then
+                setFlyMode(true, value) -- 飛行中の場合は即座に速度を適用
+            end
+            FlyEvent:FireServer("SetFlySpeed", value) -- サーバーに通知
+        end
+    end
+    
+    local function setActiveTab(tabIndex)
+        self:setState({ activeTab = tabIndex })
+    end
+
+    -- 現在アクティブなタブの内容
+    local activeTabContent = {}
+    if state.activeTab == 1 then
+        activeTabContent.TabContent = renderColorTab(state, onColorChanged)
+    elseif state.activeTab == 2 then
+        activeTabContent.TabContent = renderAbilityTab(state, onAbilityChanged)
+    elseif state.activeTab == 3 then
+        activeTabContent.TabContent = renderFlyTab(state, onFlyChanged)
+    end
+    
+    local function getTabButtonProps(tabIndex)
+        local isActive = state.activeTab == tabIndex
+        return {
+            Size = UDim2.new(1/3, 0, 0, 30), -- 3つ目のタブに合わせてサイズ変更
+            BackgroundColor3 = isActive and Color3.fromRGB(80, 80, 80) or Color3.fromRGB(50, 50, 50),
+            TextColor3 = Color3.new(1, 1, 1),
+            Font = Enum.Font.SourceSansBold,
+            TextSize = 16,
+            Event = {
+                MouseButton1Click = function() setActiveTab(tabIndex) end
+            }
+        }
+    end
+
+    return Roact.createElement("ScreenGui", {}, {
+        -- 画面右上に表示する設定ボタン (省略)
+        ToggleButton = Roact.createElement("TextButton", {
+            Text = "設定", Size = UDim2.new(0, 80, 0, 40),
+            Position = UDim2.new(1, -85, 0, 5), AnchorPoint = Vector2.new(0, 0),
+            BackgroundColor3 = Color3.fromRGB(50, 50, 50), TextColor3 = Color3.new(1, 1, 1),
+            Event = { MouseButton1Click = togglePanel }
+        }),
+
+        -- 設定パネル本体
+        MainFrame = Roact.createElement("Frame", {
+            Size = UDim2.new(0.4, 0, 0.6, 0), Position = UDim2.new(0.5, 0, 0.5, 0),
+            AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = Color3.fromRGB(30, 30, 30),
+            BorderColor3 = Color3.fromRGB(0, 0, 0), BorderSizePixel = 2, Visible = state.isVisible
+        }, {
+            -- タブボタンを横に並べるレイアウト
+            TabContainer = Roact.createElement("Frame", {
+                Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(40, 40, 40),
+            }, {
+                TabListLayout = Roact.createElement("UIListLayout", {
+                    FillDirection = Enum.FillDirection.Horizontal,
+                    HorizontalAlignment = Enum.HorizontalAlignment.Left,
+                    SortOrder = Enum.SortOrder.LayoutOrder,
+                }),
+                -- タブ1ボタン
+                Tab1 = Roact.createElement("TextButton", getTabButtonProps(1), { Text = "色" }),
+                -- タブ2ボタン
+                Tab2 = Roact.createElement("TextButton", getTabButtonProps(2), { Text = "能力" }),
+                -- タブ3ボタン
+                Tab3 = Roact.createElement("TextButton", getTabButtonProps(3), { Text = "Fly" }),
+            }),
+            
+            -- タブの内容
+            activeTabContent
+        })
+    })
+end
+
+-- UIを画面に描画
+local handle = Roact.mount(
+    Roact.createElement(SettingsPanel),
+    PlayerGui,
+    "SettingsUI"
+)
+
+-- ゲーム終了時のクリーンアップ
+game:GetService("Debris"):AddItem(Player, function()
+    Roact.unmount(handle)
+end)
