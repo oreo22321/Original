@@ -8,13 +8,17 @@ local Toggles = Library.Toggles
 
 local Player = game:GetService("Players")
 local player = Player.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
 
 speedEnabled = false
 speedValue = 16
 
+local function gethumanoid()
+    local character = player.Character or player.CharacterAdded:Wait()
+    return character:WaitForChild("Humanoid")
+end
+
 local function WS()
+    local humanoid = gethumanoid()
     if speedEnabled then
         humanoid.WalkSpeed = speedValue
     else
@@ -57,6 +61,9 @@ CharacterGroup:AddSlider("SpeedSlider", {
     Default = 16,
     Min = 16,
     Max = 200,
+    Rounding = 0,
+    Compact = false,
+    Visible = true,
     Suffix = " studs/s",
 
     Callback = function(Value)
