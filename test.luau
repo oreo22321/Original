@@ -44,7 +44,9 @@ end
 
 local function INFJP()
     local humanoid = gethumanoid()
-    humanoid.Jump = true
+    if humanoid:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
+        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
 end
 
 UserInputService.JumpRequest:Connect(function()
@@ -69,6 +71,8 @@ end
 RunService.Stepped:Connect(function()
     if noclip then
         Noclip()
+    else
+        part.Cancollide = true
     end
 end)
 
