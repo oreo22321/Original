@@ -71,8 +71,6 @@ end
 RunService.Stepped:Connect(function()
     if noclip then
         Noclip()
-    else
-        part.Cancollide = true
     end
 end)
 
