@@ -24,7 +24,7 @@ local Toggle = Groupbox:AddToggle("WSToggle", {
     Default = false,
 })
 
-Toggle:OnChanged(function(Value))
+Toggle:OnChanged(function(Value)
     if Value then
         Humanoid.WalkSpeed = 50
         print("ON")
