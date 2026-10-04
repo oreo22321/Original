@@ -30,10 +30,9 @@ local function found()
     end
 end
 
-if closestPlayer then
+local target = found()
+if target then
     myHrp.CFrame = hrp.CFrame
 else
-    print("not found")
+    print("Not found")
 end
-
-found()
