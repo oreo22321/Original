@@ -1,9 +1,7 @@
-local LocaPlayer = game.Players.LocalPlayer
-local Humanoid = LocaPlayer.Character:WaitForChild("Humanoid")
+local LocalPlayer = game.Players.LocalPlayer
 
-if Humanoid then
-    print("get humanoid!")
-    Humanoid.Health = 0
-else
-    print("not found humanoid!")
-end
+game:GetService("ReplicatedStorage").MenuToys.SpawnToyRemoteFunction:InvokeServer(table.unpack({
+    [1] = "BallBasketball",
+    [2] = CFrame.new(LocalPlayer.Character.HumanoidRootPart.Position),
+    [3] = Vector3.new(0, -146, 0),
+}))
