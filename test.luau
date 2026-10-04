@@ -3,26 +3,26 @@ local me = Player.LocalPlayer
 
 local range = 50
 
-local function tp()
+local function found()
     for _, plr in ipairs(Player:GetPlayers()) do
         if plr ~= me then
 
-            local tg = plr.Character
-            local hrp = tg.FindFirstChild("HumanoidRootPart")
-
-            if tg and hrp then
-
             local char = plr.Character
-            local hrp = char.FindFirstChild("HumanoidRootPart")
-
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
             if char and hrp then
 
-                local distance = (me.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
+                local myChar = me.Character
+                local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+                if myChar and myHrp then
 
-                if distance <= range then
-                    print(plr.Name .. " found plr")
+                    local distance = (myHrp.Position - hrp.Position).Magnitude
+                    if distance <= range then
+                        myHrp.CFrame = hrp.CFrame
+                    end
                 end
             end
         end
     end
 end
+
+found()
