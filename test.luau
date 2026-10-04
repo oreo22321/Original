@@ -24,14 +24,16 @@ local function found()
                             closestPlayer = plr
                         end
                     end
-
-                    if closestPlayer then
-                        myHrp.CFrame = hrp.CFrame
-                    end
                 end
             end
         end
     end
+end
+
+if closestPlayer then
+    myHrp.CFrame = hrp.CFrame
+else
+    print("not found")
 end
 
 found()
