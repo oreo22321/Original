@@ -1,7 +1,28 @@
-local LocalPlayer = game.Players.LocalPlayer
-local Camera = workspace.CurrentCamera
+local Player = game:GetService("Players")
+local me = Player.LocalPlayer
 
-game:GetService("ReplicatedStorage").GrabEvents.CreateGrabLine:FireServer(table.unpack({
-    [1] = ,
-    [2] = CFrame.new(-1.25, 0.255073547, 1.15756226, -0.000862836838, -0.999999523, 0.000385716558, -0.900100589, 0.00094473362, 0.435681164, -0.435681343, 2.87380572e-05, -0.900100946),
-}))
+local range = 50
+
+local function tp()
+    for _, plr in ipairs(Player:GetPlayers()) do
+        if plr ~= me then
+
+            local tg = plr.Character
+            local hrp = tg.FindFirstChild("HumanoidRootPart")
+
+            if tg and hrp then
+
+            local char = plr.Character
+            local hrp = char.FindFirstChild("HumanoidRootPart")
+
+            if char and hrp then
+
+                local distance = (me.Character.HumanoidRootPart.Position - hrp.Position).Magnitude
+
+                if distance <= range then
+                    print(plr.Name .. " found plr")
+                end
+            end
+        end
+    end
+end
