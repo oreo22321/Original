@@ -2,6 +2,8 @@ local Player = game:GetService("Players")
 local me = Player.LocalPlayer
 
 local range = 50
+local closestPlayer = nil
+local closestDistance = range
 
 local function found()
     for _, plr in ipairs(Player:GetPlayers()) do
@@ -17,7 +19,16 @@ local function found()
 
                     local distance = (myHrp.Position - hrp.Position).Magnitude
                     if distance <= range then
-                        myHrp.CFrame = hrp.CFrame
+                        if distance < closestDistance then
+                            closestDistance = distance
+                            closestPlayer = plr
+
+                            if closestPlayer then
+                                myHrp.CFrame = hrp.CFrame
+                            else
+                                print("Not found Player")
+                            end
+                        end
                     end
                 end
             end
