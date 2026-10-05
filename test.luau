@@ -6,13 +6,13 @@ local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 local Options = Library.Options
 local Toggles = Library.Toggles
 
-local Player = game:GetService("Players")
+local Players = game:GetService("Players")
 local me = Players.LocalPlayer
 
 
 local function getPlayer()
     local closestPlayer = nil
-    local closestDistance = math.math.huge
+    local closestDistance = math.huge
 
     local myChar = Players.LocalPlayer.Character
     if not myChar then return end
@@ -34,12 +34,12 @@ local function getPlayer()
 
         return closestPlayer
     end
-end
 
 local function tpPlayer()
     local myChar = Players.LocalPlayer.Character
+    if not myChar then return end
     local myHrp = myChar:FindFirstChild("HumanoidRootPart")
-    if not myChar or not myHrp then return end
+    if not myHrp then return end
 
     local target = getPlayer()
     if target then
