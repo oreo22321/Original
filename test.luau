@@ -9,6 +9,8 @@ local Toggles = Library.Toggles
 local Players = game:GetService("Players")
 local me = Players.LocalPlayer
 
+local tpspamEnabled = false
+
 
 local function getPlayer()
     local closestPlayer = nil
@@ -52,10 +54,19 @@ local function tpPlayer()
     end
 
 local function tpspam()
-    while true do
-        tpPlayer()
-        task.wait(0.1)
-    end
+    if not tpspamEnabled then return end
+    tpspamEnabled = true
+
+    task.spawn(function()
+        while tpspamEnabled do
+            tpPlayer()
+            task.wait(0.05)
+        end
+    end)
+end
+
+local function stopTPspam()
+    tpspamEnabled = false
 end
 
 local Window = Library:CreateWindow({
@@ -93,6 +104,10 @@ local MainGroup = Tabs.Main:AddLeftGroupbox("Main")
     Visible = true,
 
     Callback = function(Value)
-        tpspam()
+        if Value then
+            tpspam()
+        else
+            stopTPspam()
+        end
     end
  })
