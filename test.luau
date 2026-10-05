@@ -44,8 +44,9 @@ local function tpPlayer()
     local target = getPlayer()
     if target then
         local targetChar = target.Character
-        local targetHrp = targetChar:FindFirstChild("HumanoidRootPart")
-        if targetHrp then
+        if not targetChar then return end
+        local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+        if not targetHrp then return end
             myHrp.CFrame = targetHrp.CFrame
         end
     end
