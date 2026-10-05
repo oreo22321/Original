@@ -49,7 +49,7 @@ local function tpPlayer()
         if not targetChar then return end
         local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
         if not targetHrp then return end
-            myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 5)
+            myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 7)
         end
     end
 
