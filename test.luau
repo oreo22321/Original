@@ -6,21 +6,22 @@ local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 local Options = Library.Options
 local Toggles = Library.Toggles
 
+local Player = game:GetService("Players")
 local me = Players.LocalPlayer
-local Players = game:GetService("Players")
 
-local tp = false
-local closestPlayer = nil
-local closestDistance = math.huge
 
 local function getPlayer()
+    local closestPlayer = nil
+    local closestDistance = math.math.huge
+
     local myChar = Players.LocalPlayer.Character
+    if not myChar then return end
     local myHrp = myChar:FindFirstChild("HumanoidRootPart")
-    if myChar and myHrp then
+    if not myHrp then return end
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= me then
                 local Char = plr.Character
-                local Hrp = Char:FindFirstChildOfClass("HumanoidRootPart")
+                local Hrp = Char and Char:FindFirstChild("HumanoidRootPart")
                 if Char and Hrp then
                     local distance = (myHrp.Position - Hrp.Position).Magnitude
                     if distance < closestDistance then
@@ -72,7 +73,7 @@ local MainGroup = Tabs.Main:AddLeftGroupbox("Main")
     Text = "Teleport",
     Func = function()
         tpPlayer()
-    end
+    end,
 
     Visible = true,
     Disabled = false,
