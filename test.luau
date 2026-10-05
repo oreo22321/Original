@@ -51,6 +51,13 @@ local function tpPlayer()
         end
     end
 
+local function tpspam()
+    while true do
+        tpPlayer()
+        task.wait(0.1)
+    end
+end
+
 local Window = Library:CreateWindow({
     Title = "skal",
 	Center = true,
@@ -77,4 +84,15 @@ local MainGroup = Tabs.Main:AddLeftGroupbox("Main")
 
     Visible = true,
     Disabled = false,
+ })
+
+ MainGroup:AddToggle("tpspamToggle", {
+    Text = "tpspam",
+    Default = false,
+    Disabled = false,
+    Visible = true,
+
+    Callback = function(Value)
+        tpspam()
+    end
  })
