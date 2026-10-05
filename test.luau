@@ -54,7 +54,7 @@ local function tpPlayer()
     end
 
 local function tpspam()
-    if not tpspamEnabled then return end
+    if tpspamEnabled then return end
     tpspamEnabled = true
 
     task.spawn(function()
