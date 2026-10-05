@@ -50,7 +50,6 @@ local function tpPlayer()
             myHrp.CFrame = targetHrp.CFrame
         end
     end
-end
 
 local Window = Library:CreateWindow({
     Title = "skal",
