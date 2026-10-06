@@ -69,6 +69,7 @@ local function stopTPspam()
     tpspamEnabled = false
 end
 
+
 local Window = Library:CreateWindow({
     Title = "skal",
 	Center = true,
@@ -83,9 +84,11 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Main = Window:AddTab("Main"),
+    Player = Window:AddTab("Player"),
     ["UI Settings"] = Window:AddTab("UI Settings")
 }
 local MainGroup = Tabs.Main:AddLeftGroupbox("Main")
+local PlayerGroup = Tabs.Player:AddLeftGroupbox("Player")
 
  local tpButton =MainGroup:AddButton({
     Text = "Teleport",
