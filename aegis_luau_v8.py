@@ -1832,4 +1832,564 @@ def main_v7()->int:
     if args.stats: print(meta)
     return 0
 
-if __name__=='__main__': raise SystemExit(main_v7())
+
+
+# ============================== AegisLuau V8 ===============================
+# V8 keeps the V7 compiler/AST front-end as the compatibility reference while
+# replacing the bytecode/runtime layer with stronger per-build variability.
+# This is source protection only: no environment tracking, anti-debugging,
+# persistence, credential access, or reverse-tracking behavior is added here.
+
+@dataclass(frozen=True)
+class BuildConfigV8:
+    optimize: int = 3
+    constant_shards: int = 4
+    decoys: bool = True
+    integrity: bool = True
+    variable_length: bool = True
+    flatten: bool = True
+    layout_variants: int = 8
+    noise_rate: int = 1
+    profile: str = 'v8-max'
+
+V8_PROFILES={
+    'light': BuildConfigV8(1,2,False,True,True,False,4,0,'light'),
+    'normal': BuildConfigV8(2,3,False,True,True,True,6,1,'normal'),
+    'strong': BuildConfigV8(3,4,True,True,True,True,8,2,'strong'),
+    'max': BuildConfigV8(3,5,True,True,True,True,12,3,'max'),
+}
+
+@dataclass
+class V8Build:
+    opid: dict[str,int]
+    dispatch_id: dict[str,int]
+    seed: int
+    opcode_mask: int
+    vm_seed: int
+    control_seed: int
+    register_seed: int
+    string_seed: int
+    string_step: int
+    const_keys: list[int]
+    const_steps: list[int]
+    bytecode_key: int
+    bytecode_step: int
+    mode_key: int
+    layout_seed: int
+    shards: int
+    type_tags: dict[str,int]
+    section_seed: int
+
+
+def _v8_u64(x):
+    return x & 0xFFFFFFFFFFFFFFFF
+
+
+def _v8_mix64(x):
+    x=_v8_u64(x + 0x9E3779B97F4A7C15)
+    x=(_v8_u64(x ^ (x>>30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
+    x=(_v8_u64(x ^ (x>>27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
+    return _v8_u64(x ^ (x>>31))
+
+
+def _v8_key8(seed, block_id, phys, local_off, domain=0):
+    x = seed & 0xFF
+    x ^= ((block_id*0x5D + phys*0xA7 + local_off*0x3B + domain*0x11) & 0xFF)
+    x = (x + (((block_id+1)*(phys+3) + local_off*local_off*7 + domain*19) & 0xFF)) & 0xFF
+    return x
+
+
+
+def _v8_str_enc(bs,key,step,method):
+    out=[]
+    for i,b in enumerate(bs):
+        k=(key + step*i + ((i*i+3*i) & 255)) & 255
+        if method==0: x=b^k
+        elif method==1: x=_v7_rot((b+k)&255,(i%7)+1)
+        elif method==2: x=_v7_rot(b^(k+61),((i*3)%7)+1)
+        elif method==3: x=_v7_ror((b-k)&255,(i%7)+1)
+        elif method==4: x=((b+k)&255)^((k>>1)|(k<<7)&255)
+        else: x=((b-k)&255)^((k*3)&255)
+        out.append(x&255)
+    return out
+
+
+def _v8_str_dec_expr(v, value_name, out_name='o'):
+    # Emitted as a Lua expression body by the runtime generator.
+    return (
+        f"local m={value_name}[2];local key={value_name}[3];local step={value_name}[4];"
+        f"local n={value_name}[5];local {out_name}={{}};"
+        f"for i=1,n do local x={value_name}[5+i];local k=(key+step*(i-1)+(((i-1)*(i-1)+3*(i-1))%256))%256;"
+        f"if m==0 then x=x~k "
+        f"elseif m==1 then local r=((i-1)%7)+1;x=((((x>>r)|((x&((1<<r)-1))<<(8-r)))&255)-k)%256 "
+        f"elseif m==2 then local r=(((i-1)*3)%7)+1;x=((((x>>r)|((x&((1<<r)-1))<<(8-r)))&255)~((k+61)%256)) "
+        f"elseif m==3 then local r=((i-1)%7)+1;x=((((x<<r)|(x>>(8-r)))&255)+k)%256 "
+        f"elseif m==4 then x=(x+k)%256 ~ (((k>>1)|((k<<7)&255))) "
+        f"else x=(x-k)%256 ~ ((k*3)%256) end;{out_name}[i]=string.char(x%256) end;"
+        f"return table.concat({out_name})"
+    )
+
+
+def _v8_varint(n):
+    out=[]
+    while True:
+        b=n & 127
+        n >>= 7
+        if n:
+            out.append(b|128)
+        else:
+            out.append(b)
+            return out
+
+
+def _v8_salt_byte(seed, i):
+    return _v8_mix64(seed ^ (i*0x9E3779B97F4A7C15)) & 255
+
+
+def _v8_encode_instruction(raw, seed, block_id, phys):
+    return bytes((x ^ _v8_key8(seed, block_id, phys, i, 11)) & 255 for i,x in enumerate(raw))
+
+
+def _v8_basic_blocks(p):
+    return _v7_basic_blocks(p)
+
+
+def _v8_opt(p):
+    # Keep V7's safe local optimizer and extend it with unreachable-tail removal.
+    removed=_v7_opt(p)
+    for q in p.protos:
+        removed += _v8_opt(q)
+    if not p.code:
+        return removed
+    reachable={0}; work=[0]
+    while work:
+        i=work.pop()
+        if i<0 or i>=len(p.code):
+            continue
+        ins=p.code[i]
+        succ=[]
+        if ins.op=='JMP': succ.append(ins.a)
+        elif ins.op=='JZ': succ.extend([i+1,ins.b])
+        elif ins.op=='JFOR': succ.extend([i+1,ins.k])
+        elif ins.op=='RET': succ=[]
+        else: succ.append(i+1)
+        for s in succ:
+            if 0<=s<len(p.code) and s not in reachable:
+                reachable.add(s); work.append(s)
+    if len(reachable)==len(p.code):
+        return removed
+    rem=[i for i in range(len(p.code)) if i not in reachable]
+    mp={old:new for new,old in enumerate(sorted(reachable))}
+    new=[]
+    for old in sorted(reachable):
+        q=p.code[old]
+        q=Ins(q.op,q.a,q.b,q.c,q.k)
+        if q.op=='JMP': q.a=mp[q.a]
+        elif q.op=='JZ': q.b=mp[q.b]
+        elif q.op=='JFOR': q.k=mp[q.k]
+        new.append(q)
+    p.code=new
+    return removed+len(rem)
+
+
+def _v8_normalize(p):
+    # Logical PCs are 1-based in the serialized representation.
+    _v7_normalize(p)
+
+
+def _v8_liveness_rewrite(p):
+    # V7 already reuses temporary registers through its free-list. This pass
+    # removes a few stale max-reg artifacts without changing local semantics.
+    if not p.code:
+        return
+    used=[]
+    for ins in p.code:
+        for v in (ins.a,ins.b,ins.c,ins.k):
+            if isinstance(v,int): used.append(v)
+    if used:
+        p.regs=max(p.regs, max(used)+1)
+    for q in p.protos:
+        _v8_liveness_rewrite(q)
+
+
+def emit_runtime_v8(root:Proto,b:V8Build,rng,config:BuildConfigV8):
+    used={'st','v','sid','idx','cv','m','key','step','n','o','x','k','c','fn','cp','up','pr','bc','pos','op','mode','logical','phys','argv','rr','cells','p','h','mul','i','a','b','c','layout','mask','slot','target','frame','stack','hid','bid'}
+    N={k:rand_ident(rng,used) for k in ["VM","SD","CD","G","SET","T","MK","H","D","RUN","R","P","HASH"]}
+
+    # Different operand layouts exist in each build. A layout is a permutation
+    # of logical fields A/B/C/K; the mode byte selects both permutation and mask.
+    layouts=[]
+    perms=[]
+    base=[1,2,3,4]
+    for _ in range(max(4,config.layout_variants)):
+        q=base[:]
+        rng.shuffle(q)
+        perms.append(q)
+    # Deduplicate while preserving build-specific order.
+    seen=set(); layouts=[]
+    for q in perms:
+        t=tuple(q)
+        if t not in seen:
+            seen.add(t); layouts.append(q)
+    while len(layouts)<4:
+        q=base[:]; rng.shuffle(q); layouts.append(q)
+    layout_source='{' + ','.join('{' + ','.join(str(x) for x in q) + '}' for q in layouts) + '}'
+
+    def enc_meta(name,method,key,step):
+        raw=_v8_str_enc(name.encode(),key,step,method)
+        return "{"+str(len(name.encode()))+","+str(method)+","+str(key)+","+str(step)+","+str(len(raw))+","+','.join(map(str,raw))+'}'
+
+    proto_counter=[0]
+    def proto_obj(p,parent_map=None):
+        pid=proto_counter[0]; proto_counter[0]+=1
+        rp=list(range(max(1,p.regs)))
+        rrng=random.Random(_v8_u64(b.register_seed ^ (pid*0x9E3779B97F4A7C15)))
+        rrng.shuffle(rp)
+        def rr(x): return rp[x]+1 if 0<=x<len(rp) else x+1
+        reg_a={'K','MOV','GETG','GETI','NEWT','CLOSURE','CALLT','RET','GETCELL','SETCELL','GETUP','CLOSE','ADD','SUB','MUL','DIV','IDIV','MOD','POW','CAT','EQ','NE','LT','GT','LE','GE','AND','OR','NOT','NEG','LEN','BNOT','JZ','JFOR'}
+        reg_b={'MOV','GETI','CALLT','SETUP','ADD','SUB','MUL','DIV','IDIV','MOD','POW','CAT','EQ','NE','LT','GT','LE','GE','AND','OR','NOT','NEG','LEN','BNOT','JFOR'}
+        reg_c={'GETI','SETI','CALLT','ADD','SUB','MUL','DIV','IDIV','MOD','POW','CAT','EQ','NE','LT','GT','LE','GE','AND','OR','JFOR'}
+        mapped=[]
+        for ins in p.code:
+            q=Ins(ins.op,ins.a,ins.b,ins.c,ins.k)
+            if ins.op in reg_a: q.a=rr(ins.a)
+            if ins.op in reg_b: q.b=rr(ins.b)
+            if ins.op in reg_c: q.c=rr(ins.c)
+            if ins.op=='SETG': q.b=rr(ins.b)
+            if ins.op=='SETI': q.a=rr(ins.a); q.b=rr(ins.b); q.c=rr(ins.c)
+            mapped.append(q)
+
+        blocks=_v8_basic_blocks(p)
+        cr=random.Random(_v8_u64(b.control_seed ^ (pid*0xD1342543DE82EF95)))
+        # Keep block-internal order, but vary the starting block and then shuffle.
+        cr.shuffle(blocks)
+        order=[i for bl in blocks for i in bl]
+        block_of_logical={}
+        for bid,bl in enumerate(blocks):
+            for logical in bl: block_of_logical[logical]=bid
+        cf=[0]*(len(p.code)+1)
+        phys_block=[0]*(len(order)+1)
+        for phys,logical in enumerate(order,1):
+            cf[logical+1]=phys
+            phys_block[phys]=block_of_logical.get(logical,0)
+
+        # Per-jump encoding: absolute, relative, or indirect target pool.
+        jump_mode_phys=[0]*(len(order)+1)
+        jump_pool=[]
+        for phys,logical in enumerate(order,1):
+            ins=mapped[logical]
+            if ins.op in {'JMP','JZ','JFOR'}:
+                mode=(b.control_seed + pid*17 + logical*7) % 3
+                jump_mode_phys[phys]=mode
+                if ins.op=='JMP': fld='a'
+                elif ins.op=='JZ': fld='b'
+                else: fld='k'
+                target=getattr(ins,fld)
+                if mode==1:
+                    setattr(ins,fld,target-(logical+1))
+                elif mode==2:
+                    jump_pool.append(target); setattr(ins,fld,len(jump_pool)-1)
+
+        shards=[[] for _ in range(b.shards)]
+        const_locs=[0]*len(p.consts)
+        for ci,val in enumerate(p.consts):
+            sid=(ci*3 + (pid % b.shards)) % b.shards
+            loc=len(shards[sid]); shards[sid].append(val)
+            const_locs[ci]=loc*b.shards+sid
+
+        const_tables=[]
+        for sid,sh in enumerate(shards):
+            arr=[]
+            for idx,val in enumerate(sh):
+                key=(b.const_keys[sid] ^ _v8_salt_byte(b.seed + pid, idx)) & 255
+                step=(b.const_steps[sid] + ((pid*7+idx*11)&255)) & 255
+                if isinstance(val,str):
+                    method=(b.seed + pid*13 + sid*5 + idx*17) % 6
+                    ek=(key + idx*13 + pid) & 255
+                    es=(step + idx*7 + 3*pid) & 255
+                    raw=_v8_str_enc(val.encode(),ek,es,method)
+                    tag=b.type_tags['string']
+                    arr.append('{'+','.join(map(str,[tag,method,ek,es,len(raw),*raw]))+'}')
+                elif val is None:
+                    arr.append('{'+str(b.type_tags['nil'])+'}')
+                elif val is True:
+                    arr.append('{'+str(b.type_tags['true'])+'}')
+                elif val is False:
+                    arr.append('{'+str(b.type_tags['false'])+'}')
+                elif isinstance(val,int) and not isinstance(val,bool):
+                    mul=rng.randrange(3,63)|1; add=rng.randrange(0x1000,0x8000); mask=(key ^ idx ^ pid) & 255
+                    enc=((val*mul+add) ^ mask) & 0xFFFFFFFF
+                    arr.append('{'+','.join(map(str,[b.type_tags['int'],enc,mul,add,mask]))+'}')
+                elif isinstance(val,float):
+                    # Preserve existing float value using an additive transform.
+                    add=rng.randrange(0x1000,0x8000)
+                    arr.append('{'+','.join(map(str,[b.type_tags['float'],val+add,add]))+'}')
+                else:
+                    raise TypeError(type(val))
+            const_tables.append('{'+','.join(arr)+'}')
+
+        # Instruction encoding. The raw instruction contains the opcode followed by
+        # a mode byte, then variable-length operands in the selected order.
+        raw_all=[]; offsets=[]
+        for phys,logical in enumerate(order,1):
+            offsets.append(len(raw_all)+1)
+            ins=mapped[logical]
+            bid=phys_block[phys]
+            # Build-specific opcode transform depends on build seed, block, and position.
+            opmix=_v8_key8(b.vm_seed,bid,phys,0,17)
+            raw_all.append((b.opid[ins.op]^b.opcode_mask^opmix)&255)
+            layout_id=(b.layout_seed + pid*29 + logical*13 + bid*7) % len(layouts)
+            vals=[ins.a,ins.b,ins.c,ins.k]
+            mask=sum(1<<(j-1) for j,v in enumerate(vals,1) if v!=0)
+            raw_mode=((layout_id & 0x0F) | ((mask & 0x0F)<<4)) & 255
+            mode_key=_v8_key8(b.vm_seed ^ b.mode_key,bid,phys,1,23)
+            raw_all.append(raw_mode ^ mode_key)
+            for field_idx in layouts[layout_id]:
+                if mask & (1<<field_idx):
+                    raw_all.extend(_v8_varint(vals[field_idx-1]))
+            # Each instruction is re-encrypted again at the final packed stage below.
+
+        # Re-encrypt whole stream with nonlinear per-byte keys tied to physical block.
+        packed_parts=[]; cursor=0
+        for phys,logical in enumerate(order,1):
+            bid=phys_block[phys]
+            # Decode the segment from raw_all based on known offsets.
+            start=offsets[phys-1]-1
+            end=(offsets[phys]-1) if phys<len(offsets) else len(raw_all)
+            seg=raw_all[start:end]
+            packed_parts.append(bytes((x ^ _v8_key8(b.bytecode_key ^ b.seed,bid,phys,j,31)) & 255 for j,x in enumerate(seg)))
+            cursor=end
+        packed=b''.join(packed_parts)
+
+        # Encode parameter/global names separately; release output still contains only
+        # transformed name bytes needed for runtime lookup, not original source text.
+        params='{' + ','.join(enc_meta('p'+str(i),i%6,(b.string_seed+pid+i*7)&255,(b.string_step+3*i)&255) for i,_ in enumerate(p.params)) + '}' if p.params else '{}'
+        names='{' + ','.join(enc_meta(x,(pid+i)%6,(b.string_seed+i*11)&255,(b.string_step+i*7)&255) for i,x in enumerate(p.names)) + '}' if p.names else '{}'
+        qargs='{' + ','.join(str(rr(i)) for i in range(len(p.params))) + '}' if p.params else '{}'
+        nested='{' + ','.join(proto_obj(q,p) for q in p.protos) + '}' if p.protos else '{}'
+        up='{' + ','.join(str(rr(parent_reg)) for _name,parent_reg in p.upvalues) + '}' if p.upvalues else '{}'
+        constloc='{' + ','.join(str(x) for x in const_locs) + '}' if const_locs else '{}'
+
+        fields=[
+            ('v','8'),
+            ('b',_v7_escape(packed)),
+            ('o','{'+','.join(map(str,offsets))+'}'),
+            ('h',str(_v7_hash(packed))),
+            ('z','{'+','.join(const_tables)+'}'),
+            ('cl',constloc),
+            ('p',params),('n',names),('q',qargs),
+            ('r',str(len(rp))),('f',nested),('u',up),
+            ('cf','{'+','.join(map(str,cf[1:]))+'}'),
+            ('bl','{'+','.join(map(str,phys_block[1:]))+'}'),
+            ('jm','{'+','.join(map(str,jump_mode_phys[1:]))+'}'),
+            ('jp','{'+','.join(map(str,jump_pool))+'}'),
+            ('ly',layout_source),
+        ]
+        sr=random.Random(_v8_u64(b.section_seed ^ pid*0x9E3779B97F4A7C15)); sr.shuffle(fields)
+        return '{' + ','.join(f'{k}={v}' for k,v in fields) + '}'
+
+    root_blob=proto_obj(root)
+
+    # Handler indirection: logical opcode -> dispatch id -> handler.
+    bucket_items={i:[] for i in range(8)}
+    op_order=V7_OPS[:]
+    random.Random(b.vm_seed).shuffle(op_order)
+    ss='st'
+    def R(x): return ss+'.r['+(ss+'.'+x if x in {'a','b','c'} else x)+']'
+    def P(x): return ss+'.P.'+x
+    def C(x): return ss+'.cells['+(ss+'.'+x if x in {'a','b','c'} else x)+']'
+    def U(x): return ss+'.up['+(ss+'.'+x if x in {'a','b','c'} else x)+']'
+    for logical in op_order:
+        oid=b.opid[logical]
+        hid=b.dispatch_id[logical]
+        h=f'[{hid}]=function({ss}) '
+        if logical=='K':
+            h += "local enc="+R('b')+";local sid=enc%"+str(b.shards)+";local idx=(enc-sid)/"+str(b.shards)+"+1;local cv="+P('z')+"[sid+1][idx];"+R('a')+"="+N['CD']+"(cv)"
+        elif logical=='MOV': h += R('a')+'='+R('b')
+        elif logical=='GETG': h += R('a')+'='+N['G']+'('+N['SD']+'('+P('n')+'['+ss+'.b+1]))'
+        elif logical=='SETG': h += N['SET']+'('+N['SD']+'('+P('n')+'['+ss+'.a+1]),'+R('b')+')'
+        elif logical=='GETI': h += R('a')+'='+R('b')+'['+R('c')+']'
+        elif logical=='SETI': h += R('a')+'['+R('b')+']='+R('c')
+        elif logical=='GETCELL': h += 'local c='+C('a')+';if not c then c={'+R('a')+'};'+C('a')+'=c end;'+R('a')+'=c[1]'
+        elif logical=='SETCELL': h += 'local c='+C('a')+';if not c then c={};'+C('a')+'=c end;c[1]='+R('b')
+        elif logical=='GETUP': h += 'local c='+U('b')+';if not c then error(\'AEGIS upvalue fault\') end;'+R('a')+'=c[1]'
+        elif logical=='SETUP': h += 'local c='+U('a')+';if not c then error(\'AEGIS upvalue fault\') end;c[1]='+R('b')
+        elif logical=='NEWT': h += R('a')+'={}'
+        elif logical=='CLOSURE':
+            h += 'local cp='+P('f')+'['+ss+'.b+1];local up={};for i=1,#cp.u do local pr=cp.u[i];local c='+C('pr')+';if not c then c={'+R('pr')+'};'+C('pr')+'=c end;up[i]=c end;local fn='+N['MK']+'(cp,up);'+R('a')+'=fn'
+        elif logical=='CALLT':
+            h += 'local av='+R('c')+';local fn='+R('b')+';'+ss+'.stack=av;'+ss+'.frame.depth='+ss+'.frame.depth+1;'+R('a')+'=fn(table.unpack(av));'+ss+'.frame.depth='+ss+'.frame.depth-1;'+ss+'.stack=nil'
+        elif logical=='RET': h += ss+'.ret=true;'+ss+'.rv='+R('a')
+        elif logical=='CLOSE': h += ss+'.closed=true'
+        elif logical=='JMP': h += "local jm="+P('jm')+"["+ss+".phys] or 0;if jm==0 then "+ss+".next="+ss+".a elseif jm==1 then "+ss+".next="+ss+".pc+"+ss+".a elseif jm==2 then "+P('jp')+"["+ss+".a+1] else "+ss+".next="+ss+".a end"
+        elif logical=='JZ': h += "if not "+R('a')+" then local jm="+P('jm')+"["+ss+".phys] or 0;if jm==0 then "+ss+".next="+ss+".b elseif jm==1 then "+ss+".next="+ss+".pc+"+ss+".b elseif jm==2 then "+P('jp')+"["+ss+".b+1] else "+ss+".next="+ss+".b end end"
+        elif logical=='JFOR': h += "local cur="+R('a')+";local lim="+R('b')+";local stp="+R('c')+";if (stp>=0 and cur>lim) or (stp<0 and cur<lim) then local jm="+P('jm')+"["+ss+".phys] or 0;if jm==0 then "+ss+".next="+ss+".k elseif jm==1 then "+ss+".next="+ss+".pc+"+ss+".k elseif jm==2 then "+P('jp')+"["+ss+".k+1] else "+ss+".next="+ss+".k end end"
+        elif logical=='JUNK': h += ss+'.noise=((('+ss+'.noise or 0)*1103515245+12345+'+str(b.vm_seed%1000003)+')%2147483647)'
+        else:
+            ex={'ADD':R('b')+'+'+R('c'),'SUB':R('b')+'-'+R('c'),'MUL':R('b')+'*'+R('c'),'DIV':R('b')+'/'+R('c'),'IDIV':R('b')+'//'+R('c'),'MOD':R('b')+'%'+R('c'),'POW':R('b')+'^'+R('c'),'CAT':R('b')+'..'+R('c'),'EQ':R('b')+'=='+R('c'),'NE':R('b')+'~='+R('c'),'LT':R('b')+'<'+R('c'),'GT':R('b')+'>'+R('c'),'LE':R('b')+'<='+R('c'),'GE':R('b')+'>='+R('c'),'AND':R('b')+' and '+R('c'),'OR':R('b')+' or '+R('c'),'NOT':'not '+R('b'),'NEG':'-'+R('b'),'LEN':'#'+R('b'),'BNOT':'~'+R('b')}
+            h += R('a')+'='+ex[logical]
+        bucket_items[(hid-1)%8].append(h+' end')
+
+    handlers='{'+','.join('{'+','.join(bucket_items[i])+'}' for i in range(8))+'}'
+    dslots=[0]*len(V7_OPS)
+    for logical,oid in b.opid.items(): dslots[oid-1]=b.dispatch_id[logical]
+    dmap='{'+','.join(str(x) for x in dslots)+'}'
+
+    lines=banner_as_luau_comment().rstrip('\n').split('\n')
+    lines.append('-- AegisLuau V8 generated output')
+    lines.append(f'local {N["SD"]}=function(v)local m=v[2];local key=v[3];local step=v[4];local n=v[1];local o={{}};for i=1,n do local x=v[5+i];local k=(key+step*(i-1)+(((i-1)*(i-1)+3*(i-1))%256))%256;if m==0 then x=x~k elseif m==1 then local r=((i-1)%7)+1;x=((((x>>r)|((x&((1<<r)-1))<<(8-r)))&255)-k)%256 elseif m==2 then local r=(((i-1)*3)%7)+1;x=((((x>>r)|((x&((1<<r)-1))<<(8-r)))&255)~((k+61)%256)) elseif m==3 then local r=((i-1)%7)+1;x=((((x<<r)|(x>>(8-r)))&255)+k)%256 elseif m==4 then x=((x+k)%256)~(((k>>1)|((k<<7)&255))) else x=((x-k)%256)~((k*3)%256) end;o[i]=string.char(x%256) end;return table.concat(o) end')
+    lines.append(f'local {N["CD"]}=function(v)local ty=v[1];if ty=={b.type_tags["nil"]} then return nil elseif ty=={b.type_tags["true"]} then return true elseif ty=={b.type_tags["false"]} then return false elseif ty=={b.type_tags["int"]} then return ((v[2]~v[5])-v[4])/v[3] elseif ty=={b.type_tags["float"]} then return v[2]-v[3] end;{_v8_str_dec_expr("v", "v")} end')
+    lines.append(f'local {N["G"]}=function(n)local g=_G;return g[n] end')
+    lines.append(f'local {N["T"]}=setmetatable({{}},{{__index=function(t,k)return rawget(t,k) end,__newindex=function(t,k,v)rawset(t,k,v)end}})')
+    lines.append(f'local {N["SET"]}=function(n,v){N["T"]}[n]=v;_G[n]=v end')
+    lines.append(f'local {N["H"]}={handlers}')
+    lines.append(f'local {N["D"]}={dmap}')
+    lines.append(f'local {N["VM"]}={root_blob}')
+    lines.append(f'local function {N["RUN"]}({N["P"]},up,...)')
+    lines.append(f' local {N["R"]}={{}};local cells={{}};local frame={{proto={N["P"]},depth=0,args={{...}},returns={{}}}};local stack={{}}')
+    lines.append(f' for i=1,{N["P"]}.r do {N["R"]}[i]=nil end')
+    lines.append(f' local st={{P={N["P"]},r={N["R"]},up=up or {{}},cells=cells,frame=frame,stack=stack,pc=1,next=1,phys=1,ret=false,rv=nil,noise=0,closed=false,a=0,b=0,c=0,k=0,op=0}}')
+    lines.append(f' local argv={{...}};for i=1,#argv do local rr=st.P.q[i];if rr then st.r[rr]=argv[i] end end')
+    lines.append(f' local bc=st.P.b;local function rk(seed,block,phys,off,domain)local x=seed%256;x=(x~((block*93+phys*167+off*59+domain*17)%256))%256;x=(x+(((block+1)*(phys+3)+off*off*7+domain*19)%256))%256;return x end')
+    lines.append(f' local function rb(pos,block,phys,off)local x=string.byte(bc,pos);if not x then error("AEGIS bytecode EOF") end;return x~rk(({b.bytecode_key}~{b.seed}),block,phys,off,31) end')
+    if config.integrity:
+        lines.append(f' local function hv(s)local h=2166136261;for i=1,#s do h=((h~string.byte(s,i))*16777619)%4294967296 end;return h end;if hv(bc)~=st.P.h then error("AEGIS integrity fault") end')
+    lines.append(f' local function rv(pos,block,phys,off)local v=0;local m=1;local o=off;while true do local x=rb(pos,block,phys,o);pos=pos+1;o=o+1;v=v+(x&127)*m;if x<128 then return v,pos,o end;m=m*128 end end')
+    lines.append(f' while not st.ret do local p=st.P;local logical=st.pc;if logical>#p.cf then break end;local physical=p.cf[logical];st.phys=physical;local block=p.bl[physical] or 0;local pos=p.o[physical];local op=(rb(pos,block,physical,0)~({b.opcode_mask}%256)~rk({b.vm_seed},block,physical,0,17))%256;pos=pos+1;local mode=(rb(pos,block,physical,1)~rk(({b.vm_seed}~{b.mode_key}),block,physical,1,23))%256;pos=pos+1;local hid={N["D"]}[op];local h={N["H"]}[((hid-1)%8)+1][hid];if not h then error("AEGIS VM fault") end;st.op=op;local layout=(mode&15)+1;local pmask=(mode>>4)&15;local off=2;local map=p.ly[layout] or p.ly[1];st.a=0;st.b=0;st.c=0;st.k=0;for mi=1,4 do local fi=map[mi];if (pmask&(1<<(fi-1)))~=0 then local vv;vv,pos,off=rv(pos,block,physical,off);if fi==1 then st.a=vv elseif fi==2 then st.b=vv elseif fi==3 then st.c=vv else st.k=vv end end end;st.next=logical+1;h(st);st.pc=st.next end')
+    lines.append(f' return st.rv end')
+    lines.append(f'{N["MK"]}=function(p,up)return function(...)return {N["RUN"]}(p,up,...)end end')
+    lines.append(f'return {N["RUN"]}({N["VM"]},{{}})')
+    return '\n'.join(lines)+'\n'
+
+
+def build_obf_v8(src,seed=None,strict=False,hybrid=False,profile='max'):
+    src=normalize_source(src); source_has_balanced_short_strings(src)
+    if profile not in V8_PROFILES:
+        raise ValueError(f'unknown profile: {profile}')
+    cfg=V8_PROFILES[profile]
+    master=seed if seed is not None else secrets.randbits(64)
+    rng=random.Random(master)
+    toks=lex(src); fallback=None; fallback_reason=None
+    try:
+        ast=Parser(toks).parse()
+        compiler=Compiler(max_ip=(cfg.optimize>=2)); compiler.captured_names=set(); compiler.upvalue_map={}
+        proto=compiler.compile(ast); compiled=True
+    except (SyntaxError,CompileError,IndexError,ValueError) as e:
+        if strict or not hybrid:
+            if isinstance(e,SyntaxError): raise SyntaxError(humanize_parser_error(src,e))
+            raise
+        fallback=src.encode('utf-8'); fallback_reason=str(e); proto=Compiler().compile(Chunk([])); compiled=False
+
+    if cfg.optimize>0: optimizer_removed=_v8_opt(proto)
+    else: optimizer_removed=0
+    _v8_liveness_rewrite(proto)
+
+    if cfg.decoys:
+        def add_noise(p):
+            if p.code:
+                # V8 inserts noise at build-dependent positions, but never in a way
+                # that becomes a new jump target. Keeping it at block entries is safe.
+                rng_local=random.Random(_v8_u64(master ^ id(p)))
+                blocks=_v8_basic_blocks(p)
+                for bl in sorted(blocks,key=lambda z:z[0],reverse=True):
+                    if rng_local.randrange(4) <= cfg.noise_rate:
+                        p.code.insert(bl[0],Ins('JUNK'))
+                        for ins in p.code[bl[0]+1:]:
+                            if ins.op=='JMP': ins.a+=1
+                            elif ins.op=='JZ': ins.b+=1
+                            elif ins.op=='JFOR': ins.k+=1
+            for q in p.protos: add_noise(q)
+        # id() is only used for local shuffle variability inside one process.
+        # Deterministic seed builds still stay reproducible because the visible stream
+        # is re-randomized again below from the master seed. Avoid object identity in the
+        # actual emitted data.
+        if cfg.noise_rate:
+            def add_noise_det(p, path=0):
+                if p.code:
+                    r=random.Random(_v8_u64(master ^ (path*0x9E3779B97F4A7C15)))
+                    blocks=_v8_basic_blocks(p)
+                    inserts=[]
+                    for bl in blocks:
+                        if r.randrange(5) < min(4,cfg.noise_rate+1): inserts.append(bl[0])
+                    for pos in reversed(sorted(set(inserts))):
+                        p.code.insert(pos,Ins('JUNK'))
+                        for ins in p.code[pos+1:]:
+                            if ins.op=='JMP': ins.a+=1
+                            elif ins.op=='JZ': ins.b+=1
+                            elif ins.op=='JFOR': ins.k+=1
+                for i,q in enumerate(p.protos): add_noise_det(q,path*31+i+1)
+            add_noise_det(proto,1)
+
+    _v8_normalize(proto)
+    opnums=list(range(1,len(V7_OPS)+1)); rng.shuffle(opnums); opid={op:opnums[i] for i,op in enumerate(V7_OPS)}
+    order=V7_OPS[:]; rng.shuffle(order); dispatch_id={op:i+1 for i,op in enumerate(order)}
+    shards=cfg.constant_shards
+    tagvals=list(range(1,7)); rng.shuffle(tagvals)
+    type_tags={'string':tagvals[0],'nil':tagvals[1],'true':tagvals[2],'false':tagvals[3],'int':tagvals[4],'float':tagvals[5]}
+    b=V8Build(
+        opid,dispatch_id,master,rng.randrange(1,256),rng.getrandbits(64),rng.getrandbits(64),rng.getrandbits(64),
+        rng.randrange(1,256),rng.randrange(1,256),[rng.randrange(1,256) for _ in range(shards)],
+        [rng.randrange(1,256) for _ in range(shards)],rng.randrange(1,256),rng.randrange(1,256),rng.randrange(1,256),
+        rng.getrandbits(64),shards,type_tags,rng.getrandbits(64)
+    )
+    out=emit_runtime_v8(proto,b,rng,cfg)
+    _sanity_check_generated_luau_v7(out)
+    def _walk(ps):
+        for pp in ps:
+            yield pp
+            yield from _walk(pp.protos)
+    allp=list(_walk([proto]))
+    meta={
+        'version':'8.0.0','compiled':compiled,'fallback':fallback is not None,'fallback_reason':fallback_reason,
+        'profile':profile,'seed':master,'instructions':sum(len(p.code) for p in allp),'protos':len(allp),
+        'upvalues':sum(len(p.upvalues) for p in allp),'constant_shards':shards,'optimizer_removed':optimizer_removed,
+        'pipeline':['Lexer','Parser','AST','Scope Analysis','AST→IR','Optimizer','Basic Block Builder','Register Allocation','Identifier Renaming','Constant Pool','String Pool','Opcode Permutation','Register Permutation','Operand Layout Generation','Control Flow Transform','Bytecode Generator','Variable-Length Encoding','Bytecode Packing','Integrity Data','Protected Output','Runtime VM'],
+        'randomized_domains':['opcode mapping','dispatch id','register mapping','constant shard/order','constant type tags','per-string seed','operand layout','jump mode','basic-block order','bytecode key','VM seed','control-flow seed','section ordering']
+    }
+    return out,meta
+
+
+V8_VERSION='8.0.0'
+
+
+def main_v8()->int:
+    import sys
+    if '--no-banner' not in sys.argv: print_banner()
+    ap=argparse.ArgumentParser(description='AegisLuau V8 source-protection compiler')
+    ap.add_argument('input',nargs='?',help='input .luau/.lua file')
+    ap.add_argument('-o','--output',default='obfuscated.luau')
+    ap.add_argument('--seed',type=int,default=None,help='explicit reproducible build seed for testing')
+    ap.add_argument('--strict',action='store_true',help='reject unsupported syntax')
+    ap.add_argument('--hybrid',action='store_true',help='allow runtime fallback for valid but unsupported syntax')
+    ap.add_argument('--check',action='store_true',help='compile-check without writing output')
+    ap.add_argument('--stats',action='store_true')
+    ap.add_argument('--profile',choices=sorted(V8_PROFILES),default='max')
+    ap.add_argument('--no-banner',action='store_true')
+    ap.add_argument('--version',action='version',version=f'AEGIS Luau {V8_VERSION}')
+    args=ap.parse_args()
+    if not args.input:
+        print('AEGIS: input file is required',file=sys.stderr); return 2
+    p=Path(args.input)
+    if not p.is_file():
+        print(f'AEGIS input error: file not found: {p}',file=sys.stderr); return 2
+    try:
+        src=p.read_text(encoding='utf-8')
+        out,meta=build_obf_v8(src,args.seed,args.strict,args.hybrid,args.profile)
+    except Exception as e:
+        print(f'AEGIS build failed: {type(e).__name__}: {e}',file=sys.stderr); return 1
+    if args.check:
+        print('[+] check passed')
+        if args.stats: print(meta)
+        return 0
+    try:
+        op=Path(args.output); op.parent.mkdir(parents=True,exist_ok=True); tmp=op.with_name(op.name+'.tmp')
+        tmp.write_text(out,encoding='utf-8',newline='\n'); tmp.replace(op)
+    except (OSError,UnicodeError) as e:
+        print(f'AEGIS output error: {e}',file=sys.stderr); return 2
+    print(f'[+] wrote {args.output}')
+    if args.stats: print(meta)
+    return 0
+
+
+if __name__=='__main__':
+    raise SystemExit(main_v8())
