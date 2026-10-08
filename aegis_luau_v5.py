@@ -49,21 +49,17 @@ from typing import Any, Iterable, Optional
 
 # --------------------------- lexer -----------------------------------------
 
-AEGIS_BANNER = r""" /$$$$$  /$$$$$$$$ /$$$$$$ | $$  /$$$$$$
-/$$__ $$ | $$_____/ | $$  \__/ | $$ | $$__
-| $$ \ $$ | $$      | $$ /$$$$ | $$ | $$
-| $$$$$$$ | $$$$$   | $$|_  $$ | $$ |  $$$$$
-| $$__ $$ | $$__    | $$  \ $$ | $$  \____ $
-| $$  \ $$ | $$_____/ |  $$$$$$/ | $$  /$$  \$$
-|__/  |__/ | $$$$$$$ \______/ |__/ |  $$$$$/"""
+AEGIS_BANNER = r"""   /$$$$$$    /$$$$$$$$   /$$$$$$  /$$$$$$  /$$$$$$
+  /$$__  $$  | $$_____/  /$$__  $$|_  $$_/ /$$__  $$
+ | $$  \ $$  | $$       | $$  \ $$  | $$  | $$  \__/
+ | $$ /$$$$  | $$$$$    | $$ /$$$$  | $$  |  $$$$$$
+ | $$|_  $$  | $$__/    | $$|_  $$  | $$   \____  $$
+ | $$  \ $$  | $$       | $$  \ $$  | $$  /$$  \ $$
+ |  $$$$$$/  | $$$$$$$$ |  $$$$$$/ /$$$$$$|  $$$$$$/
+  \______/  |________/  \______/ |______/ \______/"""
 
-AEGIS_BANNER_COMPACT = r"""/$$$$$/$$$$$$$$/$$$$$$| $$/$$$$$$
-/$$__ $$| $$_____/| $$  \__/| $$| $$__
-| $$ \ $$| $$| $$ /$$$$| $$| $$
-| $$$$$$$| $$$$$| $$|_  $$| $$|  $$$$$
-| $$__ $$| $$__| $$  \ $$| $$\____ $$
-| $$  \ $$| $$_____/|  $$$$$$/| $$/$$  \$$
-|__/  |__/| $$$$$$$\______/|__/|  $$$$$/"""
+AEGIS_BANNER_COMPACT = r"""AEGIS
+Luau Obfuscator V5"""
 
 def _banner_lines() -> list[str]:
     wide = AEGIS_BANNER.rstrip("\n").split("\n")
@@ -568,8 +564,9 @@ class Proto:
 class CompileError(Exception): pass
 
 class Compiler:
-    def __init__(self):
+    def __init__(self, max_ip: bool = False):
         self.proto = Proto([])
+        self.max_ip = max_ip
         self.scopes: list[dict[str,int]] = []
         self.next_reg = 0
         self.free: list[int] = []
@@ -583,8 +580,11 @@ class Compiler:
     def temp(self):
         r=self.newreg(); self.free.append(r); return r
     def add_const(self,v:Any)->int:
-        for i,x in enumerate(self.proto.consts):
-            if type(x) is type(v) and x == v: return i
+        # In ip-max mode, deliberately allow duplicate constants. This is a conventional
+        # source-protection transform: it removes one easy global constant-pool clue.
+        if not self.max_ip:
+            for i,x in enumerate(self.proto.consts):
+                if type(x) is type(v) and x == v: return i
         self.proto.consts.append(v); return len(self.proto.consts)-1
     def add_name(self,n:str)->int:
         if n not in self.proto.names: self.proto.names.append(n)
@@ -678,7 +678,7 @@ class Compiler:
         parent_locals=set()
         for scope in self.scopes:
             parent_locals.update(scope)
-        c=Compiler(); c.proto.params=list(params); c.scopes=[{}]
+        c=Compiler(max_ip=self.max_ip); c.proto.params=list(params); c.scopes=[{}]
         for p in params: c.scopes[0][p]=c.newreg(); c.locals_declared.add(p)
         c.block(body)
         # This VM version has no upvalue cells. Reject accidental captures instead of
@@ -713,7 +713,12 @@ class Compiler:
         if isinstance(n,Index):
             a=self.expr(n.base); b=self.expr(n.key); r=self.newreg(); self.emit("GETI",r,a,b,0); self.free_reg(a); self.free_reg(b); return r
         if isinstance(n,Unary):
-            a=self.expr(n.x); r=self.newreg(); self.emit({"not":"NOT","-":"NEG","#":"LEN","~":"BNOT"}[n.op],r,a,0,0); self.free_reg(a); return r
+            a=self.expr(n.x); r=self.newreg(); op={"not":"NOT","-":"NEG","#":"LEN","~":"BNOT"}[n.op]
+            if self.max_ip:
+                t=self.newreg(); self.emit("MOV",t,a,0,0); self.emit(op,r,t,0,0)
+            else:
+                self.emit(op,r,a,0,0)
+            self.free_reg(a); return r
         if isinstance(n,Binary):
             # Lua/Luau `and` / `or` are short-circuiting and return operands, not booleans.
             # They cannot be implemented as eager binary VM operations.
@@ -732,7 +737,19 @@ class Compiler:
                 b=self.expr(n.b); self.emit("MOV",r,b,0,0); self.free_reg(b)
                 self.patch(jend,"a",len(self.proto.code))
                 return r
-            a=self.expr(n.a); b=self.expr(n.b); r=self.newreg(); mp={"+":"ADD","-":"SUB","*":"MUL","/":"DIV","//":"IDIV","%":"MOD","^":"POW","..":"CAT","==":"EQ","~=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE"}; op=mp[n.op]; self.emit(op,r,a,b,0); self.free_reg(a); self.free_reg(b); return r
+            a=self.expr(n.a); b=self.expr(n.b); r=self.newreg(); mp={"+":"ADD","-":"SUB","*":"MUL","/":"DIV","//":"IDIV","%":"MOD","^":"POW","..":"CAT","==":"EQ","~=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE"}; op=mp[n.op]
+            if self.max_ip:
+                # Decompose common operations into semantics-preserving instruction sequences.
+                # This is ordinary IP-protection, not environment/anti-debugging behavior.
+                if op in {"ADD","SUB"}:
+                    z=self.const(0); t=self.newreg(); self.emit("ADD",t,a,z,0); self.emit(op,r,t,b,0)
+                elif op == "CAT":
+                    e=self.const(""); t=self.newreg(); self.emit("CAT",t,a,e,0); self.emit("CAT",r,t,b,0)
+                else:
+                    t=self.newreg(); self.emit("MOV",t,a,0,0); self.emit(op,r,t,b,0)
+            else:
+                self.emit(op,r,a,b,0)
+            self.free_reg(a); self.free_reg(b); return r
         if isinstance(n,Call):
             args=[]
             if n.method:
@@ -1049,7 +1066,7 @@ def humanize_parser_error(src: str, err: Exception) -> str:
     caret = " " * max(0, col - 1) + "^"
     return f"{msg} (line {line}, column {col})\n{text}\n{caret}"
 
-def build_obf(src:str,seed:Optional[int]=None,strict:bool=False,hybrid:bool=False)->tuple[str,dict[str,Any]]:
+def build_obf(src:str,seed:Optional[int]=None,strict:bool=False,hybrid:bool=False,profile:str="standard")->tuple[str,dict[str,Any]]:
     src = normalize_source(src)
     # Syntax errors in the source itself must never be hidden by the compatibility
     # fallback. Hybrid mode is for valid Luau that Aegis cannot compile yet.
@@ -1069,7 +1086,7 @@ def build_obf(src:str,seed:Optional[int]=None,strict:bool=False,hybrid:bool=Fals
 
     try:
         ast=Parser(toks).parse()
-        c=Compiler(); proto=c.compile(ast)
+        c=Compiler(max_ip=(profile=="ip-max")); proto=c.compile(ast)
         compiled=True
     except (SyntaxError,CompileError,IndexError,ValueError) as e:
         if strict or not hybrid:
@@ -1078,7 +1095,7 @@ def build_obf(src:str,seed:Optional[int]=None,strict:bool=False,hybrid:bool=Fals
             raise
         fallback=src.encode('utf-8')
         fallback_reason=f"unsupported syntax: {e}"
-        proto=Compiler().compile(Chunk([]))
+        proto=Compiler(max_ip=(profile=="ip-max")).compile(Chunk([]))
 
     opnums=list(range(1,len(OPS)+1)); rng.shuffle(opnums)
     opid={op:opnums[i] for i,op in enumerate(OPS)}
@@ -1102,10 +1119,10 @@ def build_obf(src:str,seed:Optional[int]=None,strict:bool=False,hybrid:bool=Fals
     meta={"compiled":compiled,"seed":s,"strict":strict,"hybrid":hybrid,
           "instructions":sum(len(p.code) for p in [proto,*proto.protos]),
           "protos":1+len(proto.protos),"fallback":fallback is not None,
-          "fallback_reason":fallback_reason,"opcodes":len(OPS),"version":VERSION}
+          "fallback_reason":fallback_reason,"opcodes":len(OPS),"version":VERSION,"profile":profile}
     return out,meta
 
-VERSION = "4.2.0"
+VERSION = "5.0.0"
 
 
 def main()->int:
@@ -1113,7 +1130,7 @@ def main()->int:
     if "--no-banner" not in sys.argv:
         print_banner()
 
-    ap=argparse.ArgumentParser(description="AegisLuau hybrid Luau virtualizer")
+    ap=argparse.ArgumentParser(description="AegisLuau source-protection compiler")
     ap.add_argument("input", nargs="?", help="input .luau/.lua file")
     ap.add_argument("-o","--output",default="obfuscated.luau")
     ap.add_argument("--seed",type=int,default=None)
@@ -1122,6 +1139,7 @@ def main()->int:
     ap.add_argument("--stats",action="store_true")
     ap.add_argument("--check",action="store_true",help="parse/compile-check input without writing output")
     ap.add_argument("--no-banner",action="store_true",help="do not print the AEGIS startup banner")
+    ap.add_argument("--profile",choices=["standard","ip-max"],default="standard",help="source-protection profile; ip-max adds semantics-preserving instruction decomposition and constant-pool diversification")
     ap.add_argument("--version",action="version",version=f"AEGIS Luau {VERSION}")
     args=ap.parse_args()
 
@@ -1141,7 +1159,7 @@ def main()->int:
         return 2
 
     try:
-        out,meta=build_obf(src,args.seed,args.strict,args.hybrid)
+        out,meta=build_obf(src,args.seed,args.strict,args.hybrid,args.profile)
     except Exception as e:
         print(f"AEGIS build failed: {type(e).__name__}: {e}", file=sys.stderr)
         return 1

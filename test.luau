@@ -1,1 +1,1 @@
-print("huh")
+print("ABC")
