@@ -9,7 +9,7 @@ Goals:
     bytecode layout and handler names on every build.
   * Add constant/string hiding, table packing, control-flow flattening,
     opaque predicates, metatable indirection, decoy instructions and integrity checks.
-  * Fall back to an encrypted runtime loader only for syntax outside the compiler subset.
+  * In --hybrid mode, fall back only for syntactically valid Luau outside the compiler subset; malformed source is always rejected.
 
 This is intentionally a hybrid rather than a fake "unbreakable" obfuscator.  A program
 that has to execute has to reveal its behavior somewhere.  The serious improvement over
@@ -49,22 +49,49 @@ from typing import Any, Iterable, Optional
 
 # --------------------------- lexer -----------------------------------------
 
-AEGIS_BANNER = r""" /$$$$$$     /$$$$$$$$     /$$$$$$      /$$$$$$      /$$$$$$$
-| $$__  $$    | $$_____/   | $$  \__/   |_  $$_/    | $$____/
-| $$  \ $$   | $$         | $$ /$$$$      | $$      | $$
-| $$$$$$$$    | $$$$$      | $$|_  $$      | $$      | $$$$$$$
-| $$__  $$    | $$__/      | $$  \ $$     | $$      |____  $$
-| $$  | $$    | $$         |  $$$$$$/      | $$       /$$  \ $$
-|__/  |__/    | $$$$$$$$    \______/      /$$$$$$    |  $$$$$$/
-"""
+AEGIS_BANNER = r""" /$$$$$  /$$$$$$$$ /$$$$$$ | $$  /$$$$$$
+/$$__ $$ | $$_____/ | $$  \__/ | $$ | $$__
+| $$ \ $$ | $$      | $$ /$$$$ | $$ | $$
+| $$$$$$$ | $$$$$   | $$|_  $$ | $$ |  $$$$$
+| $$__ $$ | $$__    | $$  \ $$ | $$  \____ $
+| $$  \ $$ | $$_____/ |  $$$$$$/ | $$  /$$  \$$
+|__/  |__/ | $$$$$$$ \______/ |__/ |  $$$$$/"""
+
+AEGIS_BANNER_COMPACT = r"""/$$$$$/$$$$$$$$/$$$$$$| $$/$$$$$$
+/$$__ $$| $$_____/| $$  \__/| $$| $$__
+| $$ \ $$| $$| $$ /$$$$| $$| $$
+| $$$$$$$| $$$$$| $$|_  $$| $$|  $$$$$
+| $$__ $$| $$__| $$  \ $$| $$\____ $$
+| $$  \ $$| $$_____/|  $$$$$$/| $$/$$  \$$
+|__/  |__/| $$$$$$$\______/|__/|  $$$$$/"""
+
+def _banner_lines() -> list[str]:
+    wide = AEGIS_BANNER.rstrip("\n").split("\n")
+    compact = AEGIS_BANNER_COMPACT.rstrip("\n").split("\n")
+    import shutil
+    width = shutil.get_terminal_size((80, 24)).columns
+    if width >= max(len(x) for x in wide) + 2:
+        return wide
+    if width >= max(len(x) for x in compact) + 1:
+        return compact
+    return ["AEGIS Luau Obfuscator"]
+
 
 def banner_as_luau_comment() -> str:
-    return "\n".join("--" + line if line else "--" for line in AEGIS_BANNER.rstrip("\n").split("\n")) + "\n"
+    lines = AEGIS_BANNER.rstrip("\n").split("\n")
+    return "\n".join("--" + line if line else "--" for line in lines) + "\n"
+
+
+def print_banner() -> None:
+    # The logo is deliberately <= 50 columns so GitHub Codespaces mobile terminals
+    # do not wrap it into a different shape.
+    print("\n".join(_banner_lines()) + "\n", end="", flush=True)
+
 
 KEYWORDS = {
     "and","break","continue","do","else","elseif","end","false","for",
     "function","if","in","local","nil","not","or","repeat","return","then",
-    "true","until","while","type","export","self","goto",
+    "true","until","while","type","export","goto",
 }
 
 @dataclass
@@ -384,7 +411,13 @@ class Parser:
             obj: Node = Var(self.take().text)
             while self.accept("."):
                 obj = Index(obj, Lit(self.take().text))
+            is_method = False
+            if self.accept(":"):
+                obj = Index(obj, Lit(self.take().text))
+                is_method = True
             params, body = self.function_tail()
+            if is_method:
+                params = ["self"] + params
             return FunctionDecl(obj, params, body)
         if c == "return":
             self.take()
@@ -447,7 +480,7 @@ class Parser:
     def prefix(self) -> Node:
         c = self.cur()
         if c.text in {"not", "-", "#", "~"}:
-            self.take(); return Unary(c.text, self.expr(8))
+            self.take(); return Unary(c.text, self.expr(7))
         if c.text == "nil": self.take(); return Lit(None)
         if c.text == "true": self.take(); return Lit(True)
         if c.text == "false": self.take(); return Lit(False)
@@ -504,7 +537,10 @@ class Parser:
         self.take("("); params=[]
         if not self.accept(")"):
             while True:
-                params.append(self.take().text)
+                name_tok=self.take()
+                if name_tok.text == "...":
+                    raise SyntaxError("vararg function parameters are not supported by the Aegis VM subset")
+                params.append(name_tok.text)
                 if self.accept(")"): break
                 self.take(",")
         body=Chunk(self.block({"end"})); self.take("end"); return params, body
@@ -579,15 +615,22 @@ class Compiler:
             rs=[self.declare(x) for x in n.names]
             for i,r in enumerate(rs):
                 if i < len(n.values):
-                    v=self.expr(n.values[i]); self.emit("MOV",r,v); self.free_reg(v)
+                    v=self.expr(n.values[i])
+                else:
+                    v=self.const(None)
+                self.emit("MOV",r,v); self.free_reg(v)
             return
         if isinstance(n,Assign):
             vals=[self.expr(v) for v in n.values]
             for i,t in enumerate(n.targets):
-                if i < len(vals): self.store(t,vals[i])
+                r = vals[i] if i < len(vals) else self.const(None)
+                self.store(t,r)
+                if i >= len(vals): self.free_reg(r)
             for r in vals:self.free_reg(r)
             return
         if isinstance(n,Return):
+            if len(n.values) > 1:
+                raise CompileError("multiple return values are not supported by the Aegis VM subset")
             if not n.values: self.emit("RET",0,0,0,0)
             else:
                 r=self.expr(n.values[0]); self.emit("RET",r,0,0,0); self.free_reg(r)
@@ -621,20 +664,29 @@ class Compiler:
         if isinstance(n,FunctionDecl):
             p=self.subcompile(n.params,n.body)
             idx=len(self.proto.protos); self.proto.protos.append(p)
-            r=self.newreg(); self.emit("CLOSURE",r,idx,0,0)
-            self.store(n.name,r); self.free_reg(r); return
+            if n.local and isinstance(n.name,Var):
+                r=self.declare(n.name.name)
+                self.emit("CLOSURE",r,idx,0,0)
+            else:
+                r=self.newreg(); self.emit("CLOSURE",r,idx,0,0)
+                self.store(n.name,r)
+                self.free_reg(r)
+            return
         raise CompileError(f"unsupported stmt {type(n).__name__}")
 
     def subcompile(self,params:list[str],body:Chunk)->Proto:
+        parent_locals=set()
+        for scope in self.scopes:
+            parent_locals.update(scope)
         c=Compiler(); c.proto.params=list(params); c.scopes=[{}]
-        # parameters occupy the first registers.
         for p in params: c.scopes[0][p]=c.newreg(); c.locals_declared.add(p)
         c.block(body)
-        # reject undeclared outer reads by using a special marker in lookup later.
-        for name in self.collect_vars(body):
-            if c.lookup(name) is None and name not in KEYWORDS:
-                # Globals are allowed; we cannot distinguish at compile time, so treat names as globals.
-                pass
+        # This VM version has no upvalue cells. Reject accidental captures instead of
+        # silently turning outer locals into globals, which would change program semantics.
+        referenced=self.collect_vars(body)
+        captured=sorted(name for name in referenced if name in parent_locals and c.lookup(name) is None)
+        if captured:
+            raise CompileError("closures over outer locals are not supported: " + ", ".join(captured))
         if not c.proto.code or c.proto.code[-1].op!="RET": c.emit("RET",0,0,0,0)
         return c.proto
 
@@ -663,7 +715,24 @@ class Compiler:
         if isinstance(n,Unary):
             a=self.expr(n.x); r=self.newreg(); self.emit({"not":"NOT","-":"NEG","#":"LEN","~":"BNOT"}[n.op],r,a,0,0); self.free_reg(a); return r
         if isinstance(n,Binary):
-            a=self.expr(n.a); b=self.expr(n.b); r=self.newreg(); mp={"+":"ADD","-":"SUB","*":"MUL","/":"DIV","//":"IDIV","%":"MOD","^":"POW","..":"CAT","==":"EQ","~=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE","and":"AND","or":"OR"}; op=mp[n.op]; self.emit(op,r,a,b,0); self.free_reg(a); self.free_reg(b); return r
+            # Lua/Luau `and` / `or` are short-circuiting and return operands, not booleans.
+            # They cannot be implemented as eager binary VM operations.
+            if n.op == "and":
+                a=self.expr(n.a); r=self.newreg(); self.emit("MOV",r,a,0,0)
+                jf=self.emit("JZ",a,0,0,0); self.free_reg(a)
+                b=self.expr(n.b); self.emit("MOV",r,b,0,0); self.free_reg(b)
+                self.patch(jf,"b",len(self.proto.code))
+                return r
+            if n.op == "or":
+                a=self.expr(n.a); r=self.newreg(); self.emit("MOV",r,a,0,0)
+                jf=self.emit("JZ",a,0,0,0); self.free_reg(a)
+                jend=self.emit("JMP",0,0,0,0)
+                rhs=len(self.proto.code)
+                self.patch(jf,"b",rhs)
+                b=self.expr(n.b); self.emit("MOV",r,b,0,0); self.free_reg(b)
+                self.patch(jend,"a",len(self.proto.code))
+                return r
+            a=self.expr(n.a); b=self.expr(n.b); r=self.newreg(); mp={"+":"ADD","-":"SUB","*":"MUL","/":"DIV","//":"IDIV","%":"MOD","^":"POW","..":"CAT","==":"EQ","~=":"NE","<":"LT",">":"GT","<=":"LE",">=":"GE"}; op=mp[n.op]; self.emit(op,r,a,b,0); self.free_reg(a); self.free_reg(b); return r
         if isinstance(n,Call):
             args=[]
             if n.method:
@@ -685,7 +754,12 @@ class Compiler:
             r=self.newreg(); self.emit("NEWT",r,0,0,0); ai=1
             for k,v in n.fields:
                 vr=self.expr(v)
-                kr=self.expr(k) if k is not None else self.const(ai); self.emit("SETI",r,kr,vr,0); self.free_reg(kr); self.free_reg(vr); ai+=1
+                if k is None:
+                    kr=self.const(ai)
+                    ai += 1
+                else:
+                    kr=self.expr(k)
+                self.emit("SETI",r,kr,vr,0); self.free_reg(kr); self.free_reg(vr)
             return r
         if isinstance(n,FunctionValue):
             p=self.subcompile(n.params,n.body); idx=len(self.proto.protos); self.proto.protos.append(p); r=self.newreg(); self.emit("CLOSURE",r,idx,0,0); return r
@@ -719,12 +793,12 @@ class Build:
     perm: list[int]
     seed: int
     xor: int
-    name_key: int
-    op_key: int = 0
-    a_key: int = 0
-    b_key: int = 0
-    c_key: int = 0
-    k_key: int = 0
+    stream_key: int = 0
+    stream_step: int = 0
+    str_step: int = 0
+    const_key: int = 0
+    const_step: int = 0
+    num_key: int = 0
 
 
 def rand_ident(rng: random.Random, used:set[str]) -> str:
@@ -747,26 +821,39 @@ def encode_bytes(data:bytes,key:int)->list[int]:
     return [b ^ key for b in data]
 
 
+def _rolling_byte_key(base: int, step: int, idx: int) -> int:
+    return (base + step * idx) & 0xFF
+
+
+def _encode_string_bytes(data: bytes, base: int, step: int) -> list[int]:
+    out=[]
+    for i,b in enumerate(data):
+        k=_rolling_byte_key(base, step, i)
+        v=b ^ k
+        if i & 1:
+            v=((v << 3) | (v >> 5)) & 0xFF
+        out.append(v)
+    return out
+
+
 def emit_runtime(root:Proto, build:Build, rng:random.Random, fallback:Optional[bytes]=None) -> str:
     used=set()
-    N={k:rand_ident(rng,used) for k in ["VM","OP","K","I","R","A","B","C","P","S","G","E","D","RUN","MK","GET","SET","T","Q","H"]}
-    # Encode every bytecode structure as a set of numeric arrays. Constants are separately encrypted.
-    protos=[]
+    N={k:rand_ident(rng,used) for k in ["VM","D","G","SET","T","MK","H","RUN","S","P","R"]}
 
+    # Encode strings with a rolling per-build key instead of a single fixed XOR.
     def enc_str(s:str)->str:
-        raw=encode_bytes(s.encode('utf-8'),build.xor)
-        return "{"+",".join(str(x) for x in raw)+"}"
+        raw=_encode_string_bytes(s.encode('utf-8'), build.xor, build.str_step)
+        return "{"+str(len(raw))+","+",".join(str(x) for x in raw)+"}"
 
     def proto_obj(p:Proto)->str:
-        # Randomize VM register numbering per prototype.
         rp=list(range(max(1,p.regs)))
         rng.shuffle(rp)
-        regs = len(rp)
+        regs=len(rp)
         def rr(x:int)->int:
             return (rp[x] + 1) if 0 <= x < len(rp) else (x + 1)
         def mapped(ins:Ins)->Ins:
             q=Ins(ins.op,ins.a,ins.b,ins.c,ins.k)
-            if ins.op in {"K","MOV","GETG","GETI","NEWT","CLOSURE","CALLT","RET","NOT","NEG","LEN","BNOT","ADD","SUB","MUL","DIV","IDIV","MOD","POW","CAT","EQ","NE","LT","GT","LE","GE","AND","OR"}:
+            if ins.op in {"K","MOV","GETG","GETI","NEWT","CLOSURE","CALLT","RET","NOT","NEG","LEN","BNOT","ADD","SUB","MUL","DIV","IDIV","MOD","POW","CAT","EQ","NE","LT","GT","LE","GE","AND","OR","JZ","JFOR"}:
                 q.a=rr(ins.a)
             if ins.op in {"MOV","GETI","SETI","CALLT","NOT","NEG","LEN","BNOT","ADD","SUB","MUL","DIV","IDIV","MOD","POW","CAT","EQ","NE","LT","GT","LE","GE","AND","OR","JZ","JFOR"}:
                 q.b=rr(ins.b)
@@ -778,21 +865,24 @@ def emit_runtime(root:Proto, build:Build, rng:random.Random, fallback:Optional[b
                 q.a=rr(ins.a); q.b=rr(ins.b); q.c=rr(ins.c)
             return q
         mapped_code=[mapped(x) for x in p.code]
-        ops=[]; aa=[]; bb=[]; cc=[]; kk=[]
-        for ins in mapped_code:
-            ops.append(build.opid[ins.op] ^ build.op_key)
-            aa.append(ins.a ^ build.a_key); bb.append(ins.b ^ build.b_key); cc.append(ins.c ^ build.c_key); kk.append(ins.k ^ build.k_key)
+        stream=[]
+        for pc,ins in enumerate(mapped_code,1):
+            vals=[build.opid[ins.op],ins.a,ins.b,ins.c,ins.k]
+            for slot,v in enumerate(vals):
+                key=_rolling_byte_key(build.stream_key + slot*17, build.stream_step, pc-1)
+                stream.append(v ^ key)
         consts=[]
         for x in p.consts:
             if isinstance(x,str):
-                consts.append("{1,"+enc_str(x)+"}")
+                raw=_encode_string_bytes(x.encode('utf-8'), build.const_key, build.const_step)
+                consts.append("{1,"+str(len(raw))+","+",".join(map(str,raw))+"}")
             elif x is None: consts.append("{0}")
             elif x is True: consts.append("{2}")
             elif x is False: consts.append("{3}")
             elif isinstance(x,int) and not isinstance(x,bool):
                 add=rng.randrange(1000,9000)
                 mul=rng.randrange(3,19)|1
-                enc=x*mul+add
+                enc=(x*mul+add) ^ build.num_key
                 consts.append(f"{{4,{enc},{mul},{add}}}")
             elif isinstance(x,float):
                 add=rng.randrange(1000,9000)
@@ -802,22 +892,21 @@ def emit_runtime(root:Proto, build:Build, rng:random.Random, fallback:Optional[b
         params="{"+",".join(enc_str(x) for x in p.params)+"}" if p.params else "{}"
         names="{"+",".join(enc_str(x) for x in p.names)+"}" if p.names else "{}"
         pargs="{"+",".join(str(rr(i)) for i in range(len(p.params)))+"}" if p.params else "{}"
-        return "{"+f"o={{{','.join(map(str,ops))}}},a={{{','.join(map(str,aa))}}},b={{{','.join(map(str,bb))}}},c={{{','.join(map(str,cc))}}},k={{{','.join(map(str,kk))}}},z={{{','.join(consts)}}},p={params},n={names},q={pargs},r={regs},f={nested}"+"}"
+        return "{"+f"s={{{','.join(map(str,stream))}}},z={{{','.join(consts)}}},p={params},n={names},q={pargs},r={regs},f={nested}"+"}"
 
     root_blob=proto_obj(root)
-    handlers="{"
-    # handler bodies are generated below as nested functions in a single dispatch table.
-    # This shape makes static opcode search less useful because ids are build-random.
 
+    # Deterministic handler table keyed by randomized numeric opcode ids.
+    handlers="{"
     for logical in OPS:
         oid=build.opid[logical]
         ss=N['S']
         handlers += f"[{oid}]=function({ss}) "
         if logical=="K":
-            handlers += f"local v={ss}.P.z[{ss}.b+1];local t=v[1];if t==1 then {ss}.r[{ss}.a]={N['D']}(v[2]) elseif t==0 then {ss}.r[{ss}.a]=nil elseif t==2 then {ss}.r[{ss}.a]=true elseif t==3 then {ss}.r[{ss}.a]=false elseif t==4 then {ss}.r[{ss}.a]=(v[2]-v[4])/v[3] elseif t==5 then {ss}.r[{ss}.a]=v[2]-v[3] end"
+            handlers += f"local v={ss}.P.z[{ss}.b+1];local t=v[1];if t==1 then local n=v[2];local z={{}};for i=1,n do local x=v[i+2];local k=({build.const_key}+{build.const_step}*(i-1))%256;if ((i-1)&1)==1 then x=((x>>3)|((x&7)<<5))&255 end;z[i]=string.char(x~k) end;{ss}.r[{ss}.a]=table.concat(z) elseif t==0 then {ss}.r[{ss}.a]=nil elseif t==2 then {ss}.r[{ss}.a]=true elseif t==3 then {ss}.r[{ss}.a]=false elseif t==4 then {ss}.r[{ss}.a]=((v[2]~{build.num_key})-v[4])/v[3] elseif t==5 then {ss}.r[{ss}.a]=v[2]-v[3] end"
         elif logical=="MOV": handlers += f"{ss}.r[{ss}.a]={ss}.r[{ss}.b]"
-        elif logical=="GETG": handlers += f"{ss}.r[{ss}.a]={N['G']}({N['D']}({ss}.P.n[{ss}.b+1]))"
-        elif logical=="SETG": handlers += f"{N['SET']}({N['D']}({ss}.P.n[{ss}.a+1]),{ss}.r[{ss}.b])"
+        elif logical=="GETG": handlers += f"{ss}.r[{ss}.a]={N['G']}({N['D']}({ss}.P.n[{ss}.b+1))"
+        elif logical=="SETG": handlers += f"{N['SET']}({N['D']}({ss}.P.n[{ss}.a+1)),{ss}.r[{ss}.b])"
         elif logical=="GETI": handlers += f"{ss}.r[{ss}.a]={ss}.r[{ss}.b][{ss}.r[{ss}.c]]"
         elif logical=="SETI": handlers += f"{ss}.r[{ss}.a][{ss}.r[{ss}.b]]={ss}.r[{ss}.c]"
         elif logical=="NEWT": handlers += f"{ss}.r[{ss}.a]={{}}"
@@ -826,7 +915,7 @@ def emit_runtime(root:Proto, build:Build, rng:random.Random, fallback:Optional[b
         elif logical=="RET": handlers += f"{ss}.ret=true;{ss}.rv={ss}.r[{ss}.a]"
         elif logical=="JMP": handlers += f"{ss}.pc={ss}.a"
         elif logical=="JZ": handlers += f"if not {ss}.r[{ss}.a] then {ss}.pc={ss}.b end"
-        elif logical=="JFOR": handlers += f"if {ss}.r[{ss}.a]>{ss}.r[{ss}.b] then {ss}.pc={ss}.k end"
+        elif logical=="JFOR": handlers += f"local cur={ss}.r[{ss}.a];local lim={ss}.r[{ss}.b];local stp={ss}.r[{ss}.c];if (stp>=0 and cur>lim) or (stp<0 and cur<lim) then {ss}.pc={ss}.k end"
         elif logical=="JUNK": handlers += f"{ss}.junk=((({ss}.junk or 0)*1103515245+12345)%2147483647)"
         else:
             exprs={
@@ -835,58 +924,42 @@ def emit_runtime(root:Proto, build:Build, rng:random.Random, fallback:Optional[b
         handlers += " end,"
     handlers += "}"
 
-    # Build a split decoder for strings and runtime names.
     lines=banner_as_luau_comment().rstrip("\n").split("\n")
-    lines.append("-- AegisLuau V3 generated output")
-    lines.append(f"local {N['K']}={build.xor}")
-    lines.append(f"local {N['D']}=function(a)local s={{}};for i=1,#a do s[i]=string.char(a[i]~{N['K']}) end;return table.concat(s) end")
+    lines.append("-- AegisLuau V4 generated output")
+    lines.append(f"local {N['D']}=function(v)local n=v[1];local s={{}};for i=1,n do local x=v[i+1];local k=({build.xor}+{build.str_step}*(i-1))%256;if ((i-1)&1)==1 then x=((x>>3)|((x&7)<<5))&255 end;s[i]=string.char(x~k) end;return table.concat(s) end")
     lines.append(f"local {N['G']}=function(n)return _G[n] end")
     lines.append(f"local {N['T']}=setmetatable({{}},{{__index=function(t,k)return rawget(t,k) end,__newindex=function(t,k,v)rawset(t,k,v)end}})")
     lines.append(f"local {N['SET']}=function(n,v){N['T']}[n]=v;_G[n]=v end")
-    lines.append(f"local {N['A']}=setmetatable({{}},{{__index=function(t,k)local x={N['T']}[k];if x~=nil then return x end;return _G[k] end}})")
     lines.append(f"local {N['MK']}")
     lines.append(f"local {N['H']}={handlers}")
     lines.append(f"local {N['VM']}={root_blob}")
-    # decoys and integrity seal
-    seal=hashlib.sha256((root_blob+str(build.opid)+str(build.perm)).encode()).hexdigest()
-    seal_num=int(seal[:8],16)%1000000007
-    lines.append(f"local {N['E']}={seal_num}")
-    lines.append(f"local function {N['RUN']}({N['P']},...)")
-    lines.append(f" local {N['R']}, {N['I']} = {{}}, 1")
-    lines.append(f" for i=1,{N['P']}.r do {N['R']}[i]=nil end")
-    lines.append(f" local st={{P={N['P']},r={N['R']},pc=1,ret=false,rv=nil,z={N['P']}.z,junk=0,a=0,b=0,c=0,k=0,I=0}}")
-    lines.append(f" local argv={{...}};for i=1,#argv do local rr=st.P.q[i]; if rr then st.r[rr]=argv[i] end end")
+    lines.append(f"local function {N['RUN']}({N['P']},...)" )
+    lines.append(f" local {N['R']}={{}};for i=1,{N['P']}.r do {N['R']}[i]=nil end")
+    lines.append(f" local st={{P={N['P']},r={N['R']},pc=1,ret=false,rv=nil,junk=0,a=0,b=0,c=0,k=0}}")
+    lines.append(f" local argv={{...}};for i=1,#argv do local rr=st.P.q[i];if rr then st.r[rr]=argv[i] end end")
     lines.append(f" while not st.ret do")
-    lines.append(f"  local p=st.P; if st.pc>#p.o then break end")
-    lines.append(f"  local q=(p.o[st.pc]~{build.op_key}); local h={N['H']}[q]; if not h then error('VM dispatch fault') end")
-    lines.append(f"  st.a=(p.a[st.pc]~{build.a_key}); st.b=(p.b[st.pc]~{build.b_key}); st.c=(p.c[st.pc]~{build.c_key}); st.k=(p.k[st.pc]~{build.k_key}); st.I=st.pc")
-    # handler functions read st.I indirectly? K reads st.I via generated code, okay. But current handler uses I in const table.
-    lines.append(f"  -- dispatch permutation + opaque branch")
-    lines.append(f"  if {opaque_expr(build.seed)} then h(st) else h(st) end")
+    lines.append(f"  local p=st.P;local base=(st.pc-1)*5;local function rd(slot) local x=p.s[base+slot];local k=({build.stream_key}+(slot-1)*17+{build.stream_step}*(st.pc-1))%256;return x~k end")
+    lines.append(f"  if base+5>#p.s then break end")
+    lines.append(f"  st.op=rd(1);st.a=rd(2);st.b=rd(3);st.c=rd(4);st.k=rd(5)")
+    lines.append(f"  local h={N['H']}[st.op];if not h then error('AEGIS VM dispatch fault') end")
+    lines.append(f"  h(st)")
     lines.append(f"  st.pc=st.pc+1")
     lines.append(f" end")
     lines.append(f" return st.rv end")
-    # Fix handlers to reference fields from st rather than formal pseudo vars. The generated K handler currently used
-    # S.I/A etc, but S is formal. It will use S.I and S.r. Good. CALL uses S... etc.
     lines.append(f"{N['MK']}=function(p)return function(...)return {N['RUN']}(p,...)end end")
-    lines.append(f"local __dg={{114,101,116,117,114,110,32,102,117,110,99,116,105,111,110,40,120,41,32,114,101,116,117,114,110,32,120,32,43,32,48,32,101,110,100}};local __ds={N['D']}(__dg);local __loader=loadstring or load;local __dynamic=nil;if __loader then local __f=__loader(__ds);if __f then __dynamic=__f() end end")
-    lines.append(f"local __seal=({build.name_key}~{build.op_key}~{build.a_key}~{build.b_key}~{build.c_key}~{build.k_key});if __seal==0 and __dynamic then return __dynamic(0) end")
-    lines.append(f"return {N['RUN']}({N['VM']})")
 
     if fallback is not None:
-        # Hybrid fallback: store raw UTF-8 bytes XORed with a per-build key.
-        # Remove the normal VM return first so the fallback branch is actually reached.
-        if lines and lines[-1].startswith(f"return {N['RUN']}("):
-            lines.pop()
+        # Optional compatibility path. It is never emitted unless --hybrid is requested.
         k=rng.randrange(1,255)
-        enc=[b ^ k for b in fallback]
-        chunks=[enc[i:i+96] for i in range(0,len(enc),96)] or [[]]
+        enc=[b ^ ((k + i*31) & 0xFF) for i,b in enumerate(fallback)]
+        chunks=[enc[i:i+80] for i in range(0,len(enc),80)] or [[]]
         arrs=["{"+",".join(map(str,ch))+"}" for ch in chunks]
-        lines.append(f"local __fallback_key={k}; local __fallback_chunks={{{','.join(arrs)}}}")
-        lines.append("local function __fallback() local z={};for _,q in ipairs(__fallback_chunks) do for i=1,#q do z[#z+1]=string.char(q[i]~__fallback_key) end end;local f,e=(loadstring or load)(table.concat(z));if not f then error(e) end;return f() end")
-        lines.append("return __fallback()")
+        lines.append(f"-- HYBRID FALLBACK: source-compatible mode; source is intentionally retained")
+        lines.append(f"local __fk={k};local __fc={{{','.join(arrs)}}};local __z={{}};local __fi=0;for _,q in ipairs(__fc) do for i=1,#q do __fi=__fi+1;__z[__fi]=string.char(q[i]~(({k}+31*(__fi-1))%256)) end end;local __loader=loadstring or load;if not __loader then error('AEGIS hybrid fallback requires loadstring/load') end;local __f,__e=__loader(table.concat(__z));if not __f then error(__e) end;return __f()")
         return "\n".join(lines)+"\n"
+    lines.append(f"return {N['RUN']}({N['VM']})")
     return "\n".join(lines)+"\n"
+
 
 # --------------------------- source transformation -------------------------
 
@@ -908,107 +981,191 @@ def rewrite_safe_names(src:str,rng:random.Random)->str:
     return "".join(out)
 
 
-def build_obf(src:str,seed:Optional[int]=None,strict:bool=False)->tuple[str,dict[str,Any]]:
+
+def normalize_source(src: str) -> str:
+    # UTF-8 BOM is legal in editors and should not become an accidental token.
+    if src.startswith("\ufeff"):
+        src = src[1:]
+    # Normalize line endings so diagnostics and output are deterministic.
+    return src.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def source_has_balanced_short_strings(src: str) -> None:
+    """Preflight check with precise diagnostics before any fallback decision."""
+    i = 0
+    n = len(src)
+    while i < n:
+        if src.startswith('--', i):
+            if src.startswith('--[', i):
+                e = _long_bracket_end(src, i + 2)
+                if e is not None:
+                    i = e
+                    continue
+            j = src.find('\n', i + 2)
+            i = n if j < 0 else j
+            continue
+        if src[i] in "'\"":
+            q = src[i]
+            start = i
+            i += 1
+            escaped = False
+            while i < n:
+                ch = src[i]
+                if escaped:
+                    escaped = False
+                    i += 1
+                    continue
+                if ch == '\\':
+                    escaped = True
+                    i += 1
+                    continue
+                if ch == q:
+                    i += 1
+                    break
+                if ch in '\r\n':
+                    line, col = _line_col(src, start)
+                    line_text = src.splitlines()[line-1] if 0 < line <= len(src.splitlines()) else ""
+                    caret = " " * max(0, col-1) + "^"
+                    raise SyntaxError(f"unterminated string at line {line}, column {col}: {line_text!r}\n{caret}")
+                i += 1
+            else:
+                line, col = _line_col(src, start)
+                raise SyntaxError(f"unterminated string at line {line}, column {col}: {src[start:start+80]!r}")
+            continue
+        i += 1
+
+
+def humanize_parser_error(src: str, err: Exception) -> str:
+    msg = str(err)
+    m = re.search(r" at (\d+)(?:,|$)", msg)
+    if not m:
+        return msg
+    pos = int(m.group(1))
+    if pos == len(src) and src.endswith("\n") and len(src) > 0:
+        pos = max(0, pos - 1)
+    line, col = _line_col(src, pos)
+    lines = src.splitlines() or [""]
+    text = lines[line - 1] if 0 < line <= len(lines) else ""
+    caret = " " * max(0, col - 1) + "^"
+    return f"{msg} (line {line}, column {col})\n{text}\n{caret}"
+
+def build_obf(src:str,seed:Optional[int]=None,strict:bool=False,hybrid:bool=False)->tuple[str,dict[str,Any]]:
+    src = normalize_source(src)
+    # Syntax errors in the source itself must never be hidden by the compatibility
+    # fallback. Hybrid mode is for valid Luau that Aegis cannot compile yet.
+    source_has_balanced_short_strings(src)
+
     s=seed if seed is not None else secrets.randbits(64)
     rng=random.Random(s)
     fallback=None
     fallback_reason=None
     compiled=False
 
-    # Lexer failures are handled by the same hybrid fallback as parser/compiler
-    # failures.  This matters for valid Luau syntax outside the supported subset
-    # and prevents the obfuscator itself from crashing before it can emit output.
     try:
         toks=lex(src)
-        try:
-            ast=Parser(toks).parse()
-            c=Compiler(); proto=c.compile(ast)
-            compiled=True
-        except (SyntaxError,CompileError,IndexError,ValueError) as e:
-            if strict:
-                raise
-            fallback=src.encode('utf-8')
-            fallback_reason=f"parser: {e}"
-            proto=Compiler().compile(Chunk([]))
-    except SyntaxError as e:
-        if strict:
+    except SyntaxError:
+        # Lexer errors are always fatal. They indicate malformed source.
+        raise
+
+    try:
+        ast=Parser(toks).parse()
+        c=Compiler(); proto=c.compile(ast)
+        compiled=True
+    except (SyntaxError,CompileError,IndexError,ValueError) as e:
+        if strict or not hybrid:
+            if isinstance(e, SyntaxError):
+                raise SyntaxError(humanize_parser_error(src, e))
             raise
         fallback=src.encode('utf-8')
-        fallback_reason=f"lexer: {e}"
+        fallback_reason=f"unsupported syntax: {e}"
         proto=Compiler().compile(Chunk([]))
 
     opnums=list(range(1,len(OPS)+1)); rng.shuffle(opnums)
     opid={op:opnums[i] for i,op in enumerate(OPS)}
-    perm=list(range(1,256)); rng.shuffle(perm)
-    perm=perm[:64]
-    build=Build(opid,perm,s,rng.randrange(1,256),rng.randrange(1,2**31-1),
-                op_key=rng.randrange(1,64),a_key=rng.randrange(1,64),b_key=rng.randrange(1,64),
-                c_key=rng.randrange(1,64),k_key=rng.randrange(1,64))
+    perm=list(range(1,256)); rng.shuffle(perm); perm=perm[:64]
+    build=Build(
+        opid,perm,s,rng.randrange(1,256),
+        stream_key=rng.randrange(1,256),stream_step=rng.randrange(1,256),str_step=rng.randrange(1,256),
+        const_key=rng.randrange(1,256),const_step=rng.randrange(1,256),num_key=rng.randrange(1,256)
+    )
 
     def add_decoy(p:Proto):
-        old=p.code[:]
-        p.code=[Ins("JUNK")]+old
+        p.code=[Ins("JUNK")]+p.code
         for ins in p.code[1:]:
-            if ins.op=="JMP": ins.a += 1
-            elif ins.op=="JZ": ins.b += 1
-            elif ins.op=="JFOR": ins.k += 1
-        for q in p.protos: add_decoy(q)
+            if ins.op=="JMP": ins.a+=1
+            elif ins.op=="JZ": ins.b+=1
+            elif ins.op=="JFOR": ins.k+=1
+        for q in p.protos:add_decoy(q)
     add_decoy(proto)
 
     out=emit_runtime(proto,build,rng,fallback=fallback)
-    meta={"compiled":compiled,"seed":s,"strict":strict,
+    meta={"compiled":compiled,"seed":s,"strict":strict,"hybrid":hybrid,
           "instructions":sum(len(p.code) for p in [proto,*proto.protos]),
           "protos":1+len(proto.protos),"fallback":fallback is not None,
-          "fallback_reason":fallback_reason,"opcodes":len(OPS)}
+          "fallback_reason":fallback_reason,"opcodes":len(OPS),"version":VERSION}
     return out,meta
 
-
-VERSION = "3.2.0"
-
-
-def print_banner() -> None:
-    print(AEGIS_BANNER, end="", flush=True)
+VERSION = "4.2.0"
 
 
 def main()->int:
-    # Print first so the AEGIS logo is literally the first output produced by the tool.
-    # This also makes argument errors and missing-input errors visibly belong to AEGIS.
-    if "--no-banner" not in __import__("sys").argv:
+    import sys
+    if "--no-banner" not in sys.argv:
         print_banner()
 
     ap=argparse.ArgumentParser(description="AegisLuau hybrid Luau virtualizer")
     ap.add_argument("input", nargs="?", help="input .luau/.lua file")
     ap.add_argument("-o","--output",default="obfuscated.luau")
     ap.add_argument("--seed",type=int,default=None)
-    ap.add_argument("--strict",action="store_true",help="reject source outside the supported compiler subset")
+    ap.add_argument("--strict",action="store_true",help="reject unsupported Luau syntax")
+    ap.add_argument("--hybrid",action="store_true",help="allow runtime fallback for valid-but-unsupported Luau")
     ap.add_argument("--stats",action="store_true")
+    ap.add_argument("--check",action="store_true",help="parse/compile-check input without writing output")
     ap.add_argument("--no-banner",action="store_true",help="do not print the AEGIS startup banner")
     ap.add_argument("--version",action="version",version=f"AEGIS Luau {VERSION}")
     args=ap.parse_args()
 
     if not args.input:
-        ap.error("input file is required")
+        print("AEGIS: input file is required", file=sys.stderr)
+        return 2
+
+    in_path=Path(args.input)
+    if not in_path.is_file():
+        print(f"AEGIS input error: file not found: {in_path}", file=sys.stderr)
+        return 2
 
     try:
-        src=Path(args.input).read_text(encoding="utf-8")
+        src=in_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as e:
-        raise SystemExit(f"AEGIS input error: {e}")
+        print(f"AEGIS input error: {e}", file=sys.stderr)
+        return 2
 
     try:
-        out,meta=build_obf(src,args.seed,args.strict)
+        out,meta=build_obf(src,args.seed,args.strict,args.hybrid)
     except Exception as e:
-        raise SystemExit(f"AEGIS build failed: {type(e).__name__}: {e}") from e
+        print(f"AEGIS build failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+
+    if args.check:
+        print("[+] check passed")
+        if meta.get("fallback"):
+            print(f"[!] hybrid fallback would be used: {meta.get('fallback_reason','unsupported syntax')}")
+        if args.stats:
+            print(meta)
+        return 0
 
     try:
-        out_path = Path(args.output)
-        if out_path.parent != Path("."):
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(out,encoding="utf-8",newline="\n")
+        out_path=Path(args.output)
+        out_path.parent.mkdir(parents=True,exist_ok=True)
+        tmp=out_path.with_name(out_path.name + ".tmp")
+        tmp.write_text(out,encoding="utf-8",newline="\n")
+        tmp.replace(out_path)
     except (OSError, UnicodeError) as e:
-        raise SystemExit(f"AEGIS output error: {e}")
+        print(f"AEGIS output error: {e}", file=sys.stderr)
+        return 2
 
     if meta.get("fallback"):
-        print(f"[!] hybrid fallback: {meta.get('fallback_reason','unsupported syntax')}")
+        print(f"[!] hybrid fallback enabled: {meta.get('fallback_reason','unsupported syntax')}")
     print(f"[+] wrote {args.output}")
     if args.stats:
         print(meta)

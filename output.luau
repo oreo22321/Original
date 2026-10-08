@@ -1,38 +1,30 @@
--- /$$$$$$     /$$$$$$$$     /$$$$$$      /$$$$$$      /$$$$$$$
---| $$__  $$    | $$_____/   | $$  \__/   |_  $$_/    | $$____/
---| $$  \ $$   | $$         | $$ /$$$$      | $$      | $$
---| $$$$$$$$    | $$$$$      | $$|_  $$      | $$      | $$$$$$$
---| $$__  $$    | $$__/      | $$  \ $$     | $$      |____  $$
---| $$  | $$    | $$         |  $$$$$$/      | $$       /$$  \ $$
---|__/  |__/    | $$$$$$$$    \______/      /$$$$$$    |  $$$$$$/
--- AegisLuau V3 generated output
-local r=94
-local a1167=function(a)local s={};for i=1,#a do s[i]=string.char(a[i]~r) end;return table.concat(s) end
-local x50=function(n)return _G[n] end
-local r6738=setmetatable({},{__index=function(t,k)return rawget(t,k) end,__newindex=function(t,k,v)rawset(t,k,v)end})
-local b1674=function(n,v)r6738[n]=v;_G[n]=v end
-local m=setmetatable({},{__index=function(t,k)local x=r6738[k];if x~=nil then return x end;return _G[k] end})
-local _0x8e3cb9
-local q3722={[4]=function(r9881) local v=r9881.P.z[r9881.b+1];local t=v[1];if t==1 then r9881.r[r9881.a]=a1167(v[2]) elseif t==0 then r9881.r[r9881.a]=nil elseif t==2 then r9881.r[r9881.a]=true elseif t==3 then r9881.r[r9881.a]=false elseif t==4 then r9881.r[r9881.a]=(v[2]-v[4])/v[3] elseif t==5 then r9881.r[r9881.a]=v[2]-v[3] end end,[8]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b] end,[27]=function(r9881) r9881.r[r9881.a]=x50(a1167(r9881.P.n[r9881.b+1])) end,[10]=function(r9881) b1674(a1167(r9881.P.n[r9881.a+1]),r9881.r[r9881.b]) end,[6]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b][r9881.r[r9881.c]] end,[34]=function(r9881) r9881.r[r9881.a][r9881.r[r9881.b]]=r9881.r[r9881.c] end,[28]=function(r9881) r9881.r[r9881.a]={} end,[32]=function(r9881) r9881.r[r9881.a]=_0x8e3cb9(r9881.P.f[r9881.b+1]) end,[25]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b](table.unpack(r9881.r[r9881.c])) end,[21]=function(r9881) r9881.ret=true;r9881.rv=r9881.r[r9881.a] end,[24]=function(r9881) r9881.pc=r9881.a end,[22]=function(r9881) if not r9881.r[r9881.a] then r9881.pc=r9881.b end end,[29]=function(r9881) if r9881.r[r9881.a]>r9881.r[r9881.b] then r9881.pc=r9881.k end end,[17]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]+r9881.r[r9881.c] end,[18]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]-r9881.r[r9881.c] end,[11]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]*r9881.r[r9881.c] end,[2]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]/r9881.r[r9881.c] end,[15]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]//r9881.r[r9881.c] end,[12]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]%r9881.r[r9881.c] end,[13]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]^r9881.r[r9881.c] end,[20]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]..r9881.r[r9881.c] end,[23]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]==r9881.r[r9881.c] end,[19]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]~=r9881.r[r9881.c] end,[7]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]<r9881.r[r9881.c] end,[30]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]>r9881.r[r9881.c] end,[26]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]<=r9881.r[r9881.c] end,[31]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b]>=r9881.r[r9881.c] end,[9]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b] and r9881.r[r9881.c] end,[16]=function(r9881) r9881.r[r9881.a]=r9881.r[r9881.b] or r9881.r[r9881.c] end,[33]=function(r9881) r9881.r[r9881.a]=not r9881.r[r9881.b] end,[5]=function(r9881) r9881.r[r9881.a]=-r9881.r[r9881.b] end,[1]=function(r9881) r9881.r[r9881.a]=#r9881.r[r9881.b] end,[3]=function(r9881) r9881.r[r9881.a]=~r9881.r[r9881.b] end,[14]=function(r9881) r9881.junk=(((r9881.junk or 0)*1103515245+12345)%2147483647) end,}
-local q={o={33,58},a={58,59},b={8,8},c={5,5},k={63,63},z={},p={},n={},q={},r=1,f={}}
-local b3122=534222347
-local function q699(_0x89fd31,...)
- local a1055, _0x5bc9c4 = {}, 1
- for i=1,_0x89fd31.r do a1055[i]=nil end
- local st={P=_0x89fd31,r=a1055,pc=1,ret=false,rv=nil,z=_0x89fd31.z,junk=0,a=0,b=0,c=0,k=0,I=0}
- local argv={...};for i=1,#argv do local rr=st.P.q[i]; if rr then st.r[rr]=argv[i] end end
+-- /$$$$$  /$$$$$$$$ /$$$$$$ | $$  /$$$$$$
+--/$$__ $$ | $$_____/ | $$  \__/ | $$ | $$__
+--| $$ \ $$ | $$      | $$ /$$$$ | $$ | $$
+--| $$$$$$$ | $$$$$   | $$|_  $$ | $$ |  $$$$$
+--| $$__ $$ | $$__    | $$  \ $$ | $$  \____ $
+--| $$  \ $$ | $$_____/ |  $$$$$$/ | $$  /$$  \$$
+--|__/  |__/ | $$$$$$$ \______/ |__/ |  $$$$$/
+-- AegisLuau V4 generated output
+local m2015=function(v)local n=v[1];local s={};for i=1,n do local x=v[i+1];local k=(114+251*(i-1))%256;if ((i-1)&1)==1 then x=((x>>3)|((x&7)<<5))&255 end;s[i]=string.char(x~k) end;return table.concat(s) end
+local _0x5fa3d5=function(n)return _G[n] end
+local r7085=setmetatable({},{__index=function(t,k)return rawget(t,k) end,__newindex=function(t,k,v)rawset(t,k,v)end})
+local q=function(n,v)r7085[n]=v;_G[n]=v end
+local a8125
+local q9559={[23]=function(m6053) local v=m6053.P.z[m6053.b+1];local t=v[1];if t==1 then local n=v[2];local z={};for i=1,n do local x=v[i+2];local k=(237+153*(i-1))%256;if ((i-1)&1)==1 then x=((x>>3)|((x&7)<<5))&255 end;z[i]=string.char(x~k) end;m6053.r[m6053.a]=table.concat(z) elseif t==0 then m6053.r[m6053.a]=nil elseif t==2 then m6053.r[m6053.a]=true elseif t==3 then m6053.r[m6053.a]=false elseif t==4 then m6053.r[m6053.a]=((v[2]~4)-v[4])/v[3] elseif t==5 then m6053.r[m6053.a]=v[2]-v[3] end end,[12]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b] end,[33]=function(m6053) m6053.r[m6053.a]=_0x5fa3d5(m2015(m6053.P.n[m6053.b+1)) end,[2]=function(m6053) q(m2015(m6053.P.n[m6053.a+1)),m6053.r[m6053.b]) end,[26]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b][m6053.r[m6053.c]] end,[28]=function(m6053) m6053.r[m6053.a][m6053.r[m6053.b]]=m6053.r[m6053.c] end,[5]=function(m6053) m6053.r[m6053.a]={} end,[21]=function(m6053) m6053.r[m6053.a]=a8125(m6053.P.f[m6053.b+1]) end,[29]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b](table.unpack(m6053.r[m6053.c])) end,[11]=function(m6053) m6053.ret=true;m6053.rv=m6053.r[m6053.a] end,[22]=function(m6053) m6053.pc=m6053.a end,[30]=function(m6053) if not m6053.r[m6053.a] then m6053.pc=m6053.b end end,[6]=function(m6053) local cur=m6053.r[m6053.a];local lim=m6053.r[m6053.b];local stp=m6053.r[m6053.c];if (stp>=0 and cur>lim) or (stp<0 and cur<lim) then m6053.pc=m6053.k end end,[7]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]+m6053.r[m6053.c] end,[17]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]-m6053.r[m6053.c] end,[20]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]*m6053.r[m6053.c] end,[25]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]/m6053.r[m6053.c] end,[14]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]//m6053.r[m6053.c] end,[31]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]%m6053.r[m6053.c] end,[1]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]^m6053.r[m6053.c] end,[34]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]..m6053.r[m6053.c] end,[9]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]==m6053.r[m6053.c] end,[8]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]~=m6053.r[m6053.c] end,[27]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]<m6053.r[m6053.c] end,[13]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]>m6053.r[m6053.c] end,[32]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]<=m6053.r[m6053.c] end,[3]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b]>=m6053.r[m6053.c] end,[24]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b] and m6053.r[m6053.c] end,[10]=function(m6053) m6053.r[m6053.a]=m6053.r[m6053.b] or m6053.r[m6053.c] end,[18]=function(m6053) m6053.r[m6053.a]=not m6053.r[m6053.b] end,[19]=function(m6053) m6053.r[m6053.a]=-m6053.r[m6053.b] end,[16]=function(m6053) m6053.r[m6053.a]=#m6053.r[m6053.b] end,[4]=function(m6053) m6053.r[m6053.a]=~m6053.r[m6053.b] end,[15]=function(m6053) m6053.junk=(((m6053.junk or 0)*1103515245+12345)%2147483647) end,}
+local b={s={144,176,193,210,227,219,15,28,45,62,66,103,119,136,153,181,196,210,227,244,28,30,44,62,79,122,114,138,152,170,220,209,231,241,5,23,41,62,79,96},z={{1,3,133,159,119},{4,8859,3,8860}},p={},n={{5,2,248,1,104,42}},q={},r=5,f={}}
+local function _0xe923d3(a2071,...)
+ local r9472={};for i=1,a2071.r do r9472[i]=nil end
+ local st={P=a2071,r=r9472,pc=1,ret=false,rv=nil,junk=0,a=0,b=0,c=0,k=0}
+ local argv={...};for i=1,#argv do local rr=st.P.q[i];if rr then st.r[rr]=argv[i] end end
  while not st.ret do
-  local p=st.P; if st.pc>#p.o then break end
-  local q=(p.o[st.pc]~47); local h=q3722[q]; if not h then error('VM dispatch fault') end
-  st.a=(p.a[st.pc]~58); st.b=(p.b[st.pc]~8); st.c=(p.c[st.pc]~5); st.k=(p.k[st.pc]~63); st.I=st.pc
-  -- dispatch permutation + opaque branch
-  if (((598*598)-(597*597))==(1195) and ((148~(148~598))==598)) then h(st) else h(st) end
+  local p=st.P;local base=(st.pc-1)*5;local function rd(slot) local x=p.s[base+slot];local k=(159+(slot-1)*17+91*(st.pc-1))%256;return x~k end
+  if base+5>#p.s then break end
+  st.op=rd(1);st.a=rd(2);st.b=rd(3);st.c=rd(4);st.k=rd(5)
+  local h=q9559[st.op];if not h then error('AEGIS VM dispatch fault') end
+  h(st)
   st.pc=st.pc+1
  end
  return st.rv end
-_0x8e3cb9=function(p)return function(...)return q699(p,...)end end
-local __dg={114,101,116,117,114,110,32,102,117,110,99,116,105,111,110,40,120,41,32,114,101,116,117,114,110,32,120,32,43,32,48,32,101,110,100};local __ds=a1167(__dg);local __loader=loadstring or load;local __dynamic=nil;if __loader then local __f=__loader(__ds);if __f then __dynamic=__f() end end
-local __seal=(1320612494~47~58~8~5~63);if __seal==0 and __dynamic then return __dynamic(0) end
-local __fallback_key=75; local __fallback_chunks={{59,57,34,37,63,99,105,60,35,36,107,34,56,107,44,36,47,116,116,107,2,63,107,38,46,98}}
-local function __fallback() local z={};for _,q in ipairs(__fallback_chunks) do for i=1,#q do z[#z+1]=string.char(q[i]~__fallback_key) end end;local f,e=(loadstring or load)(table.concat(z));if not f then error(e) end;return f() end
-return __fallback()
+a8125=function(p)return function(...)return _0xe923d3(p,...)end end
+return _0xe923d3(b)
