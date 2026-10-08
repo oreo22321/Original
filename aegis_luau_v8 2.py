@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AegisLuau V6 - IR/VM source-protection compiler.
+AegisLuau V8.1 - compiler/runtime source-protection compiler.
 
 Goals:
   * Do not put the original Luau source in the generated file for compiled regions.
@@ -1840,6 +1840,85 @@ def main_v7()->int:
 # This is source protection only: no environment tracking, anti-debugging,
 # persistence, credential access, or reverse-tracking behavior is added here.
 
+
+@dataclass(frozen=True)
+class IRInstruction:
+    op: str
+    a: int = 0
+    b: int = 0
+    c: int = 0
+    k: int = 0
+
+@dataclass
+class IRFunction:
+    instructions: list[IRInstruction]
+    regs: int
+    consts: list[Any]
+    names: list[str]
+    params: list[str]
+    protos: list['IRFunction'] = field(default_factory=list)
+    upvalues: list[tuple[str, int]] = field(default_factory=list)
+
+def _proto_to_ir(p: Proto) -> IRFunction:
+    return IRFunction([IRInstruction(x.op,x.a,x.b,x.c,x.k) for x in p.code],p.regs,list(p.consts),list(p.names),list(p.params),[_proto_to_ir(q) for q in p.protos],list(p.upvalues))
+
+def _ir_to_proto(ir: IRFunction) -> Proto:
+    return Proto(list(ir.params),[Ins(x.op,x.a,x.b,x.c,x.k) for x in ir.instructions],ir.regs,list(ir.consts),list(ir.names),[_ir_to_proto(q) for q in ir.protos],list(ir.upvalues))
+
+def _ir_cfg(ir: IRFunction) -> dict[str,Any]:
+    starts={0} if ir.instructions else set()
+    for i,ins in enumerate(ir.instructions):
+        if ins.op=='JMP': starts.update((ins.a,i+1))
+        elif ins.op=='JZ': starts.update((ins.b,i+1))
+        elif ins.op=='JFOR': starts.update((ins.k,i+1))
+    starts=sorted(x for x in starts if 0<=x<len(ir.instructions))
+    blocks=[]
+    for n,st in enumerate(starts):
+        en=starts[n+1] if n+1<len(starts) else len(ir.instructions)
+        blocks.append({'id':n+1,'start':st,'end':en,'succ':[]})
+    owner={i:b['id'] for b in blocks for i in range(b['start'],b['end'])}
+    for b in blocks:
+        if not b['end']: continue
+        i=b['end']-1; ins=ir.instructions[i]
+        if ins.op=='JMP': succ=[ins.a]
+        elif ins.op=='JZ': succ=[i+1,ins.b]
+        elif ins.op=='JFOR': succ=[i+1,ins.k]
+        elif ins.op=='RET': succ=[]
+        else: succ=[i+1]
+        b['succ']=sorted({owner[x] for x in succ if x in owner})
+    return {'blocks':blocks,'owner':owner}
+
+def _ir_optimize(ir: IRFunction, level:int) -> int:
+    removed=0
+    for q in ir.protos: removed += _ir_optimize(q,level)
+    if level<=0 or not ir.instructions: return removed
+    drop=[False]*len(ir.instructions)
+    for i,x in enumerate(ir.instructions):
+        if x.op=='MOV' and x.a==x.b: drop[i]=True
+        elif x.op=='JMP' and x.a==i+1: drop[i]=True
+        elif x.op=='JZ' and x.b==i+1: drop[i]=True
+        elif x.op=='JFOR' and x.k==i+1: drop[i]=True
+    if not any(drop): return removed
+    nxt=len(ir.instructions); target=[len(ir.instructions)]*(len(ir.instructions)+1)
+    for i in range(len(ir.instructions)-1,-1,-1):
+        if not drop[i]: nxt=i
+        target[i]=nxt
+    new=[]
+    for i,x in enumerate(ir.instructions):
+        if drop[i]: continue
+        a,b,c,k=x.a,x.b,x.c,x.k
+        if x.op=='JMP': a=target[a]
+        elif x.op=='JZ': b=target[b]
+        elif x.op=='JFOR': k=target[k]
+        new.append(IRInstruction(x.op,a,b,c,k))
+    ir.instructions=new
+    return removed+sum(drop)
+
+def _v8_ir_stage(proto:Proto,level:int)->tuple[Proto,dict[str,int]]:
+    ir=_proto_to_ir(proto); removed=_ir_optimize(ir,level)
+    def count(x): return len(_ir_cfg(x)['blocks'])+sum(count(q) for q in x.protos)
+    return _ir_to_proto(ir),{'ir_removed':removed,'cfg_blocks':count(ir)}
+
 @dataclass(frozen=True)
 class BuildConfigV8:
     optimize: int = 3
@@ -1851,6 +1930,7 @@ class BuildConfigV8:
     layout_variants: int = 8
     noise_rate: int = 1
     profile: str = 'v8-max'
+    per_function: bool = True
 
 V8_PROFILES={
     'light': BuildConfigV8(1,2,False,True,True,False,4,0,'light'),
@@ -1997,6 +2077,12 @@ def _v8_normalize(p):
     _v7_normalize(p)
 
 
+def _v8_function_profile(b: V8Build, pid: int, cfg: BuildConfigV8) -> dict[str,int|bool]:
+    x=_v8_mix64(b.seed ^ (pid*0x9E3779B97F4A7C15))
+    if not cfg.per_function:
+        return {'shuffle':bool(cfg.flatten),'layout_bias':0,'jump_bias':0,'noise':cfg.noise_rate}
+    return {'shuffle':bool(cfg.flatten and ((x>>7)&0xFF)>=32),'layout_bias':(x>>23)%max(1,cfg.layout_variants),'jump_bias':(x>>41)%3,'noise':min(cfg.noise_rate,(x>>55)%(cfg.noise_rate+1 if cfg.noise_rate else 1))}
+
 def _v8_liveness_rewrite(p):
     # V7 already reuses temporary registers through its free-list. This pass
     # removes a few stale max-reg artifacts without changing local semantics.
@@ -2060,35 +2146,28 @@ def emit_runtime_v8(root:Proto,b:V8Build,rng,config:BuildConfigV8):
             mapped.append(q)
 
         blocks=_v8_basic_blocks(p)
-        cr=random.Random(_v8_u64(b.control_seed ^ (pid*0xD1342543DE82EF95)))
-        # Keep block-internal order, but vary the starting block and then shuffle.
-        cr.shuffle(blocks)
+        fp=_v8_function_profile(b,pid,config)
+        if fp['shuffle'] and len(blocks)>1:
+            cr=random.Random(_v8_u64(b.control_seed ^ (pid*0xD1342543DE82EF95)))
+            cr.shuffle(blocks)
         order=[i for bl in blocks for i in bl]
         block_of_logical={}
-        for bid,bl in enumerate(blocks):
+        for bid,bl in enumerate(blocks,1):
             for logical in bl: block_of_logical[logical]=bid
-        cf=[0]*(len(p.code)+1)
-        phys_block=[0]*(len(order)+1)
+        cf=[0]*(len(p.code)+1); phys_block=[0]*(len(order)+1)
         for phys,logical in enumerate(order,1):
-            cf[logical+1]=phys
-            phys_block[phys]=block_of_logical.get(logical,0)
+            cf[logical+1]=phys; phys_block[phys]=block_of_logical.get(logical,1)
 
-        # Per-jump encoding: absolute, relative, or indirect target pool.
-        jump_mode_phys=[0]*(len(order)+1)
-        jump_pool=[]
-        for phys,logical in enumerate(order,1):
-            ins=mapped[logical]
-            if ins.op in {'JMP','JZ','JFOR'}:
-                mode=(b.control_seed + pid*17 + logical*7) % 3
-                jump_mode_phys[phys]=mode
-                if ins.op=='JMP': fld='a'
-                elif ins.op=='JZ': fld='b'
-                else: fld='k'
-                target=getattr(ins,fld)
-                if mode==1:
-                    setattr(ins,fld,target-(logical+1))
-                elif mode==2:
-                    jump_pool.append(target); setattr(ins,fld,len(jump_pool)-1)
+        jump_sites=[(phys,logical) for phys,logical in enumerate(order,1) if mapped[logical].op in {'JMP','JZ','JFOR'}]
+        jump_modes=[(i%3) if fp['shuffle'] else (i%2) for i in range(len(jump_sites))]
+        random.Random(_v8_u64(b.control_seed ^ (pid*0xA24BAED4963EE407))).shuffle(jump_modes)
+        jump_mode_phys=[0]*(len(order)+1); jump_pool=[]
+        for site_idx,(phys,logical) in enumerate(jump_sites):
+            ins=mapped[logical]; mode=jump_modes[site_idx]; jump_mode_phys[phys]=mode
+            fld='a' if ins.op=='JMP' else ('b' if ins.op=='JZ' else 'k')
+            target=getattr(ins,fld)
+            if mode==1: setattr(ins,fld,target-(logical+1))
+            elif mode==2: jump_pool.append(target); setattr(ins,fld,len(jump_pool)-1)
 
         shards=[[] for _ in range(b.shards)]
         const_locs=[0]*len(p.consts)
@@ -2138,7 +2217,7 @@ def emit_runtime_v8(root:Proto,b:V8Build,rng,config:BuildConfigV8):
             # Build-specific opcode transform depends on build seed, block, and position.
             opmix=_v8_key8(b.vm_seed,bid,phys,0,17)
             raw_all.append((b.opid[ins.op]^b.opcode_mask^opmix)&255)
-            layout_id=(b.layout_seed + pid*29 + logical*13 + bid*7) % len(layouts)
+            layout_id=(b.layout_seed + pid*29 + logical*13 + bid*7 + int(fp['layout_bias'])) % len(layouts)
             vals=[ins.a,ins.b,ins.c,ins.k]
             mask=sum(1<<(j-1) for j,v in enumerate(vals,1) if v!=0)
             raw_mode=((layout_id & 0x0F) | ((mask & 0x0F)<<4)) & 255
@@ -2236,7 +2315,7 @@ def emit_runtime_v8(root:Proto,b:V8Build,rng,config:BuildConfigV8):
     dmap='{'+','.join(str(x) for x in dslots)+'}'
 
     lines=banner_as_luau_comment().rstrip('\n').split('\n')
-    lines.append('-- AegisLuau V8 generated output')
+    lines.append('-- AegisLuau V8.1 generated output')
     lines.append(f'local {N["SD"]}=function(v)local m=v[2];local key=v[3];local step=v[4];local n=v[1];local o={{}};for i=1,n do local x=v[5+i];local k=(key+step*(i-1)+(((i-1)*(i-1)+3*(i-1))%256))%256;if m==0 then x=x~k elseif m==1 then local r=((i-1)%7)+1;x=((((x>>r)|((x&((1<<r)-1))<<(8-r)))&255)-k)%256 elseif m==2 then local r=(((i-1)*3)%7)+1;x=((((x>>r)|((x&((1<<r)-1))<<(8-r)))&255)~((k+61)%256)) elseif m==3 then local r=((i-1)%7)+1;x=((((x<<r)|(x>>(8-r)))&255)+k)%256 elseif m==4 then x=((x+k)%256)~(((k>>1)|((k<<7)&255))) else x=((x-k)%256)~((k*3)%256) end;o[i]=string.char(x%256) end;return table.concat(o) end')
     lines.append(f'local {N["CD"]}=function(v)local ty=v[1];if ty=={b.type_tags["nil"]} then return nil elseif ty=={b.type_tags["true"]} then return true elseif ty=={b.type_tags["false"]} then return false elseif ty=={b.type_tags["int"]} then return ((v[2]~v[5])-v[4])/v[3] elseif ty=={b.type_tags["float"]} then return v[2]-v[3] end;{_v8_str_dec_expr("v", "v")} end')
     lines.append(f'local {N["G"]}=function(n)local g=_G;return g[n] end')
@@ -2280,6 +2359,7 @@ def build_obf_v8(src,seed=None,strict=False,hybrid=False,profile='max'):
             raise
         fallback=src.encode('utf-8'); fallback_reason=str(e); proto=Compiler().compile(Chunk([])); compiled=False
 
+    proto,ir_stats=_v8_ir_stage(proto,cfg.optimize)
     if cfg.optimize>0: optimizer_removed=_v8_opt(proto)
     else: optimizer_removed=0
     _v8_liveness_rewrite(proto)
@@ -2340,16 +2420,17 @@ def build_obf_v8(src,seed=None,strict=False,hybrid=False,profile='max'):
             yield from _walk(pp.protos)
     allp=list(_walk([proto]))
     meta={
-        'version':'8.0.0','compiled':compiled,'fallback':fallback is not None,'fallback_reason':fallback_reason,
+        'version':'8.1.0','compiled':compiled,'fallback':fallback is not None,'fallback_reason':fallback_reason,
         'profile':profile,'seed':master,'instructions':sum(len(p.code) for p in allp),'protos':len(allp),
-        'upvalues':sum(len(p.upvalues) for p in allp),'constant_shards':shards,'optimizer_removed':optimizer_removed,
+        'upvalues':sum(len(p.upvalues) for p in allp),'constant_shards':shards,'optimizer_removed':optimizer_removed,'ir_removed':ir_stats['ir_removed'],'cfg_blocks':ir_stats['cfg_blocks'],
         'pipeline':['Lexer','Parser','AST','Scope Analysis','AST→IR','Optimizer','Basic Block Builder','Register Allocation','Identifier Renaming','Constant Pool','String Pool','Opcode Permutation','Register Permutation','Operand Layout Generation','Control Flow Transform','Bytecode Generator','Variable-Length Encoding','Bytecode Packing','Integrity Data','Protected Output','Runtime VM'],
+        'architecture':['lexer/parser/ast','IR bridge','CFG/basic-block stage','runtime VM'],
         'randomized_domains':['opcode mapping','dispatch id','register mapping','constant shard/order','constant type tags','per-string seed','operand layout','jump mode','basic-block order','bytecode key','VM seed','control-flow seed','section ordering']
     }
     return out,meta
 
 
-V8_VERSION='8.0.0'
+V8_VERSION='8.1.0'
 
 
 def main_v8()->int:
