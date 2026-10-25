@@ -1,9 +1,9 @@
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
-local minX, maxX = -1000000, 1000000
-local minY, maxY = 1000000, 1000000
-local minZ, maxZ = -1000000, 1000000
+local minX, maxX = -1000000000000, 1000000000000
+local minY, maxY = 1000000000000, 1000000000000
+local minZ, maxZ = -1000000000000, 1000000000000
 
 local rng = Random.new()
 
@@ -22,5 +22,5 @@ while true do
         warn("Character または HumanoidRootPart が見つからない")
     end
 
-    task.wait(0.01)
+    task.wait(0.001)
 end
