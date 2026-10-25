@@ -1,4 +1,4 @@
-local minX, maxX = -1000000, 100000"
+local minX, maxX = -1000000, 100000
 local minY, maxY = -5000000, 5000000
 local minZ, maxZ = -1000000, 1000000
 
