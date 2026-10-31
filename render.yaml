@@ -1,0 +1,12 @@
+# Render: New → Blueprint でこのリポジトリを選ぶだけ
+services:
+  - type: web
+    name: vscode-web
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_PASSWORD
+        generateValue: true   # パスワードは Render が自動生成 (Dashboard の Environment で確認)
+      - key: AI_API_KEY
+        sync: false           # 使う場合だけ Dashboard で入力
