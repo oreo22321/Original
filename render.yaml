@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: luaforge-mobile-ide
+    runtime: node
+    plan: free
+    buildCommand: unzip -oq LuaForge_Source.zip -d app && cd app && npm install && npm run setup && npm run build
+    startCommand: cd app && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
