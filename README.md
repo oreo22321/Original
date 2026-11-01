@@ -1,29 +1,24 @@
-# LuaForge — スマホからRenderへ簡単公開するセット
+# LuaForge v3.0.1 — ビルド修正版・簡単公開セット
 
-このフォルダには3ファイルだけが入っています。
-- `render.yaml`：Render Blueprint用設定
-- `LuaForge_Source.zip`：LuaForge本体
-- `README.md`：この手順書
+このセットはRenderで発生したビルドエラーを修正したものです。GitHubに置く3ファイル方式はこれまでと同じです。
 
-## iPhone / Androidから公開する手順
+## 既存のGitHubリポジトリを使っている場合
 
-1. このZIPを端末に保存し、「ファイル」アプリ等で展開します。
-2. GitHubで新しい空のリポジトリを1つ作ります（README追加などは不要です）。
-3. リポジトリの「Add file」→「Upload files」を開き、展開したフォルダ内の**3ファイル**をアップロードしてコミットします。3ファイルはリポジトリの一番上（ルート）に置いてください。
-4. Renderにログインし、「New +」→「Blueprint」を選び、そのGitHubリポジトリを接続します。
-5. `render.yaml` が表示されたら「Apply」を押します。
-6. デプロイ完了後、Renderが表示する `https://...onrender.com` をSafari / Chromeで開きます。
+1. ZIPを展開します。
+2. GitHubの `oreo22321/Original` リポジトリを開きます（別のリポジトリで運用している場合はそちら）。
+3. リポジトリ直下にある古い `LuaForge_Source.zip` を、新しいZIP内の `LuaForge_Source.zip` で置き換えてコミットします。
+4. RenderはGitHubの変更を同期し、自動で再デプロイします。自動デプロイされない場合はRenderのBlueprintで **Manual Sync** または **Deploy latest commit** を実行します。
 
-これだけで通常のLua / Luau編集、AI不要の補完、Luau LSP、Roblox公式公開APIデータの準備が自動で行われます。通常利用にAI APIキーは不要です。
+## 新規に公開する場合
 
-## Renderが自動で行うこと
+1. このZIPを展開します。
+2. GitHubの空のリポジトリ直下に `README.md`、`render.yaml`、`LuaForge_Source.zip` の3ファイルをアップロードします。
+3. Renderで **New + → Blueprint** を選び、GitHubリポジトリを接続して **Apply** を押します。
 
-Renderのビルド時にソースZIPを `app` フォルダへ展開し、Node依存関係、Linux用Luau Language Server、Roblox型定義・APIドキュメント、最新Studio API Dumpを準備してWebアプリをビルドします。サーバーは `app` フォルダから起動します。
+## 今回の修正内容
 
-## 注意
+- HTMLの記号ショートカットで `data-insert` 属性に含まれていた不正な引用符を `&quot;` に変更。
+- CodeMirrorの `Compartment` のimport元を `@codemirror/language` から `@codemirror/state` に修正。
+- `indentUnit` と `indentRange` は `@codemirror/language` から読み込む構成を維持。
 
-- 初回デプロイは外部配布元から依存関係と型定義を取得します。ネットワーク状況によっては失敗・再試行が必要です。
-- AI補完は任意設定です。AIなしでもローカル補完とLSP補完は利用できます。ただし、AI生成の自由な複数行予測と完全に同等の推測性能ではありません。
-- Roblox APIデータベースは公式の公開APIを対象にします。Executor固有の注入・回避・不正実行APIは含みません。
-- Studioの実際のDataModel階層を解決するには、Rojo sourcemapやStudio Companion等の追加連携が必要です。
-- Render Freeにはスリープ等の制約があります。
+通常のLua / Luau編集にはAI APIキーは不要です。
