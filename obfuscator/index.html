@@ -118,7 +118,8 @@
             <label class="opt"><input type="checkbox" id="opt-junk" checked><span class="box"></span>ジャンクコード</label>
             <label class="opt"><input type="checkbox" id="opt-wrap" checked><span class="box"></span>関数ラップ</label>
             <label class="opt"><input type="checkbox" id="opt-minify" checked><span class="box"></span>ミニファイ</label>
-            <p class="opts-note">VM 方式は元の制御構造・変数名・文字列を独自命令へ変換し、埋め込みVMで実行します。
+            <p class="opts-note">VM 方式は元のコードを<strong>線形バイトコード（ジャンプで制御フローを平坦化）</strong>へ変換し、埋め込みVMで実行します。
+              命令列は<strong>位置依存の鍵で符号化</strong>され、定数は<strong>チェックサム連動の鍵スケジュール</strong>で暗号化（単一平文キーなし・改ざんで壊れる）。<code>if/while/for</code> の形・変数名・文字列は出力に残りません。
               Roblox / エグゼキューターの API を含むどんなコードも難読化でき、対応できない構文は自動的に従来方式へ切り替わります（＝必ず動く）。
               「API名の隠蔽」をオンにすると <code>game</code> や <code>hookfunction</code> などの API 名も暗号化し、実行時に環境（getgenv / getfenv など）から解決します。</p>
           </div>

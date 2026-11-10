@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = 'c58742d078'
+const VERSION = 'e27dbf0495'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -66,6 +66,7 @@ const PRECACHE = [
   "obfuscator/engine.js",
   "obfuscator/index.html",
   "obfuscator/obfuscator.css",
+  "obfuscator/vm-bytecode.js",
   "obfuscator/vm-compile.js"
 ]
 

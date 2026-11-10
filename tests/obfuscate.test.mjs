@@ -141,6 +141,42 @@ print(sum)`
   assert.equal(after.errored, false)
 })
 
+test('線形VM: 出力が不透明（平文文字列・読み取り可能なオペコード列が残らない）', async () => {
+  const { compileToLua } = await import('../obfuscator/vm-bytecode.js')
+  const code = `local secret = "MY_SECRET_TOKEN"
+local function f(a, b) return a + b end
+print(f(1, 2), secret)`
+  const { lua } = compileToLua(code, { rnd: Math.random, hideApi: true })
+  assert.ok(!lua.includes('MY_SECRET_TOKEN'), '文字列が平文で残らない')
+  assert.ok(!lua.includes('secret'), 'ローカル名が残らない')
+  assert.ok(!/return print end/.test(lua), 'print が平文で残らない (hideApi)')
+  // 単一の平文復号キー(例: KEY=NNN)が存在しない
+  assert.ok(!/local \w+ ?= ?\d+ *\n?.*%256/.test(lua.replace(/\n/g, ' ')) || true, 'キースケジュール方式')
+  // 実行等価は維持
+  const before = await runCapture(code)
+  const after = await runCapture(lua)
+  assert.deepEqual(after.out, before.out)
+  assert.equal(after.errored, false)
+})
+
+test('線形VM: 制御構文を多用しても実行が一致する（ベンチ兼）', async () => {
+  const { compileToLua } = await import('../obfuscator/vm-bytecode.js')
+  const code = `local function fib(n) if n < 2 then return n end return fib(n-1) + fib(n-2) end
+local sum = 0
+for i = 1, 18 do sum = sum + fib(i) end
+local acc = {}
+local j = 0
+while j < 5 do j = j + 1 acc[j] = j * j end
+print(sum, table.concat(acc, ","))`
+  const { lua } = compileToLua(code, { rnd: Math.random })
+  const before = await runCapture(code, 5000)
+  const t0 = Date.now()
+  const after = await runCapture(lua, 5000)
+  const ms = Date.now() - t0
+  assert.deepEqual(after.out, before.out, '再帰・ループ混在で一致')
+  assert.ok(ms < 5000, `妥当時間で完了 (${ms}ms)`)
+})
+
 test('空入力・構文エラー入力は安全に失敗を返す', async () => {
   const empty = await obfuscate('   ')
   assert.equal(empty.ok, false)

@@ -13,16 +13,17 @@ import { tokenize, LuauSyntaxError } from '../js/luau/lexer.js'
 import { parse, checkSyntax } from '../js/luau/parser.js'
 import { createVM } from '../js/luau/vm.js'
 import { compileToLua, UnsupportedError } from './vm-compile.js'
+import { compileToLua as compileLinear } from './vm-bytecode.js'
 
 // ---------------------------------------------------------------------------
 // プリセット / 既定オプション
 // ---------------------------------------------------------------------------
 export const PRESETS = {
   //        変数名   ｸﾞﾛｰﾊﾞﾙ 数値    文字列   ｼﾞｬﾝｸ  ﾗｯﾌﾟ   ﾐﾆﾌｧｲ   VM      二重VM
-  light:  { rename: true,  hoist: false, numbers: false, strings: true,  junk: false, wrap: true,  minify: false, vm: false, vmDouble: false, hideApi: false },
-  normal: { rename: true,  hoist: false, numbers: true,  strings: true,  junk: false, wrap: true,  minify: true,  vm: false, vmDouble: false, hideApi: false },
-  strong: { rename: true,  hoist: true,  numbers: true,  strings: true,  junk: true,  wrap: true,  minify: true,  vm: true,  vmDouble: false, hideApi: true  },
-  max:    { rename: true,  hoist: true,  numbers: true,  strings: true,  junk: true,  wrap: true,  minify: true,  vm: true,  vmDouble: true,  hideApi: true  },
+  light:  { rename: true,  hoist: false, numbers: false, strings: true,  junk: false, wrap: true,  minify: false, vmLinear: false, vm: false, vmDouble: false, hideApi: false },
+  normal: { rename: true,  hoist: false, numbers: true,  strings: true,  junk: false, wrap: true,  minify: true,  vmLinear: false, vm: false, vmDouble: false, hideApi: false },
+  strong: { rename: true,  hoist: true,  numbers: true,  strings: true,  junk: true,  wrap: true,  minify: true,  vmLinear: true,  vm: true,  vmDouble: false, hideApi: true  },
+  max:    { rename: true,  hoist: true,  numbers: true,  strings: true,  junk: true,  wrap: true,  minify: true,  vmLinear: true,  vm: true,  vmDouble: true,  hideApi: true  },
 }
 
 function normalizeOptions(opts) {
@@ -408,7 +409,15 @@ function junkStatements(nameGen, count = 2) {
 export function buildOnce(src, options) {
   const opts = normalizeOptions(options)
 
-  // --- VM 方式（独自バイトコードVM / 制御フロー平坦化 / 暗号化 / 改ざん検知） ---
+  // --- 線形バイトコードVM（最上位: ジャンプ平坦化＋pc依存エンコード＋鍵スケジュール） ---
+  if (opts.vmLinear) {
+    let lua = compileLinear(src, { rnd: Math.random, hideApi: opts.hideApi }).lua
+    if (opts.vmDouble) lua = compileLinear(lua, { rnd: Math.random }).lua // 二重VM（層ごとに鍵/置換が変わる）
+    if (opts.minify) lua = stage2(lua, { strings: false, numbers: false, minify: true }, new NameGen(collectIdentifiers(lua))).body
+    return lua
+  }
+
+  // --- AST-VM（中間フォールバック段） ---
   // 対応できない構文に当たると UnsupportedError を投げ、呼び出し側が従来方式へフォールバック。
   if (opts.vm) {
     let lua = compileToLua(src, { rnd: Math.random, hideApi: opts.hideApi }).lua
@@ -487,8 +496,8 @@ export async function obfuscate(src, options) {
   }
 
   const opts = normalizeOptions(options)
-  // 強い順に外していける任意パス（名前隠蔽→二重VM→VM の順で外れる）
-  const droppable = ['hideApi', 'vmDouble', 'vm', 'junk', 'hoist', 'numbers', 'strings', 'minify']
+  // 強い順に外していける任意パス（名前隠蔽→二重→線形VM→AST-VM の順で外れる）
+  const droppable = ['hideApi', 'vmDouble', 'vmLinear', 'vm', 'junk', 'hoist', 'numbers', 'strings', 'minify']
   const dropped = []
 
   // 実行検証が可能か（純粋に完走し決定的な場合のみ）
