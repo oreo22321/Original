@@ -4,97 +4,140 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>Luau 難読化ツール</title>
-  <meta name="description" content="Luau / Lua のソースコードを強力に難読化。ブラウザ内だけで処理し、難読化後も同じ動作を自動検証します。">
-  <meta name="theme-color" content="#1e1e1e">
+  <meta name="description" content="Luau / Lua を独自バイトコードVMへ変換して強力に難読化。Roblox / エグゼキューターAPIにも対応し、ブラウザ内だけで処理します。">
+  <meta name="theme-color" content="#090b12">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="format-detection" content="telephone=no">
   <link rel="icon" href="../icons/icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="obfuscator.css">
 </head>
 <body>
-  <header class="top">
-    <div class="brand">
-      <span class="logo">🔒</span>
-      <div>
-        <h1>Luau 難読化ツール</h1>
-        <p class="tagline">Luau / Lua のソースコードを強力に難読化</p>
-      </div>
-    </div>
-    <a class="back" href="../" title="ForgeCode エディタへ">⚒︎ エディタ</a>
-  </header>
+  <div class="bg-fx" aria-hidden="true"></div>
+  <div class="bg-grid" aria-hidden="true"></div>
 
-  <p class="note">
-    スクリプトを<strong>独自バイトコードVM</strong>へ変換し、制御構造・変数名・文字列を復元困難にします。
-    すべて <strong>この端末のブラウザ内だけ</strong> で処理され、コードが外部に送信されることはありません。
-    難読化後は同梱の Luau エンジンで<strong>実行して元と同じ動作になるか自動検証</strong>します。
-  </p>
-
-  <main class="grid">
-    <section class="pane">
-      <div class="pane-head">
-        <label for="input">元のコード</label>
-        <div class="pane-actions">
-          <button id="sample" class="mini" type="button">サンプル</button>
-          <button id="clear" class="mini" type="button">クリア</button>
+  <div class="wrap">
+    <header class="hero">
+      <div class="brand enter d1">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#0a0c13" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="10.5" width="16" height="10" rx="2.2"></rect>
+            <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"></path>
+          </svg>
+        </span>
+        <div class="brand-text">
+          <h1>Luau Obfuscator</h1>
+          <div class="sub">独自バイトコードVM 方式の難読化ツール</div>
         </div>
       </div>
-      <textarea id="input" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"
-        placeholder="ここに Luau / Lua のコードを貼り付け…"></textarea>
-      <div class="pane-foot"><span id="inStat">0 文字</span></div>
-    </section>
 
-    <section class="pane">
-      <div class="pane-head">
-        <label for="output">難読化後</label>
-        <div class="pane-actions">
-          <button id="copy" class="mini" type="button" disabled>コピー</button>
-          <button id="download" class="mini" type="button" disabled>.lua</button>
+      <p class="lede enter d2">
+        Luau / Lua のスクリプトを<b>独自バイトコードVM</b>へ変換し、制御構造・変数名・文字列を復元困難にします。
+        難読化後は同梱エンジンで<b>実行して元と同じ動作か自動検証</b>。<b>Roblox / エグゼキューターの API</b> にも対応します。
+      </p>
+
+      <div class="chips enter d3">
+        <span class="chip"><i></i>独自バイトコードVM</span>
+        <span class="chip"><i></i>制御フロー平坦化</span>
+        <span class="chip"><i></i>定数暗号化・二重VM</span>
+        <span class="chip"><i></i>API名の隠蔽</span>
+      </div>
+
+      <div class="privacy enter d3">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        すべて端末内で処理。コードは外部に送信されません。
+      </div>
+    </header>
+
+    <main>
+      <section class="workspace enter d4">
+        <section class="pane input-pane">
+          <div class="pane-head">
+            <span class="pane-title"><span class="dot in"></span>元のコード</span>
+            <div class="pane-actions">
+              <button id="sample" class="mini" type="button">サンプル</button>
+              <button id="clear" class="mini" type="button">クリア</button>
+            </div>
+          </div>
+          <textarea id="input" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"
+            placeholder="ここに Luau / Lua のコードを貼り付け…  (⌘/Ctrl + Enter で実行)"></textarea>
+          <div class="pane-foot"><span id="inStat">0 文字</span></div>
+        </section>
+
+        <section class="pane output-pane">
+          <div class="pane-head">
+            <span class="pane-title"><span class="dot out"></span>難読化後</span>
+            <div class="pane-actions">
+              <button id="copy" class="mini" type="button" disabled>コピー</button>
+              <button id="download" class="mini" type="button" disabled>.lua</button>
+            </div>
+          </div>
+          <textarea id="output" spellcheck="false" readonly placeholder="難読化結果がここに表示されます"></textarea>
+          <div class="pane-foot"><span id="outStat"></span></div>
+
+          <div class="overlay" id="overlay" aria-hidden="true">
+            <div class="stages" id="stages">
+              <div class="stage" data-k="0"><span class="ic">1</span>構文を解析</div>
+              <div class="stage" data-k="1"><span class="ic">2</span>バイトコードへコンパイル</div>
+              <div class="stage" data-k="2"><span class="ic">3</span>定数を暗号化</div>
+              <div class="stage" data-k="3"><span class="ic">4</span>実行して検証</div>
+            </div>
+            <div class="progress"><i id="prog"></i></div>
+            <div class="scramble" id="scramble" aria-hidden="true"></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="controls enter d4">
+        <div class="seg" role="group" aria-label="強さ">
+          <button class="preset" data-preset="light" type="button">軽い</button>
+          <button class="preset" data-preset="normal" type="button">標準</button>
+          <button class="preset active" data-preset="strong" type="button">強力</button>
+          <button class="preset" data-preset="max" type="button">最強</button>
         </div>
+
+        <button id="run" class="run" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l14 9-14 9V3z"></path></svg>
+          <span class="label">難読化する</span>
+        </button>
+
+        <details class="advanced">
+          <summary><span class="caret">▶</span>詳細オプション</summary>
+          <div class="opts">
+            <label class="opt"><input type="checkbox" id="opt-vm" checked><span class="box"></span>独自バイトコードVM</label>
+            <label class="opt"><input type="checkbox" id="opt-vmDouble"><span class="box"></span>二重VM＋暗号化</label>
+            <label class="opt"><input type="checkbox" id="opt-hideApi" checked><span class="box"></span>API名の隠蔽</label>
+            <label class="opt"><input type="checkbox" id="opt-rename" checked><span class="box"></span>変数名リネーム</label>
+            <label class="opt"><input type="checkbox" id="opt-hoist" checked><span class="box"></span>グローバル間接化</label>
+            <label class="opt"><input type="checkbox" id="opt-numbers" checked><span class="box"></span>数値難読化</label>
+            <label class="opt"><input type="checkbox" id="opt-strings" checked><span class="box"></span>文字列暗号化</label>
+            <label class="opt"><input type="checkbox" id="opt-junk" checked><span class="box"></span>ジャンクコード</label>
+            <label class="opt"><input type="checkbox" id="opt-wrap" checked><span class="box"></span>関数ラップ</label>
+            <label class="opt"><input type="checkbox" id="opt-minify" checked><span class="box"></span>ミニファイ</label>
+            <p class="opts-note">VM 方式は元の制御構造・変数名・文字列を独自命令へ変換し、埋め込みVMで実行します。
+              Roblox / エグゼキューターの API を含むどんなコードも難読化でき、対応できない構文は自動的に従来方式へ切り替わります（＝必ず動く）。
+              「API名の隠蔽」をオンにすると <code>game</code> や <code>hookfunction</code> などの API 名も暗号化し、実行時に環境（getgenv / getfenv など）から解決します。</p>
+          </div>
+        </details>
+      </section>
+
+      <div id="status" class="status">
+        <div class="status-head">
+          <span class="badge" id="badge"></span>
+          <span class="title" id="statusTitle"></span>
+        </div>
+        <div class="sub" id="statusSub"></div>
       </div>
-      <textarea id="output" spellcheck="false" readonly placeholder="難読化結果がここに表示されます"></textarea>
-      <div class="pane-foot"><span id="outStat"></span></div>
-    </section>
-  </main>
+    </main>
 
-  <section class="controls">
-    <div class="presets" role="group" aria-label="強さプリセット">
-      <span class="ctl-label">強さ</span>
-      <button class="preset" data-preset="light" type="button">軽い</button>
-      <button class="preset" data-preset="normal" type="button">標準</button>
-      <button class="preset active" data-preset="strong" type="button">強力 (VM)</button>
-      <button class="preset" data-preset="max" type="button">最強 (二重VM)</button>
-    </div>
-
-    <details class="advanced">
-      <summary>詳細オプション</summary>
-      <div class="opts">
-        <label><input type="checkbox" id="opt-vm" checked> 独自バイトコードVM</label>
-        <label><input type="checkbox" id="opt-vmDouble"> 二重VM＋暗号化</label>
-        <label><input type="checkbox" id="opt-hideApi" checked> API名の隠蔽 (Roblox/エグゼキューター)</label>
-        <label><input type="checkbox" id="opt-rename" checked> 変数名リネーム</label>
-        <label><input type="checkbox" id="opt-hoist" checked> グローバル間接化</label>
-        <label><input type="checkbox" id="opt-numbers" checked> 数値難読化</label>
-        <label><input type="checkbox" id="opt-strings" checked> 文字列暗号化</label>
-        <label><input type="checkbox" id="opt-junk" checked> ジャンクコード</label>
-        <label><input type="checkbox" id="opt-wrap" checked> 関数ラップ</label>
-        <label><input type="checkbox" id="opt-minify" checked> ミニファイ</label>
-      </div>
-      <p class="opts-note">VM 方式は元の制御構造・変数名・文字列を独自命令へ変換し、埋め込みVMで実行します。
-      Roblox / エグゼキューターの API を含むどんなコードも難読化でき、対応できない構文は自動的に従来方式へ
-      切り替わります（＝必ず動く）。「API名の隠蔽」をオンにすると <code>game</code> や <code>hookfunction</code>
-      などの API 名も暗号化し、実行時に環境（getgenv / getfenv など）から解決します。</p>
-    </details>
-
-    <button id="run" class="run" type="button">難読化する</button>
-  </section>
-
-  <div id="status" class="status" hidden></div>
-
-  <footer class="foot">
-    <p>自作コードの保護・学習用途向け。他人のコードの無断改変や不正利用には使わないでください。</p>
-  </footer>
+    <footer class="foot">
+      <p>自作コードの保護・学習用途向け。他人のコードの無断改変や不正利用には使わないでください。</p>
+    </footer>
+  </div>
 
   <noscript>このツールを使うには JavaScript を有効にしてください。</noscript>
   <script type="module" src="app.js"></script>
