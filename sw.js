@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = 'dd944008fa'
+const VERSION = '3bc4719bc8'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -61,7 +61,12 @@ const PRECACHE = [
   "icons/icon-192.png",
   "icons/icon-512.png",
   "icons/icon-maskable-512.png",
-  "icons/icon.svg"
+  "icons/icon.svg",
+  "obfuscator/app.js",
+  "obfuscator/engine.js",
+  "obfuscator/index.html",
+  "obfuscator/obfuscator.css",
+  "obfuscator/vm-compile.js"
 ]
 
 self.addEventListener('install', e => {
