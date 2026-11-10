@@ -85,6 +85,17 @@ print(obj.Health, obj.Position, type(mt))`,
   requestApi: `local request = function(opts) return { StatusCode = 200, Body = "resp:"..opts.Url } end
 local res = request({ Url = "https://example.com", Method = "GET" })
 print(res.StatusCode, res.Body)`,
+  // and/or の短絡（svc = cloneref and cloneref(s) or s パターンの回帰防止）
+  shortCircuit: `print(false and 1 or 2, true and 10 or 20, nil or "x", 0 and "t")
+local cloneref = function(x) return x end
+local obj = { LocalPlayer = { Name = "Me" } }
+local function svc() local s = obj return cloneref and cloneref(s) or s end
+print(svc().LocalPlayer.Name)
+local cr2 = nil
+local function svc2() local s = obj return cr2 and cr2(s) or s end
+print(svc2().LocalPlayer.Name)
+local a, b = (1 and 2), (nil or 3)
+print(a, b, (nil and error("no")) or "ok")`,
 }
 
 const PRESETS_TO_TEST = ['light', 'normal', 'strong', 'max']

@@ -453,13 +453,15 @@ class Compiler {
   }
   bin(node) {
     const f = this.cur(); const OP = this.OP
+    // a and b: l を評価し、偽ならそのまま結果（ジャンプ）、真なら捨てて r を評価
     if (node.op === 'and') {
       const end = f.newLabel()
-      this.expr(node.l, false); f.emit(OP.DUP); f.emit(OP.JMPIFF, end); f.emit(OP.POP); this.expr(node.r, false); f.place(end); return
+      this.expr(node.l, false); f.emit(OP.JMPIFF, end); f.emit(OP.POP); this.expr(node.r, false); f.place(end); return
     }
+    // a or b: l が真ならそのまま結果、偽なら捨てて r を評価
     if (node.op === 'or') {
       const end = f.newLabel()
-      this.expr(node.l, false); f.emit(OP.DUP); f.emit(OP.JMPIFT, end); f.emit(OP.POP); this.expr(node.r, false); f.place(end); return
+      this.expr(node.l, false); f.emit(OP.JMPIFT, end); f.emit(OP.POP); this.expr(node.r, false); f.place(end); return
     }
     const b = BINOP[node.op]; if (!b) throw new UnsupportedError('bin ' + node.op)
     this.expr(node.l, false); this.expr(node.r, false); f.emit(OP[b])
