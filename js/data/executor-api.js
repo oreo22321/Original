@@ -1,0 +1,171 @@
+// エグゼキューター API (UNC / sUNC 準拠 + よく使われる別名) の補完・ホバー用データ
+import { parseEntries } from './luau-api.js'
+
+const E = (cat, list) => parseEntries(list, { cat: 'executor', group: cat })
+
+export const EXECUTOR_GLOBALS = {
+  ...E('環境', [
+    'getgenv(): table — エグゼキューターのグローバル環境 (スクリプト間で共有)',
+    'getrenv(): table — Roblox (ゲーム) 側のグローバル環境',
+    'getsenv(script: LocalScript | ModuleScript): table — スクリプトの環境',
+    'getreg(): table — Lua レジストリ',
+    'getgc(includeTables: boolean?): {any} — ガベージコレクタが管理する関数 (とテーブル) の一覧',
+    'getinstances(): {Instance} — すべての Instance',
+    'getnilinstances(): {Instance} — 親が nil の Instance',
+    'getscripts(): {LuaSourceContainer} — すべてのスクリプト',
+    'getrunningscripts(): {LuaSourceContainer} — 実行中のスクリプト',
+    'getloadedmodules(): {ModuleScript} — 読み込み済みの ModuleScript',
+    'getcallingscript(): LuaSourceContainer? — 呼び出し元のスクリプト',
+    'getscriptclosure(script: LuaSourceContainer): function — スクリプトのメイン関数',
+    'getscripthash(script: LuaSourceContainer): string — スクリプトのハッシュ (SHA384)',
+    'getscriptbytecode(script: LuaSourceContainer): string — スクリプトのバイトコード',
+    'identifyexecutor(): (string, string) — エグゼキューター名とバージョン',
+    'getexecutorname(): (string, string) — identifyexecutor の別名',
+    'getthreadidentity(): number — 現在のスレッド権限レベル',
+    'setthreadidentity(identity: number) — スレッド権限レベルを設定',
+    'getidentity(): number — getthreadidentity の別名',
+    'setidentity(identity: number) — setthreadidentity の別名',
+    'checkcaller(): boolean — エグゼキューターのスレッドから呼ばれたか',
+    'isrbxactive(): boolean — Roblox のウィンドウがアクティブか',
+    'isgameactive(): boolean — isrbxactive の別名',
+    'setfpscap(fps: number) — FPS の上限を設定 (0 で無制限)',
+    'getfpscap(): number — FPS の上限',
+    'queue_on_teleport(code: string) — テレポート後に実行するコードを登録',
+    'messagebox(text: string, caption: string, flags: number): number — メッセージボックスを表示',
+    'setclipboard(text: string) — クリップボードにコピー',
+    'toclipboard(text: string) — setclipboard の別名',
+    'getclipboard(): string — クリップボードの内容',
+  ]),
+  ...E('クロージャ', [
+    'hookfunction(target: function, hook: function): function — 関数をフックし、元の関数のコピーを返します',
+    'replaceclosure(target: function, hook: function): function — hookfunction の別名',
+    'newcclosure(f: function): function — Lua 関数を C 関数として包みます',
+    'clonefunction(f: function): function — 関数を複製します',
+    'iscclosure(f: function): boolean — C 関数かどうか',
+    'islclosure(f: function): boolean — Lua 関数かどうか',
+    'isexecutorclosure(f: function): boolean — エグゼキューター由来の関数か',
+    'checkclosure(f: function): boolean — isexecutorclosure の別名',
+    'restorefunction(f: function) — フックを元に戻します',
+    'loadstring(source: string, chunkname: string?): (function?, string?) — コード文字列を関数にします',
+  ]),
+  ...E('メタテーブル', [
+    'getrawmetatable(object: any): table — __metatable 保護を無視してメタテーブルを取得',
+    'setrawmetatable(object: any, mt: table): any — 保護を無視してメタテーブルを設定',
+    'hookmetamethod(object: any, method: string, hook: function): function — メタメソッドをフック (例: "__namecall")',
+    'getnamecallmethod(): string — __namecall 中のメソッド名',
+    'setnamecallmethod(method: string) — __namecall のメソッド名を変更',
+    'setreadonly(t: table, readonly: boolean) — テーブルの読み取り専用を切り替え',
+    'isreadonly(t: table): boolean — 読み取り専用か',
+    'makereadonly(t: table) — 読み取り専用にします',
+    'makewriteable(t: table) — 書き込み可能にします',
+  ]),
+  ...E('Instance', [
+    'gethui(): Instance — 検出されにくい GUI の置き場 (CoreGui など)',
+    'cloneref(object: Instance): Instance — Instance の参照を複製',
+    'compareinstances(a: Instance, b: Instance): boolean — 同じ Instance か',
+    'gethiddenproperty(object: Instance, property: string): (any, boolean) — 隠しプロパティを読み取ります',
+    'sethiddenproperty(object: Instance, property: string, value: any): boolean — 隠しプロパティを設定',
+    'isscriptable(object: Instance, property: string): boolean — スクリプトから使えるプロパティか',
+    'setscriptable(object: Instance, property: string, value: boolean): boolean — スクリプトから使えるようにする',
+    'getcallbackvalue(object: Instance, property: string): function? — OnInvoke などのコールバック',
+    'fireclickdetector(detector: ClickDetector, distance: number?, event: string?) — ClickDetector をクリック',
+    'fireproximityprompt(prompt: ProximityPrompt) — ProximityPrompt を発動',
+    'firetouchinterest(part: BasePart, touched: BasePart, toggle: number) — 接触イベントを発生 (0=開始, 1=終了)',
+    'getcustomasset(path: string): string — workspace のファイルを rbxasset:// として使える ID に',
+  ]),
+  ...E('シグナル', [
+    'getconnections(signal: RBXScriptSignal): {Connection} — シグナルの接続一覧 (Function, Enabled, Fire, Disable など)',
+    'firesignal(signal: RBXScriptSignal, ...: any) — シグナルを発火',
+    'replicatesignal(signal: RBXScriptSignal, ...: any) — サーバーへ複製されるシグナルを発火',
+  ]),
+  ...E('ファイル', [
+    'readfile(path: string): string — workspace フォルダのファイルを読み込み',
+    'writefile(path: string, content: string) — ファイルに書き込み',
+    'appendfile(path: string, content: string) — ファイルに追記',
+    'isfile(path: string): boolean — ファイルが存在するか',
+    'isfolder(path: string): boolean — フォルダが存在するか',
+    'makefolder(path: string) — フォルダを作成',
+    'delfile(path: string) — ファイルを削除',
+    'delfolder(path: string) — フォルダを削除',
+    'listfiles(path: string): {string} — フォルダ内の一覧',
+    'loadfile(path: string): (function?, string?) — ファイルを読み込んで関数にします',
+    'dofile(path: string): ...any — ファイルを実行します',
+  ]),
+  ...E('入力', [
+    'mouse1click() — 左クリック', 'mouse1press() — 左ボタンを押す', 'mouse1release() — 左ボタンを離す',
+    'mouse2click() — 右クリック', 'mouse2press() — 右ボタンを押す', 'mouse2release() — 右ボタンを離す',
+    'mousemoveabs(x: number, y: number) — マウスを絶対座標へ移動', 'mousemoverel(x: number, y: number) — マウスを相対移動',
+    'mousescroll(pixels: number) — スクロール', 'keypress(keycode: number) — キーを押す', 'keyrelease(keycode: number) — キーを離す',
+  ]),
+  ...E('HTTP', [
+    'request(options: {Url: string, Method: string?, Headers: table?, Body: string?}): {Success: boolean, StatusCode: number, Body: string, Headers: table} — HTTP リクエスト',
+    'http_request(options: table): table — request の別名',
+  ]),
+  ...E('コンソール', [
+    'rconsoleprint(text: string) — 外部コンソールに出力', 'rconsoleclear() — コンソールをクリア', 'rconsolecreate() — コンソールを作成',
+    'rconsoledestroy() — コンソールを閉じる', 'rconsoleinput(): string — コンソールから入力', 'rconsolesettitle(title: string) — タイトル設定',
+    'rconsolewarn(text: string)', 'rconsoleerr(text: string)', 'rconsoleinfo(text: string)',
+  ]),
+  ...E('描画', [
+    'cleardrawcache() — すべての Drawing を削除', 'isrenderobj(object: any): boolean — Drawing オブジェクトか',
+    'getrenderproperty(drawing: Drawing, property: string): any', 'setrenderproperty(drawing: Drawing, property: string, value: any)',
+  ]),
+  ...E('その他', [
+    'lz4compress(data: string): string — LZ4 圧縮', 'lz4decompress(data: string, size: number): string — LZ4 展開',
+    'base64_encode(data: string): string', 'base64_decode(data: string): string',
+  ]),
+  crypt: { kind: 'value', type: 'crypt', doc: '暗号化・ハッシュ・Base64', cat: 'executor', group: 'ライブラリ' },
+  Drawing: { kind: 'value', type: 'Drawing', doc: '画面に図形・文字を描画するライブラリ', cat: 'executor', group: 'ライブラリ' },
+  WebSocket: { kind: 'value', type: 'WebSocket', doc: 'WebSocket 通信', cat: 'executor', group: 'ライブラリ' },
+  cache: { kind: 'value', type: 'cache', doc: 'Instance キャッシュの操作', cat: 'executor', group: 'ライブラリ' },
+  syn: { kind: 'value', type: 'table', doc: 'Synapse 互換ライブラリ (syn.request など)', cat: 'executor', group: 'ライブラリ' },
+  http: { kind: 'value', type: 'table', doc: 'http.request', cat: 'executor', group: 'ライブラリ' },
+}
+
+export const EXECUTOR_LIBS = {
+  crypt: E('crypt', [
+    'base64encode(data: string): string — Base64 エンコード', 'base64decode(data: string): string — Base64 デコード',
+    'encrypt(data: string, key: string, iv: string?, mode: string?): (string, string) — 暗号化 (AES)',
+    'decrypt(data: string, key: string, iv: string, mode: string): string — 復号',
+    'generatebytes(size: number): string — ランダムなバイト列 (Base64)', 'generatekey(): string — 32 バイトの鍵 (Base64)',
+    'hash(data: string, algorithm: string): string — ハッシュ値 (sha1, sha256, sha384, sha512 など)',
+  ]),
+  Drawing: E('Drawing', [
+    'new(type: "Line" | "Text" | "Image" | "Circle" | "Square" | "Quad" | "Triangle"): Drawing — 描画オブジェクトを作成',
+    'Fonts: table — フォント (UI, System, Plex, Monospace)',
+  ]),
+  WebSocket: E('WebSocket', ['connect(url: string): WebSocket — WebSocket に接続 (Send, Close, OnMessage, OnClose)']),
+  cache: E('cache', [
+    'invalidate(object: Instance) — キャッシュから削除', 'iscached(object: Instance): boolean — キャッシュされているか',
+    'replace(object: Instance, newObject: Instance) — キャッシュを置き換え',
+  ]),
+  debug: E('debug', [
+    'getconstants(f: function): {any} — 関数の定数一覧', 'getconstant(f: function, index: number): any', 'setconstant(f: function, index: number, value: any)',
+    'getupvalues(f: function): {any} — 上位値の一覧', 'getupvalue(f: function, index: number): any', 'setupvalue(f: function, index: number, value: any)',
+    'getprotos(f: function): {function} — 内部関数の一覧', 'getproto(f: function, index: number, activated: boolean?): function',
+    'getstack(level: number, index: number?): any', 'setstack(level: number, index: number, value: any)',
+    'getinfo(f: function | number): table — 関数の情報 (source, currentline, name など)', 'getregistry(): table',
+  ]),
+  syn: E('syn', ['request(options: table): table — HTTP リクエスト', 'protect_gui(gui: ScreenGui) — GUI を保護', 'queue_on_teleport(code: string)']),
+  http: E('http', ['request(options: table): table — HTTP リクエスト']),
+}
+
+// Drawing オブジェクトのプロパティ
+export const DRAWING_PROPS = {
+  common: ['Visible: boolean', 'ZIndex: number', 'Transparency: number', 'Color: Color3', 'Remove()', 'Destroy()'],
+  Line: ['From: Vector2', 'To: Vector2', 'Thickness: number'],
+  Text: ['Text: string', 'Size: number', 'Center: boolean', 'Outline: boolean', 'OutlineColor: Color3', 'Position: Vector2', 'Font: number', 'TextBounds: Vector2'],
+  Image: ['Data: string', 'Size: Vector2', 'Position: Vector2', 'Rounding: number'],
+  Circle: ['NumSides: number', 'Radius: number', 'Position: Vector2', 'Thickness: number', 'Filled: boolean'],
+  Square: ['Size: Vector2', 'Position: Vector2', 'Thickness: number', 'Filled: boolean'],
+  Quad: ['PointA: Vector2', 'PointB: Vector2', 'PointC: Vector2', 'PointD: Vector2', 'Thickness: number', 'Filled: boolean'],
+  Triangle: ['PointA: Vector2', 'PointB: Vector2', 'PointC: Vector2', 'Thickness: number', 'Filled: boolean'],
+}
+
+// DataModel に追加されるエグゼキューターのメソッド
+export const EXECUTOR_GAME_METHODS = parseEntries([
+  'HttpGet(url: string): string — URL の内容を取得 (loadstring(game:HttpGet(url))() でよく使われます)',
+  'HttpGetAsync(url: string): string — HttpGet と同じ',
+  'HttpPost(url: string, data: string, contentType: string?): string — POST リクエスト',
+  'GetObjects(assetId: string): {Instance} — アセットを読み込みます',
+], { cat: 'executor' })

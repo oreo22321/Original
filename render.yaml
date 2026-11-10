@@ -1,0 +1,14 @@
+# Render で公開する場合の設定 (静的サイト・ビルド不要)
+services:
+  - type: web
+    name: forgecode
+    runtime: static
+    buildCommand: echo "ビルドは不要です"
+    staticPublishPath: .
+    headers:
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache
+      - path: /index.html
+        name: Cache-Control
+        value: no-cache
