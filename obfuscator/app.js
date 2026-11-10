@@ -7,7 +7,7 @@ const output = $('output')
 const runBtn = $('run')
 const statusEl = $('status')
 
-const OPT_IDS = ['vm', 'vmDouble', 'rename', 'hoist', 'numbers', 'strings', 'junk', 'wrap', 'minify']
+const OPT_IDS = ['vm', 'vmDouble', 'hideApi', 'rename', 'hoist', 'numbers', 'strings', 'junk', 'wrap', 'minify']
 let currentPreset = 'strong'
 
 const SAMPLE = `-- サンプル: 簡単なスクリプト

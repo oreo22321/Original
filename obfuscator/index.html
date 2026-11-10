@@ -72,6 +72,7 @@
       <div class="opts">
         <label><input type="checkbox" id="opt-vm" checked> 独自バイトコードVM</label>
         <label><input type="checkbox" id="opt-vmDouble"> 二重VM＋暗号化</label>
+        <label><input type="checkbox" id="opt-hideApi" checked> API名の隠蔽 (Roblox/エグゼキューター)</label>
         <label><input type="checkbox" id="opt-rename" checked> 変数名リネーム</label>
         <label><input type="checkbox" id="opt-hoist" checked> グローバル間接化</label>
         <label><input type="checkbox" id="opt-numbers" checked> 数値難読化</label>
@@ -81,7 +82,9 @@
         <label><input type="checkbox" id="opt-minify" checked> ミニファイ</label>
       </div>
       <p class="opts-note">VM 方式は元の制御構造・変数名・文字列を独自命令へ変換し、埋め込みVMで実行します。
-      対応できないコードは自動的に従来方式へ切り替わります（＝必ず動く）。VM 使用時は変数名〜ミニファイの個別設定は VM 出力に対して適用されます。</p>
+      Roblox / エグゼキューターの API を含むどんなコードも難読化でき、対応できない構文は自動的に従来方式へ
+      切り替わります（＝必ず動く）。「API名の隠蔽」をオンにすると <code>game</code> や <code>hookfunction</code>
+      などの API 名も暗号化し、実行時に環境（getgenv / getfenv など）から解決します。</p>
     </details>
 
     <button id="run" class="run" type="button">難読化する</button>

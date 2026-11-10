@@ -19,10 +19,10 @@ import { compileToLua, UnsupportedError } from './vm-compile.js'
 // ---------------------------------------------------------------------------
 export const PRESETS = {
   //        変数名   ｸﾞﾛｰﾊﾞﾙ 数値    文字列   ｼﾞｬﾝｸ  ﾗｯﾌﾟ   ﾐﾆﾌｧｲ   VM      二重VM
-  light:  { rename: true,  hoist: false, numbers: false, strings: true,  junk: false, wrap: true,  minify: false, vm: false, vmDouble: false },
-  normal: { rename: true,  hoist: false, numbers: true,  strings: true,  junk: false, wrap: true,  minify: true,  vm: false, vmDouble: false },
-  strong: { rename: true,  hoist: true,  numbers: true,  strings: true,  junk: true,  wrap: true,  minify: true,  vm: true,  vmDouble: false },
-  max:    { rename: true,  hoist: true,  numbers: true,  strings: true,  junk: true,  wrap: true,  minify: true,  vm: true,  vmDouble: true  },
+  light:  { rename: true,  hoist: false, numbers: false, strings: true,  junk: false, wrap: true,  minify: false, vm: false, vmDouble: false, hideApi: false },
+  normal: { rename: true,  hoist: false, numbers: true,  strings: true,  junk: false, wrap: true,  minify: true,  vm: false, vmDouble: false, hideApi: false },
+  strong: { rename: true,  hoist: true,  numbers: true,  strings: true,  junk: true,  wrap: true,  minify: true,  vm: true,  vmDouble: false, hideApi: true  },
+  max:    { rename: true,  hoist: true,  numbers: true,  strings: true,  junk: true,  wrap: true,  minify: true,  vm: true,  vmDouble: true,  hideApi: true  },
 }
 
 function normalizeOptions(opts) {
@@ -411,8 +411,8 @@ export function buildOnce(src, options) {
   // --- VM 方式（独自バイトコードVM / 制御フロー平坦化 / 暗号化 / 改ざん検知） ---
   // 対応できない構文に当たると UnsupportedError を投げ、呼び出し側が従来方式へフォールバック。
   if (opts.vm) {
-    let lua = compileToLua(src, { rnd: Math.random }).lua
-    if (opts.vmDouble) lua = compileToLua(lua, { rnd: Math.random }).lua // 二重VM
+    let lua = compileToLua(src, { rnd: Math.random, hideApi: opts.hideApi }).lua
+    if (opts.vmDouble) lua = compileToLua(lua, { rnd: Math.random }).lua // 二重VM（外側は名前隠蔽なし）
     if (opts.minify) lua = stage2(lua, { strings: false, numbers: false, minify: true }, new NameGen(collectIdentifiers(lua))).body
     return lua
   }
@@ -487,8 +487,8 @@ export async function obfuscate(src, options) {
   }
 
   const opts = normalizeOptions(options)
-  // 強い順に外していける任意パス（VM/二重VM が最優先で外れる）
-  const droppable = ['vmDouble', 'vm', 'junk', 'hoist', 'numbers', 'strings', 'minify']
+  // 強い順に外していける任意パス（名前隠蔽→二重VM→VM の順で外れる）
+  const droppable = ['hideApi', 'vmDouble', 'vm', 'junk', 'hoist', 'numbers', 'strings', 'minify']
   const dropped = []
 
   // 実行検証が可能か（純粋に完走し決定的な場合のみ）

@@ -48,6 +48,43 @@ print(i)`,
   return inner(10)
 end
 print(outer(5))`,
+
+  // --- Roblox / エグゼキューター API のアクセスパターン（Lua スタブで再現） ---
+  robloxService: `local game = { GetService = function(self, name) return { Name = name, GetPlayers = function() return {"A","B"} end } end }
+local Players = game:GetService("Players")
+print(Players.Name, #Players:GetPlayers())`,
+  signalConnect: `local function makeSignal() local h={} return { Connect=function(self,f) h[#h+1]=f return {Disconnect=function() end} end, Fire=function(self,...) for _,f in ipairs(h) do f(...) end end } end
+local sig = makeSignal()
+local total = 0
+sig:Connect(function(n) total = total + n end)
+sig:Connect(function(n) total = total + n*2 end)
+sig:Fire(10)
+print(total)`,
+  instanceNew: `local Instance = { new = function(cls) return setmetatable({ClassName=cls}, {__index={ Destroy=function() end }}) end }
+local part = Instance.new("Part")
+part.Name = "Hi"
+print(part.ClassName, part.Name)
+part:Destroy()
+print("ok")`,
+  executorHooks: `local realprint = print
+local hookfunction = function(target, repl) return target end
+local getgenv = function() return { flag = true } end
+local old = hookfunction(realprint, function() end)
+getgenv().counter = 5
+print(type(old), getgenv().flag, getgenv().counter)`,
+  executorFiles: `local store = {}
+local writefile = function(p, c) store[p] = c end
+local readfile = function(p) return store[p] end
+local isfile = function(p) return store[p] ~= nil end
+writefile("cfg", "data")
+print(isfile("cfg"), readfile("cfg"))`,
+  metatableHook: `local getrawmetatable = function(o) return getmetatable(o) end
+local obj = setmetatable({}, { __index = function(_, k) return "idx:"..k end })
+local mt = getrawmetatable(obj)
+print(obj.Health, obj.Position, type(mt))`,
+  requestApi: `local request = function(opts) return { StatusCode = 200, Body = "resp:"..opts.Url } end
+local res = request({ Url = "https://example.com", Method = "GET" })
+print(res.StatusCode, res.Body)`,
 }
 
 const PRESETS_TO_TEST = ['light', 'normal', 'strong', 'max']
@@ -82,6 +119,26 @@ print(greetUser(secretValue))`
   assert.ok(!out.includes('greetUser'), '関数名が消えていること')
   assert.ok(!out.includes('TopSecretString'), '文字列が平文で残っていないこと')
   assert.ok(!out.includes('Hello '), '文字列が平文で残っていないこと')
+})
+
+test('hideApi: API（グローバル）名が平文で残らず、動作は一致する', async () => {
+  const { PRESETS } = await import('../obfuscator/engine.js')
+  // print / pairs を free global（API）として使用。hideApi で暗号化され平文消滅するはず。
+  const code = `local t = {10, 20, 30}
+local sum = 0
+for _, v in pairs(t) do sum = sum + v end
+print(sum)`
+  const r = await obfuscate(code, { ...PRESETS.strong, hideApi: true, vmDouble: false })
+  assert.equal(r.ok, true)
+  // 検証が通ったうえで（= 動作一致）、かつ API 名が隠れている
+  if (r.report.applied.vm && r.report.applied.hideApi) {
+    assert.ok(!/\bprint\b/.test(r.code), 'print が平文で残っていないこと')
+    assert.ok(!/\bpairs\b/.test(r.code), 'pairs が平文で残っていないこと')
+  }
+  const before = await runCapture(code)
+  const after = await runCapture(r.code)
+  assert.deepEqual(after.out, before.out, '出力一致')
+  assert.equal(after.errored, false)
 })
 
 test('空入力・構文エラー入力は安全に失敗を返す', async () => {

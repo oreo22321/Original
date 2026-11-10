@@ -418,12 +418,22 @@ export function compileToLua(src, options = {}) {
   const rootFD = c.FD.length
   const OP = c.OP
 
+  const hideApi = !!options.hideApi
+
   const nm = nameMaker(rnd)
   // ランタイムの変数名（ランダム）
   const V = {}
   for (const k of ['N', 'K', 'AL', 'SL', 'SLT', 'FD', 'TD', 'GG', 'GS', 'E', 'EM', 'S', 'EXEC',
     'evalList', 'newscope', 'find', 'declare', 'makeClosure', 'makeTable', 'env', 'pack', 'unpack',
-    'RET', 'BRK', 'CNT', 'run', 'KEY']) V[k] = nm()
+    'RET', 'BRK', 'CNT', 'run', 'KEY', 'ENV']) V[k] = nm()
+
+  // API 名の隠蔽: 読み取り専用グローバル（＝各種 API）の名前を暗号化し、実行時に環境から解決する
+  const nameKi = new Map()
+  if (hideApi) {
+    for (const name of c.gnames) {
+      if (!c.gWritten.has(name)) nameKi.set(name, c.kConst(name))
+    }
+  }
 
   // 定数プールの暗号化: 文字列はバイト列+キー、数値/真偽はそのまま
   const key = 1 + Math.floor(rnd() * 250)
@@ -439,12 +449,26 @@ export function compileToLua(src, options = {}) {
   })
 
   // GG/GS（グローバルの取得/設定クロージャ）
-  const ggLines = c.gnames.map((name, i) =>
-    `${V.GG}[${i + 1}]=function() return ${name} end`).join(' ')
+  // hideApi 時、読み取り専用グローバル（各種 API）は名前を暗号化し ENV 経由で解決する。
+  // 代入されるグローバル（スクリプト自身の global）は正しさのため直接参照にする。
+  const ggLines = c.gnames.map((name, i) => {
+    if (hideApi && nameKi.has(name)) {
+      return `${V.GG}[${i + 1}]=function() return ${V.ENV}(${V.K}[${nameKi.get(name)}]) end`
+    }
+    return `${V.GG}[${i + 1}]=function() return ${name} end`
+  }).join(' ')
   const gsArg = nm()
   const gsLines = c.gnames
     .filter(name => c.gWritten.has(name))
     .map(name => `${V.GS}[${c.gmap.get(name)}]=function(${gsArg}) ${name}=${gsArg} end`).join(' ')
+
+  // ENV アクセサ（hideApi 用）: executor(getgenv/getrenv) → getfenv → _G の順で名前解決
+  const envBlock = hideApi ? `local ${V.ENV}
+do local src={}
+local function add(fn,...) if fn then local ok,v=pcall(fn,...) if ok and type(v)=="table" then src[#src+1]=v end end end
+add(getgenv) add(getrenv) add(getfenv,1) if _G then src[#src+1]=_G end
+${V.ENV}=function(n) for i=1,#src do local v=src[i][n] if v~=nil then return v end end end
+end` : ''
 
   // --- EM ディスパッチャ本体 ---
   const E = (x) => `${V.E}(${x},${V.env})`
@@ -515,6 +539,7 @@ local ${V.SLT}={${c.SLT.map(intArr).join(',')}}
 local ${V.TD}={${c.TD.map(tableItems).join(',')}}
 local ${V.FD}={${c.FD.map(f => `{${intArr(f.p)},${f.va},${f.b}}`).join(',')}}
 local ${V.GG}={} local ${V.GS}={}
+${envBlock}
 ${ggLines}
 ${gsLines}
 -- アンチタンパー（整合性チェック / 正常時は無害）
