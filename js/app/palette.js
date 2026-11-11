@@ -119,16 +119,8 @@ export function outlineSymbols(text, lang) {
       else if ((m = /^\s*(export\s+)?type\s+(\w+)/.exec(line))) out.push({ name: m[2], kind: '型', line: i + 1, pos, depth: 0 })
       else if ((m = /^\s*([\w.:]+(?:\.\w+)*)\s*:\s*Connect\s*\(/.exec(line))) out.push({ name: m[1] + ':Connect', kind: 'イベント', line: i + 1, pos, depth: indentDepth(line) })
       else if ((m = /^\s*--\s*(?:MARK|#region|==+)\s*:?\s*(.+)$/.exec(line))) out.push({ name: m[1].replace(/=+$/, '').trim(), kind: '見出し', line: i + 1, pos, depth: 0 })
-    } else if (lang === 'python') {
-      if ((m = /^(\s*)(async\s+)?def\s+(\w+)\s*\(([^)]*)\)/.exec(line))) out.push({ name: m[3] + '(' + m[4] + ')', kind: m[1] ? 'メソッド' : '関数', line: i + 1, pos, depth: m[1].length ? 1 : 0 })
-      else if ((m = /^(\s*)class\s+(\w+)/.exec(line))) out.push({ name: m[2], kind: 'クラス', line: i + 1, pos, depth: m[1].length ? 1 : 0 })
-      else if ((m = /^([A-Za-z_]\w*)\s*(?::[^=]+)?=(?!=)/.exec(line))) out.push({ name: m[1], kind: '変数', line: i + 1, pos, depth: 0 })
     } else if (lang === 'markdown') {
       if ((m = /^(#{1,6})\s+(.+)$/.exec(line))) out.push({ name: m[2], kind: '見出し', line: i + 1, pos, depth: m[1].length - 1 })
-    } else if (lang === 'javascript') {
-      if ((m = /^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*(\w+)\s*\(([^)]*)\)/.exec(line))) out.push({ name: m[1] + '(' + m[2] + ')', kind: '関数', line: i + 1, pos, depth: 0 })
-      else if ((m = /^\s*(?:export\s+)?class\s+(\w+)/.exec(line))) out.push({ name: m[1], kind: 'クラス', line: i + 1, pos, depth: 0 })
-      else if ((m = /^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>/.exec(line))) out.push({ name: m[1], kind: '関数', line: i + 1, pos, depth: 0 })
     }
     pos += line.length + 1
   })

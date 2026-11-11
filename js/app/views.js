@@ -205,17 +205,38 @@ export function showHelp() {
   <h3>はじめかた</h3>
   <ol>
     <li>左上の <b>☰</b> (iPad / PC では左端のアイコン) でファイル一覧を開き、ファイルをタップして開きます。</li>
-    <li>コードを書くと、自動で保存されます (設定で変更できます)。</li>
-    <li><b>▶</b> を押すと実行します。結果は下のパネルに表示されます。</li>
+    <li>コードを書くと自動で保存されます。保存の状態は画面下のバーに表示されます。</li>
+    <li><b>▶</b> を押すと実行します。結果は下の「出力」、作った GUI は「ゲーム」タブに表示されます。</li>
   </ol>
+  <h3>2 つのモード</h3>
+  <ul>
+    <li><b>Studio</b>: Roblox Studio に貼り付けるスクリプト用。ファイル名で種類が決まります — <code>〜.server.luau</code> は Script、<code>〜.client.luau</code> は LocalScript、それ以外は ModuleScript。</li>
+    <li><b>Executor</b>: エグゼキューター用。<code>getgenv</code>・<code>writefile</code>・<code>hookmetamethod</code>・<code>Drawing</code> などを補完し、模擬的に実行できます。ファイル関数の保存先は <code>workspace</code> フォルダです。</li>
+    <li>切り替えは、画面下の左端 (Studio / Executor) をタップします。プロジェクトごとに記憶されます。</li>
+  </ul>
   <h3>入力を助ける機能</h3>
   <ul>
-    <li><b>補完</b>: 入力中に候補が出ます。<code>game:GetService("</code> でサービス名、<code>part.</code> でプロパティ、<code>:</code> でメソッドが出ます。</li>
-    <li><b>インライン候補</b>: 薄い文字で続きが表示されたら <b>Tab</b> (キーボードバーの <b>✓</b>) で確定します。例: <code>local Players = </code> と入力すると <code>game:GetService("Players")</code> を提案します。</li>
-    <li><b>end の自動入力</b>: <code>then</code> / <code>do</code> / <code>function()</code> の後で改行すると <code>end</code> が自動で入ります。</li>
-    <li><b>引数ヒント</b>: 関数の <code>(</code> の中で、引数の名前と型が表示されます。</li>
+    <li><b>補完</b>: <code>game:GetService("</code> でサービス名、<code>part.</code> でプロパティ、<code>:</code> でメソッド。自分で作ったテーブルや、<code>require</code> したモジュールの中身も候補に出ます。</li>
+    <li><b>インライン候補</b>: 薄い文字の続きは <b>Tab</b> (スマホはキーボードの上の <b>✓</b>) で確定。<code>PlayerAdded:Connect(</code> では引数名 (player) まで入り、同じような行をくり返すと次の行を予測します。</li>
+    <li><b>end の自動入力</b>: <code>then</code> / <code>do</code> / <code>function()</code> の後で改行すると <code>end</code> が入ります。</li>
+    <li><b>引数ヒント</b>: 関数の <code>(</code> の中で、引数の名前と型が表示されます (自分で作った関数も対象)。</li>
     <li><b>色の選択</b>: <code>Color3.fromRGB(...)</code> の左の四角をタップすると色を選べます。</li>
-    <li><b>エラー表示</b>: 文法エラーや、非推奨の API (<code>wait()</code> など) に下線が付きます。タップで詳細と修正案が出ます。</li>
+  </ul>
+  <h3>誤字・エラー対策</h3>
+  <ul>
+    <li><b>もしかして</b>: <code>GetServise</code>・<code>"Playrs"</code>・<code>part.Tranparency</code> のようなスペルミスを見つけて、正しい名前を提案します。</li>
+    <li><b>直し方を選ぶ</b>: 行の右に出る赤・黄色の説明をタップ (PC は <kbd>⌘/Ctrl + .</kbd>、スマホは 💡 キー) すると、ワンタップで修正できます。</li>
+    <li><b>自動修正</b>: <code>fucntion</code> → <code>function</code> などの打ち間違い、全角の <code>（）＝”</code> や全角スペース、iPhone が勝手に変える <code>“ ”</code> を自動で直します (文字列とコメントの中はそのまま)。</li>
+    <li><b>end の過不足</b>: どの <code>if</code> / <code>function</code> の <code>end</code> が足りないかを指摘し、正しい位置に追加できます。</li>
+    <li><b>実行エラーの解説</b>: <code>attempt to index nil</code> などのエラーに、日本語で原因と直し方を表示します。</li>
+  </ul>
+  <h3>実行</h3>
+  <ul>
+    <li>ブラウザ内の Luau 互換エンジンで実行します。<code>game</code>・<code>workspace</code>・<code>Instance.new</code>・<code>task.wait</code>・<code>TweenService</code>・<code>DataStoreService</code>・<code>RemoteEvent</code> など Roblox の API を模擬的に使えます (物理演算や 3D の描画は行いません)。</li>
+    <li><b>GUI プレビュー</b>: スクリプトが作った ScreenGui を「ゲーム」タブに表示します。ボタンをタップすると、接続した関数が実行されます。</li>
+    <li><b>操作できるもの</b>: ClickDetector・ProximityPrompt・Touched・キー入力に関数を接続していると、「ゲーム」タブから試せます。</li>
+    <li>ファイルを長押し → <b>▶ で常にこのファイルを実行</b> を選ぶと、別のファイルを編集中でもそのファイルを実行します。</li>
+    <li>無限ループは自動で止まります。<b>■</b> でいつでも停止できます。</li>
   </ul>
   <h3>スマホでの操作</h3>
   <ul>
@@ -224,17 +245,11 @@ export function showHelp() {
     <li>ファイルやタブを長押しするとメニューが出ます。</li>
     <li>ホーム画面に追加すると、アプリのように全画面で使えます (オフラインでも動作します)。</li>
   </ul>
-  <h3>実行環境</h3>
-  <ul>
-    <li><b>Luau / Lua</b>: ブラウザ内の Luau 互換エンジンで実行します。<code>game</code>, <code>workspace</code>, <code>Instance.new</code>, <code>Vector3</code>, <code>task.wait</code>, <code>TweenService</code>, <code>DataStoreService</code> など Roblox の API を模擬的に使えます (物理演算や描画は行いません)。</li>
-    <li><b>エグゼキューター API</b>: <code>getgenv</code>, <code>hookfunction</code>, <code>hookmetamethod</code>, <code>readfile</code>/<code>writefile</code> (プロジェクトの <code>workspace/</code> フォルダ), <code>Drawing</code> などを模擬的に使えます。</li>
-    <li><b>Python</b>: Pyodide (ブラウザ版 Python) で実行します。初回はダウンロードに時間がかかります。<code>input()</code> の値は出力パネルの「標準入力」欄に書きます。</li>
-    <li><b>JavaScript</b> と <b>HTML / Markdown のプレビュー</b> にも対応しています。</li>
-  </ul>
   <h3>キーボードショートカット (iPad / PC)</h3>
   <table>
     <tr><td><kbd>⌘/Ctrl + S</kbd></td><td>保存</td></tr>
     <tr><td><kbd>⌘/Ctrl + Enter</kbd> / <kbd>F5</kbd></td><td>実行</td></tr>
+    <tr><td><kbd>⌘/Ctrl + .</kbd></td><td>この行のエラーを修正</td></tr>
     <tr><td><kbd>⌘/Ctrl + P</kbd></td><td>ファイルを開く</td></tr>
     <tr><td><kbd>⌘/Ctrl + Shift + P</kbd></td><td>コマンドパレット</td></tr>
     <tr><td><kbd>⌘/Ctrl + F</kbd></td><td>検索・置換</td></tr>
@@ -249,5 +264,25 @@ export function showHelp() {
   modal({ title: '使い方', body, wide: true })
 }
 
+// バージョンアップ後に 1 度だけ表示する変更点
+export function showWhatsNew() {
+  const body = h('div', { class: 'help whats-new' })
+  body.innerHTML = `
+  <p>ForgeCode 5 は、<b>Roblox の Luau 専用</b>に作り直しました。</p>
+  <ul>
+    <li><b>Studio / Executor の 2 モード</b> — プロジェクトごとに切り替え (画面下の左端)。Python などの対応は終了しました。</li>
+    <li><b>字下げと end の位置を修正</b> — for / while や <code>Connect(function()</code> の中で、改行位置がずれる問題を直しました。</li>
+    <li><b>誤字対策</b> — スペルミスに「もしかして」を提案。全角記号や打ち間違いは自動で修正します。</li>
+    <li><b>エラーの直し方</b> — 行の右の説明をタップして修正。実行エラーには日本語の解説が付きます。</li>
+    <li><b>GUI プレビュー</b> — 作った画面を「ゲーム」タブに表示し、ボタンをタップして試せます。</li>
+    <li><b>賢くなった候補</b> — イベントの引数名、自作テーブルやモジュールの中身、次に書く行の予測。</li>
+    <li><b>エグゼキューター API を拡充</b> — 180 以上の関数を補完・模擬実行。</li>
+    <li><b>より安全な自動保存</b> — 保存前にアプリが閉じても、下書きから復元します。</li>
+    <li><b>速くなりました</b> — 読み込むデータを 3 割減らし、▶ を押してすぐ実行が始まります。</li>
+  </ul>`
+  modal({ title: '新しくなりました', body, actions: [{ label: '使い方を見る', run: () => { setTimeout(showHelp, 200) } }, { label: 'OK', primary: true }] })
+}
+
 command('history', 'ファイルの履歴を表示', p => showHistory(typeof p === 'string' ? p : undefined), { icon: 'history' })
 command('help', '使い方を表示', () => showHelp(), { icon: 'book' })
+command('whatsNew', '新機能を表示', () => showWhatsNew(), { icon: 'sparkle' })

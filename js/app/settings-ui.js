@@ -1,13 +1,13 @@
 // 設定画面
-import { getSettings, setSettings, resetSettings, DEFAULTS } from './store.js'
+import { getSettings, setSettings, resetSettings, getMode, DEFAULTS } from './store.js'
 import { THEMES } from '../editor/themes.js'
 import { AI_MODELS } from '../editor/ai.js'
 import { h, icon, toast, modal, confirmDialog, download } from './ui.js'
 import * as vfs from './vfs.js'
 import { apiVersion } from '../editor/apidb.js'
-import { app, command } from './app.js'
+import { app, command, setProjectKind } from './app.js'
 
-export const APP_VERSION = '4.0.0'
+export const APP_VERSION = '5.0.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -18,12 +18,10 @@ const FONTS = [
 ]
 
 const PRESETS = [
-  { name: '🎮 Roblox 開発', desc: 'Roblox API の補完・チェック、タブ字下げ', patch: { robloxApi: true, executorApi: false, insertSpaces: false, tabSize: 4, luaRuntime: 'roblox', lintUndefined: true, theme: 'roblox-dark' } },
-  { name: '⚡ エグゼキューター', desc: 'エグゼキューター API も補完・実行', patch: { robloxApi: true, executorApi: true, insertSpaces: false, luaRuntime: 'roblox', lintUndefined: true } },
-  { name: '🐍 Python 学習', desc: 'スペース 4 つで字下げ', patch: { insertSpaces: true, tabSize: 4, theme: 'one-dark' } },
-  { name: '🌙 標準 Lua', desc: 'Roblox なしの素の Lua として実行', patch: { robloxApi: false, executorApi: false, luaRuntime: 'plain' } },
-  { name: '🔍 大きな文字', desc: '見やすさ重視', patch: { fontSize: 18, lineHeight: 1.7, wordWrap: true } },
-  { name: '⚙️ 初期設定に戻す', desc: 'すべての設定を元に戻します', reset: true },
+  { icon: 'sparkle', name: 'おまかせ (おすすめ)', desc: '補完・誤字の自動修正・エラーの解説をすべてオン', patch: { autocomplete: true, inlineSuggest: true, signatureHelp: true, lint: true, lintUndefined: true, lintUnused: true, lintTypos: true, errorLens: true, fixInput: true, autoCorrect: true, autoEnd: true, autoClose: true, autoSave: true, explainErrors: true } },
+  { icon: 'edit', name: '自分で書きたい', desc: '自動修正とインライン候補をオフ。チェックだけ残す', patch: { inlineSuggest: false, autoCorrect: false, fixInput: false, autoEnd: false, lint: true, errorLens: true } },
+  { icon: 'eye', name: '大きな文字', desc: '見やすさ重視', patch: { fontSize: 18, lineHeight: 1.7, wordWrap: true } },
+  { icon: 'history', name: '初期設定に戻す', desc: 'すべての設定を元に戻します', reset: true },
 ]
 
 const SCHEMA = [
@@ -39,42 +37,43 @@ const SCHEMA = [
     { key: 'rainbowBrackets', type: 'bool', label: '括弧を色分け' },
     { key: 'layout', type: 'select', label: '画面レイアウト', options: [['auto', '自動 (画面の幅で切り替え)'], ['mobile', 'スマホ向け'], ['desktop', 'タブレット / PC 向け']] },
   ] },
-  { group: 'エディタ', icon: 'edit', items: [
-    { key: 'tabSize', type: 'select', label: 'タブの幅', options: [[2, '2'], [4, '4'], [8, '8']], num: true },
-    { key: 'insertSpaces', type: 'bool', label: 'タブの代わりにスペースを入れる', desc: 'Roblox Studio はタブ、Python はスペースが一般的です (Python は常にスペース)' },
-    { key: 'autoClose', type: 'bool', label: '括弧・引用符を自動で閉じる' },
-    { key: 'autoEnd', type: 'bool', label: 'end を自動で入力 (Lua)', desc: 'then / do / function の後で改行すると end を追加します' },
-    { key: 'colorPicker', type: 'bool', label: 'Color3 の色見本とカラーピッカー' },
-    { key: 'pinchZoom', type: 'bool', label: 'ピンチで文字サイズを変更' },
-  ] },
-  { group: '補完・候補', icon: 'sparkle', items: [
+  { group: '入力の手助け', icon: 'sparkle', items: [
     { key: 'autocomplete', type: 'bool', label: '入力中に補完候補を表示' },
-    { key: 'inlineSuggest', type: 'bool', label: 'インライン候補 (薄い文字の続き)', desc: 'Tab で確定。local Players = → game:GetService("Players") など' },
+    { key: 'inlineSuggest', type: 'bool', label: 'インライン候補 (薄い文字の続き)', desc: 'Tab (スマホは ✓) で確定。イベントの引数や、似た行の続きを予測します' },
     { key: 'signatureHelp', type: 'bool', label: '関数の引数ヒント' },
+    { key: 'autoEnd', type: 'bool', label: 'end を自動で入力', desc: 'then / do / function の後で改行すると end を追加します' },
+    { key: 'autoClose', type: 'bool', label: '括弧・引用符を自動で閉じる' },
     { key: 'hover', type: 'bool', label: 'マウスを乗せたときの説明 (iPad / PC)' },
+    { key: 'colorPicker', type: 'bool', label: 'Color3 の色見本とカラーピッカー' },
   ] },
-  { group: 'エラーチェック', icon: 'alert', items: [
+  { group: '誤字・エラー対策', icon: 'bulb', items: [
     { key: 'lint', type: 'bool', label: 'エラー・警告を表示' },
+    { key: 'errorLens', type: 'bool', label: 'エラーの内容を行の右に表示', desc: 'タップすると直し方を選べます' },
+    { key: 'lintTypos', type: 'bool', label: '誤字を検出して「もしかして」を提案', desc: 'プロパティ名・サービス名・クラス名・Enum・関数名のスペルミス' },
+    { key: 'autoCorrect', type: 'bool', label: 'よくある打ち間違いを自動修正', desc: 'fucntion → function、locla → local など (元に戻せます)' },
+    { key: 'fixInput', type: 'bool', label: '全角記号・スマート引用符を半角に直す', desc: '（ ） ” ＝ や全角スペース、iPhone が変換した “ ” — など。文字列とコメントの中はそのまま' },
     { key: 'lintUndefined', type: 'bool', label: '定義されていない変数を警告' },
     { key: 'lintUnused', type: 'bool', label: '使われていない変数を薄く表示' },
+    { key: 'explainErrors', type: 'bool', label: '実行エラーに日本語の解説を付ける' },
   ] },
-  { group: 'API', icon: 'cube', items: [
-    { key: 'robloxApi', type: 'bool', label: 'Roblox API', desc: '補完・チェック・実行で Roblox の API を使います' },
-    { key: 'executorApi', type: 'bool', label: 'エグゼキューター API', desc: 'getgenv / hookfunction / readfile / Drawing などを補完・模擬実行します' },
+  { group: 'エディタ', icon: 'edit', items: [
+    { key: 'tabSize', type: 'select', label: 'タブの幅', options: [[2, '2'], [4, '4'], [8, '8']], num: true },
+    { key: 'insertSpaces', type: 'bool', label: 'タブの代わりにスペースを入れる', desc: 'Roblox Studio の標準はタブです' },
+    { key: 'pinchZoom', type: 'bool', label: 'ピンチで文字サイズを変更' },
   ] },
   { group: '保存', icon: 'save', items: [
-    { key: 'autoSave', type: 'bool', label: '自動保存' },
-    { key: 'autoSaveDelay', type: 'range', min: 200, max: 5000, step: 100, label: '自動保存までの時間', unit: 'ms' },
-    { key: 'formatOnSave', type: 'bool', label: '保存時に整形 (Lua)', desc: '⌘/Ctrl + S で保存したとき' },
+    { key: 'autoSave', type: 'bool', label: '自動保存', desc: '入力が止まるとすぐ保存します。保存前にアプリが閉じても、下書きから復元されます' },
+    { key: 'autoSaveDelay', type: 'range', min: 200, max: 3000, step: 100, label: '自動保存までの時間', unit: 'ms' },
+    { key: 'formatOnSave', type: 'bool', label: '保存時に整形', desc: '⌘/Ctrl + S で保存したとき' },
     { key: 'trimOnSave', type: 'bool', label: '保存時に行末の空白を削除' },
     { key: 'confirmDelete', type: 'bool', label: '削除の前に確認' },
   ] },
   { group: '実行', icon: 'play', items: [
-    { key: 'luaRuntime', type: 'select', label: '.lua ファイルの実行環境', options: [['roblox', 'Roblox (Luau + Roblox API)'], ['plain', '標準 Lua (Roblox API なし)']], desc: '.luau ファイルは常に Roblox 環境で実行します' },
-    { key: 'timeLimit', type: 'range', min: 1, max: 60, label: '連続実行の上限 (無限ループ対策)', unit: '秒' },
-    { key: 'maxRunTime', type: 'range', min: 0, max: 600, step: 10, label: '最大実行時間', unit: '秒', desc: '0 で無制限 (Heartbeat などを使うスクリプト向け)' },
     { key: 'clearOnRun', type: 'bool', label: '実行前に出力をクリア' },
-    { key: 'pyodideUrl', type: 'text', label: 'Python (Pyodide) の読み込み元', desc: '通常は変更不要です' },
+    { key: 'groupOutput', type: 'bool', label: '同じ出力をまとめる (×3 のように表示)' },
+    { key: 'outputTime', type: 'bool', label: '出力に経過時間を表示' },
+    { key: 'timeLimit', type: 'range', min: 1, max: 60, label: '連続実行の上限 (無限ループ対策)', unit: '秒' },
+    { key: 'maxRunTime', type: 'range', min: 0, max: 600, step: 10, label: '最大実行時間', unit: '秒', desc: '0 で無制限。ボタンなどの操作待ちの間は数えません' },
   ] },
   { group: 'AI (Claude)', icon: 'sparkle', items: [
     { key: 'aiKey', type: 'password', label: 'Claude API キー', desc: 'console.anthropic.com で発行します。キーはこの端末のブラウザにのみ保存され、Anthropic の API にだけ送信されます。利用料金は API キーの持ち主に請求されます。' },
@@ -110,6 +109,15 @@ export class SettingsView {
     const body = this.body
     body.innerHTML = ''
     if (!this.filter) {
+      // プロジェクトのモード
+      if (app.project) {
+        const mode = getMode()
+        body.append(h('div', { class: 'set-group-title' }, icon('swap', 16), 'このプロジェクトのモード'))
+        body.append(h('div', { class: 'mode-cards' },
+          [['studio', 'cube', 'Roblox Studio', 'ゲーム用のスクリプト。Roblox API のみ'], ['executor', 'bolt', 'Executor', 'エグゼキューター API も補完・実行']].map(([id, ic, name, desc]) =>
+            h('button', { class: 'mode-card k-' + id + (mode === id ? ' on' : ''), onclick: async () => { await setProjectKind(id); this.render(); toast(`${name} モードにしました`, { icon: ic }) } },
+              icon(ic, 22), h('div', null, h('div', { class: 'preset-name' }, name), h('div', { class: 'preset-desc' }, desc)), mode === id ? icon('check', 18) : null))))
+      }
       body.append(h('div', { class: 'set-group-title' }, icon('sparkle', 16), 'かんたん設定'))
       const grid = h('div', { class: 'preset-grid' })
       for (const p of PRESETS) {
@@ -118,8 +126,8 @@ export class SettingsView {
             if (await confirmDialog('設定のリセット', 'すべての設定を初期状態に戻しますか? (API キーは残ります)', { okLabel: 'リセット', danger: true })) { resetSettings(); this.render(); toast('初期設定に戻しました') }
             return
           }
-          setSettings(p.patch); this.render(); toast(`「${p.name.replace(/^\S+\s/, '')}」の設定にしました`)
-        } }, h('div', { class: 'preset-name' }, p.name), h('div', { class: 'preset-desc' }, p.desc)))
+          setSettings(p.patch); this.render(); toast(`「${p.name}」の設定にしました`)
+        } }, h('div', { class: 'preset-name' }, icon(p.icon, 16), p.name), h('div', { class: 'preset-desc' }, p.desc)))
       }
       body.append(grid)
     }
@@ -137,7 +145,7 @@ export class SettingsView {
       box.append(
         this.actionRow('すべてのプロジェクトを ZIP で保存', 'バックアップや他の端末への移動に', '保存', () => backupAll()),
         this.actionRow('設定を JSON で編集', '上級者向け', '編集', () => editJson(() => this.render())),
-        this.actionRow('ストレージの永続化', 'ブラウザがデータを自動削除しないように要求します', '要求', async () => { const ok = await vfs.requestPersist(); toast(ok ? '永続化されました' : 'ブラウザが許可しませんでした (ホーム画面に追加すると許可されやすくなります)') }),
+        this.actionRow('データを消えにくくする', 'ブラウザが空き容量不足のときにデータを自動削除しないよう要求します', '要求', async () => { const ok = await vfs.requestPersist(); toast(ok ? '保護されました。データは自動削除されません' : 'ブラウザが許可しませんでした (ホーム画面に追加すると許可されやすくなります)') }),
       )
       const est = h('div', { class: 'set-desc' }, '計算中…')
       vfs.storageEstimate().then(e => { est.textContent = e ? `使用量: ${(e.usage / 1024 / 1024).toFixed(1)} MB / 上限 約 ${(e.quota / 1024 / 1024 / 1024).toFixed(1)} GB` : '使用量を取得できません' })
@@ -152,6 +160,7 @@ export class SettingsView {
           location.reload()
         }),
         this.actionRow('使い方', 'できること・操作方法', '表示', () => app.commands.get('help').run()),
+        this.actionRow('新機能を見る', `バージョン ${APP_VERSION} の変更点`, '表示', () => app.commands.get('whatsNew').run()),
         this.actionRow('はじめの設定をやり直す', 'ようこそ画面を表示します', '表示', () => app.commands.get('onboarding').run())))
     }
   }

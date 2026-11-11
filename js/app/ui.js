@@ -1,4 +1,5 @@
 // UI の共通部品: DOM 作成、アイコン、トースト、ダイアログ、メニュー
+import { getMode } from './store.js'
 export function h(tag, props, ...children) {
   const el = document.createElement(tag)
   if (props) {
@@ -78,6 +79,20 @@ const P = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
   diff: '<path d="M12 3v14M5 10h14"/><path d="M5 21h14"/>',
+  filter: '<path d="M3 5h18l-7 8.5V19l-4-2v-3.5z"/>',
+  wand: '<path d="M4 20 15 9l-2-2L2 18z" transform="translate(1 1)"/><path d="m17 3 .9 2.1L20 6l-2.1.9L17 9l-.9-2.1L14 6l2.1-.9zM20 13l.6 1.4L22 15l-1.4.6L20 17l-.6-1.4L18 15l1.4-.6z"/>',
+  bolt: '<path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12z"/>',
+  window: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M6.5 6.5h.01M9.5 6.5h.01"/>',
+  bulb: '<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-4 10.5c.8.8 1.2 1.6 1.3 2.5h5.4c.1-.9.5-1.7 1.3-2.5A6 6 0 0 0 12 3z"/>',
+  pin: '<path d="M12 16v6M8.5 3h7l-1 6 3.5 4.500H6L9.5 9z"/>',
+  swap: '<path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/>',
+  saved: '<path d="M7 18a5 5 0 1 1 1.2-9.860A6 6 0 0 1 20 10.5 4 4 0 0 1 18 18z"/><path d="m9.5 13 2 2 3.5-3.5"/>',
+  saving: '<path d="M7 18a5 5 0 1 1 1.2-9.860A6 6 0 0 1 20 10.5 4 4 0 0 1 18 18z"/><path d="M12 16v-5M9.5 13.5 12 11l2.5 2.5"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.500h.01M7 16.500h.01M11 7.500h6M11 16.500h6"/>',
+  device: '<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10.5 18h3"/>',
+  braces: '<path d="M8 4c-2 0-3 1-3 3v2c0 1.5-1 2.5-2 3 1 .500 2 1.5 2 3v2c0 2 1 3 3 3M16 4c2 0 3 1 3 3v2c0 1.5 1 2.5 2 3-1 .500-2 1.5-2 3v2c0 2-1 3-3 3"/>',
+  text: '<path d="M5 6h14M5 10h14M5 14h9M5 18h11"/>',
+  gamepad: '<rect x="2.5" y="7" width="19" height="11" rx="5.5"/><path d="M7.5 11v3M6 12.500h3M15 11.500h.01M17.5 13.500h.01"/>',
 }
 export function icon(name, size = 20, cls = '') {
   const span = document.createElement('span')
@@ -86,12 +101,30 @@ export function icon(name, size = 20, cls = '') {
   return span
 }
 
+// ファイルの種類を表すアイコン (Studio の Script / LocalScript / ModuleScript と同じ色分け)
+const FILE_KINDS = {
+  server: ['server', '#3fb950', 'Script (サーバー)'],
+  client: ['device', '#58a6ff', 'LocalScript (クライアント)'],
+  module: ['cube', '#bc8cff', 'ModuleScript'],
+  executor: ['bolt', '#f0a43a', 'エグゼキュータースクリプト'],
+  json: ['braces', '#d7ba5a', 'JSON'],
+  md: ['book', '#58a6ff', 'メモ (Markdown)'],
+  text: ['text', '#8b949e', 'テキスト'],
+}
+export function fileKind(path) {
+  const m = /\.(server|client)?\.?(luau?|json|md|markdown|txt)$/i.exec(path)
+  if (!m) return 'text'
+  const ext = m[2].toLowerCase()
+  if (ext === 'lua' || ext === 'luau') return m[1] ? m[1].toLowerCase() : (getMode() === 'executor' ? 'executor' : 'module')
+  return ext === 'json' ? 'json' : ext === 'txt' ? 'text' : 'md'
+}
 export function fileIcon(path, dir, open) {
   if (dir) return icon(open ? 'folderOpen' : 'folder', 18, 'fi-folder')
-  const ext = path.split('.').pop().toLowerCase()
-  const map = { lua: ['Lu', '#3e7fff'], luau: ['Lu', '#00a2ff'], py: ['Py', '#f5c542'], js: ['JS', '#f0db4f'], ts: ['TS', '#3178c6'], json: ['{}', '#cbcb41'], md: ['M↓', '#42a5f5'], html: ['<>', '#e44d26'], css: ['#', '#2965f1'], txt: ['≡', '#9e9e9e'] }
-  const [label, color] = map[ext] || ['•', '#9e9e9e']
-  return h('span', { class: 'fi-badge', style: { color } }, label)
+  const [name, color, label] = FILE_KINDS[fileKind(path)]
+  const el = icon(name, 17, 'fi-kind')
+  el.style.color = color
+  el.title = label
+  return el
 }
 
 // ---- 触覚フィードバック ----
@@ -105,6 +138,8 @@ export function toast(msg, opts = {}) {
   if (!toastHost) { toastHost = h('div', { class: 'toast-host' }); document.body.append(toastHost) }
   const el = h('div', { class: 'toast ' + (opts.kind || '') }, opts.icon ? icon(opts.icon, 18) : null, h('span', null, msg),
     opts.action ? h('button', { class: 'toast-action', onclick: () => { opts.action.run(); el.remove() } }, opts.action.label) : null)
+  // 同時に表示するのは 3 件まで
+  while (toastHost.childElementCount >= 3) toastHost.firstElementChild.remove()
   toastHost.append(el)
   requestAnimationFrame(() => el.classList.add('show'))
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250) }, opts.duration || 2600)
@@ -179,6 +214,8 @@ export function menu(items, anchor, { title } = {}) {
   for (const it of items) {
     if (it === '-') { list.append(h('div', { class: 'menu-sep' })); continue }
     if (!it) continue
+    // 説明文 (押せない行)
+    if (it.note) { list.append(h('div', { class: 'menu-note ' + (it.kind || '') }, it.icon ? icon(it.icon, 16) : null, h('span', null, it.note))); continue }
     list.append(h('button', {
       class: 'menu-item' + (it.danger ? ' danger' : '') + (it.checked ? ' checked' : ''), disabled: it.disabled,
       onclick: () => { close(); it.run() },

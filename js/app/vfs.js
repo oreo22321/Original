@@ -22,7 +22,13 @@ function openDB() {
         hs.createIndex('file', ['pid', 'path'])
       }
     }
-    req.onsuccess = () => resolve(req.result)
+    req.onsuccess = () => {
+      const db = req.result
+      // 別のタブが新しい版を開いた / ブラウザが接続を閉じた → 次の操作で開き直す
+      db.onversionchange = () => { try { db.close() } catch {} dbPromise = null }
+      db.onclose = () => { dbPromise = null }
+      resolve(db)
+    }
     req.onerror = () => resolve(null)
     req.onblocked = () => resolve(null)
   }).then(db => {
@@ -43,7 +49,8 @@ function saveMemory() {
 
 function tx(db, stores, mode, fn) {
   return new Promise((resolve, reject) => {
-    const t = db.transaction(stores, mode)
+    let t
+    try { t = db.transaction(stores, mode) } catch (e) { dbPromise = null; reject(e); return }
     let result
     t.oncomplete = () => resolve(result)
     t.onerror = () => reject(t.error)
@@ -51,6 +58,46 @@ function tx(db, stores, mode, fn) {
     result = fn(t)
   })
 }
+
+// 一時的な失敗 (接続が閉じられた・ストレージが混雑) に備えて、少し待ってやり直す
+async function retry(fn, times = 3) {
+  let err
+  for (let i = 0; i < times; i++) {
+    try { return await fn() } catch (e) {
+      err = e
+      if (e && e.name === 'QuotaExceededError') break
+      await new Promise(r => setTimeout(r, 120 * (i + 1)))
+    }
+  }
+  if (err && err.name === 'QuotaExceededError') throw new Error('端末の空き容量が足りません。不要なプロジェクトを削除してください')
+  throw err
+}
+
+// ---- フォルダの存在キャッシュ (保存のたびに親フォルダを調べ直さない) ----
+const knownDirs = new Map()
+const dirSet = pid => { let s = knownDirs.get(pid); if (!s) knownDirs.set(pid, s = new Set()); return s }
+
+// ---- 下書き (保存が終わる前にアプリが閉じられても復元できるよう、localStorage に同期的に書く) ----
+const DRAFT = 'forgecode.draft.'
+export function putDraft(pid, path, content) {
+  if (content.length > 400000) return false
+  try { localStorage.setItem(DRAFT + pid + ':' + path, JSON.stringify({ t: Date.now(), c: content })); return true } catch { return false }
+}
+export function getDraft(pid, path) {
+  try { const raw = localStorage.getItem(DRAFT + pid + ':' + path); return raw ? JSON.parse(raw) : null } catch { return null }
+}
+export function clearDraft(pid, path) {
+  try { localStorage.removeItem(DRAFT + pid + ':' + path) } catch {}
+}
+export function clearDrafts(pid) {
+  try { for (const k of Object.keys(localStorage)) if (k.startsWith(DRAFT + pid + ':')) localStorage.removeItem(k) } catch {}
+}
+
+// ---- 別のタブでの変更を知らせる ----
+let channel = null
+try { channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('forgecode.fs') : null } catch {}
+export function onRemoteChange(fn) { if (channel) channel.onmessage = e => fn(e.data) }
+const announce = (pid, path, op) => { try { if (channel) channel.postMessage({ pid, path, op }) } catch {} }
 const reqP = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error) })
 
 export function normPath(p) {
@@ -80,9 +127,9 @@ export async function putProject(p) {
   return p
 }
 
-export async function createProject(name, files = {}) {
+export async function createProject(name, files = {}, extra = {}) {
   const id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
-  const p = { id, name, created: Date.now(), opened: Date.now() }
+  const p = { id, name, created: Date.now(), opened: Date.now(), ...extra }
   await putProject(p)
   for (const [path, content] of Object.entries(files)) {
     if (path.endsWith('/')) await mkdir(id, path)
@@ -101,6 +148,8 @@ export async function deleteProject(id) {
     return
   }
   const files = await listFiles(id)
+  knownDirs.delete(id)
+  clearDrafts(id)
   await tx(db, ['projects', 'files', 'history'], 'readwrite', t => {
     t.objectStore('projects').delete(id)
     const fs = t.objectStore('files')
@@ -149,9 +198,12 @@ export async function exists(pid, path) {
 
 async function ensureParents(pid, path) {
   const parts = path.split('/')
+  const known = dirSet(pid)
   for (let i = 1; i < parts.length; i++) {
     const d = parts.slice(0, i).join('/')
+    if (known.has(d)) continue
     if (!(await exists(pid, d))) await putRaw({ pid, path: d, dir: true, mtime: Date.now() })
+    known.add(d)
   }
 }
 
@@ -164,8 +216,19 @@ async function putRaw(rec) {
 export async function writeFile(pid, path, content) {
   path = normPath(path)
   if (!path) throw new Error('ファイル名が空です')
-  await ensureParents(pid, path)
-  await putRaw({ pid, path, content: String(content ?? ''), mtime: Date.now() })
+  await retry(async () => {
+    await ensureParents(pid, path)
+    await putRaw({ pid, path, content: String(content ?? ''), mtime: Date.now() })
+  })
+  announce(pid, path, 'write')
+}
+
+// パスだけの一覧 (中身を読み込まないので速い)
+export async function listPaths(pid) {
+  const db = await openDB()
+  if (!db) return Object.values(memory.files).filter(f => f.pid === pid).map(f => f.path)
+  const keys = await tx(db, ['files'], 'readonly', t => reqP(t.objectStore('files').index('pid').getAllKeys(pid)))
+  return (await keys).map(k => k[1])
 }
 
 export async function mkdir(pid, path) {
@@ -176,11 +239,13 @@ export async function mkdir(pid, path) {
 
 export async function remove(pid, path) {
   path = normPath(path)
-  const files = await listFiles(pid)
-  const targets = files.filter(f => f.path === path || f.path.startsWith(path + '/')).map(f => f.path)
+  const targets = (await listPaths(pid)).filter(p => p === path || p.startsWith(path + '/'))
+  knownDirs.delete(pid)
+  for (const p of targets) clearDraft(pid, p)
   const db = await openDB()
   if (!db) { for (const p of targets) delete memory.files[pid + ':' + p]; saveMemory(); return targets }
   await tx(db, ['files'], 'readwrite', t => { const s = t.objectStore('files'); for (const p of targets) s.delete([pid, p]) })
+  announce(pid, path, 'remove')
   return targets
 }
 
@@ -190,6 +255,7 @@ export async function rename(pid, from, to) {
   if (await exists(pid, to)) throw new Error(`"${to}" は既に存在します`)
   const all = await readAll(pid)
   const moved = all.filter(f => f.path === from || f.path.startsWith(from + '/'))
+  knownDirs.delete(pid)
   await ensureParents(pid, to)
   for (const f of moved) {
     const np = to + f.path.slice(from.length)

@@ -850,8 +850,9 @@ export function installRoblox(G, ctx) {
   IMPL.RunService = {
     methods: {
       IsStudio: M('IsStudio', () => true),
-      IsClient: M('IsClient', () => true),
-      IsServer: M('IsServer', () => true),
+      // スクリプトの種類に合わせる (ModuleScript はどちらからも呼ばれうるので両方 true)
+      IsClient: M('IsClient', () => ctx.runContext !== 'server'),
+      IsServer: M('IsServer', () => ctx.runContext !== 'client' && ctx.runContext !== 'executor'),
       IsRunning: M('IsRunning', () => true),
       IsRunMode: M('IsRunMode', () => true),
       IsEdit: M('IsEdit', () => false),
@@ -1166,7 +1167,14 @@ export function installRoblox(G, ctx) {
       Chat: M('Chat', A => { hooks.output('print', `[チャット] Player1: ${str(A[1])}`); return EMPTY }),
     },
     props: {
-      LocalPlayer: { get: i => i.props.get('LocalPlayer') },
+      LocalPlayer: { get: i => {
+        // 本物の Roblox と同じく、サーバースクリプトでは nil
+        if (ctx.runContext === 'server') {
+          if (!ctx.warnedLocalPlayer) { ctx.warnedLocalPlayer = true; hooks.output('warn', 'サーバースクリプト (.server.luau) では Players.LocalPlayer は nil です。PlayerAdded などでプレイヤーを受け取ってください') }
+          return undefined
+        }
+        return i.props.get('LocalPlayer')
+      } },
       NumPlayers: { get: i => i.children.filter(c => c.ClassName === 'Player').length },
     },
   }
