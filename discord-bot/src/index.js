@@ -25,7 +25,10 @@ async function getToken() {
   const current = process.env.DISCORD_TOKEN;
   if (looksLikeToken(current)) return current;
   if (!process.stdin.isTTY) {
-    console.error('❌ DISCORD_TOKEN が設定されていません。環境変数 DISCORD_TOKEN に Bot のトークンを設定してください。');
+    console.error(
+      '❌ DISCORD_TOKEN が設定されていません。環境変数 DISCORD_TOKEN に Bot のトークンを設定してください。' +
+        (process.env.RAILWAY_ENVIRONMENT ? '\n   Railway: サービスをタップ → Variables → New Variable で DISCORD_TOKEN を追加' : ''),
+    );
     process.exit(1);
   }
   console.log('');
@@ -55,7 +58,14 @@ function saveToken(token) {
   fs.writeFileSync(ENV_FILE, `${lines.join('\n')}\n`);
 }
 
-const store = new Store(process.env.DATA_FILE || path.join(__dirname, '..', 'data', 'db.json'));
+// データの保存場所: DATA_FILE > Railway のボリューム > data/db.json
+const volume = process.env.RAILWAY_VOLUME_MOUNT_PATH;
+const dataFile = process.env.DATA_FILE || (volume ? path.join(volume, 'db.json') : path.join(__dirname, '..', 'data', 'db.json'));
+if (process.env.RAILWAY_ENVIRONMENT && !volume && !process.env.DATA_FILE) {
+  console.warn('⚠️ Railway にボリュームが付いていません。このままだと更新のたびに商品・注文データが消えます (README の「スマホだけで導入」を参照)。');
+}
+console.log(`💾 データの保存先: ${dataFile}`);
+const store = new Store(dataFile);
 const commands = new Map(
   [
     'setup',
@@ -71,6 +81,7 @@ const commands = new Map(
     'shop',
     'myorders',
     'help',
+    'backup',
   ].map((name) => {
     const cmd = require(`./commands/${name}`);
     return [cmd.data.name, cmd];

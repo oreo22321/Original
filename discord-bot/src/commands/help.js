@@ -17,7 +17,7 @@ const STAFF = [
   '`/coupon create|list|delete` 割引クーポン',
   '`/order list|info|cancel` 注文の管理',
   '`/announce` お知らせを投稿 / `/stats` 売上',
-  '`/blacklist` 注文できない人の管理',
+  '`/blacklist` 注文できない人の管理 / `/backup` データのバックアップ',
   '`/panel` パネルの設置 / `/config` 各種設定',
   '',
   '**注文チャンネルでの操作**',

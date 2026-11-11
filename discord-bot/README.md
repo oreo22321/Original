@@ -5,7 +5,71 @@ Discord サーバーで **商品の販売** と **代行の受付** を自動化
 
 ---
 
-## 🚀 かんたん導入（だいたい 10 分）
+## 📱 スマホだけで導入（PC なし・だいたい 20 分）
+
+スマホでは Bot のプログラムを動かし続けられないので、**Railway**（Bot を 24 時間動かしてくれるサービス）に置きます。
+全部スマホのブラウザ（Safari / Chrome）と Discord アプリでできます。
+
+> 💴 Railway は最初に $5 分の無料お試しがあり、その後は **Hobby プラン 月 $5**（$5 分の利用料込み。この Bot ならほぼ収まります）。料金は変わることがあるので [公式の料金ページ](https://railway.com/pricing) で確認してください。
+
+### ① Bot を作る（Discord Developer Portal）
+
+1. ブラウザで <https://discord.com/developers/applications> を開いてログイン
+   - 画面が崩れるときは **PC 版表示** に切り替え（Safari: アドレスバーの「ぁあ」→「デスクトップ用 Web サイトを表示」／Chrome: 「⋮」→「PC 版サイト」）
+2. **「New Application」** → 名前を入れて **Create**
+3. **General Information** の **APPLICATION ID** をコピーしてメモ帳に貼っておく（③で使う）
+4. 左メニュー（☰）→ **Bot**
+   - **MESSAGE CONTENT INTENT** を **ON** → **Save Changes**
+   - **Reset Token** → **Copy**（メモ帳に一時的に貼っておく。**人に見せない**）
+
+### ② Railway で Bot を動かす
+
+1. ブラウザで <https://railway.com> → **Login** → **GitHub でログイン**
+2. **New Project** → **Deploy from GitHub repo** → このリポジトリ（`Original`）を選ぶ
+   - リポジトリが出てこないときは「Configure GitHub App」から Railway にアクセスを許可
+3. できた四角（サービス）をタップ → **Settings**
+   - **Root Directory** に `discord-bot` と入力
+   - **Branch**（Source の所）で、この Bot のファイルがあるブランチを選ぶ（main にマージ済みなら main のままで OK）
+4. **Variables** → **New Variable**
+   - 名前: `DISCORD_TOKEN`　値: ① でコピーしたトークン → **Add**
+5. **データ用のボリュームを付ける**（これをしないと、更新のたびに商品や注文が消えます）
+   - プロジェクト画面の **「+ Create」**（または「+」）→ **Volume** → この Bot のサービスを選ぶ
+   - **Mount path** に `/data` → 作成
+   - Bot が自動でボリュームを見つけて、そこに保存します
+6. 画面上の **Deploy**（または「Apply changes」）を押す
+7. **Deployments** → 一番上の **View Logs** に `🤖 ○○ としてログインしました` と出れば成功
+
+### ③ サーバーに入れる
+
+ログに出ている **招待 URL** をタップ。ログが見づらいときは、下の URL の `ここにAPPLICATION_ID` を ① でメモした ID に置き換えてブラウザで開いてください:
+
+```
+https://discord.com/oauth2/authorize?client_id=ここにAPPLICATION_ID&permissions=268561424&scope=bot+applications.commands
+```
+
+サーバーを選んで **認証**。
+
+### ④ Discord アプリでショップを作る
+
+Discord アプリのチャット欄で `/setup` → あとは下の「ステップ 4」と同じです。
+商品登録・支払い確認・納品・クーポン・お知らせなど、**運営はすべてスマホの Discord アプリでできます**。
+
+### スマホ運営のコツ
+
+| やりたいこと | 方法 |
+| --- | --- |
+| コードを大量に登録 | メモアプリでコードを 1 行ずつ書いて `.txt` で保存 → `/codes add` の `file` に添付（少ないなら `file` なしで入力欄に貼り付け） |
+| 商品画像を付ける | 画像共有サイト（Imgur など）にアップして、画像の URL を `/product edit` の `image_url` に貼る（Discord に投稿した画像の URL は期限が切れて表示されなくなるので使えません） |
+| 注文が入ったら気づきたい | 「スタッフ」ロールを自分に付けておくと、注文・支払い報告のたびにメンションで通知が来ます |
+| データのバックアップ | `/backup` でファイルを受け取って保存 |
+| Bot が止まっていないか確認 | Railway のアプリ画面（ブラウザ）で Deployments を見る。止まっても自動で再起動する設定になっています |
+| Bot を最新版にする | GitHub のファイルが更新されると、Railway が自動で入れ直します |
+
+> Android なら Termux というアプリでスマホ自体で動かす方法もありますが、スマホの電源やアプリが止まると Bot も止まるのでおすすめしません。iPhone ではできません。
+
+---
+
+## 🚀 かんたん導入（PC で動かす場合・だいたい 10 分）
 
 ### ステップ 1：Bot を作る（5 分）
 
@@ -108,7 +172,7 @@ Discord サーバーで **商品の販売** と **代行の受付** を自動化
 | `/config payment` | 管理者 | 支払い方法の案内文 |
 | `/config roles` `channels` `autocancel` `notify` `limit` `show` | 管理者 | 各種設定 |
 | `/panel shop` `service` `verify` | 管理者 | パネルを好きなチャンネルに設置 |
-| `/stats` / `/blacklist` | 管理者 | 売上 / 注文禁止 |
+| `/stats` / `/blacklist` / `/backup` | 管理者 | 売上 / 注文禁止 / データのバックアップ |
 | `/order list` `info` `cancel` | スタッフ | 注文の管理 |
 | `/shop` / `/myorders` / `/help` | 誰でも | 商品一覧 / 自分の注文 / 使い方 |
 
