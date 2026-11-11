@@ -223,11 +223,8 @@ export class Parser {
         body = this.block()
         clauses.push({ cond, body, line: l })
       } else if (this.check('else')) {
-        const elseTok = this.tok
+        // 'else if' は入れ子の if として正しい文法 (end が 2 つ必要)。書き間違いの指摘はエディタ側で行います
         this.next()
-        if (this.check('if') && this.tok.line === elseTok.line) {
-          this.error("'else if' ではなく 'elseif' と続けて書きます")
-        }
         orelse = this.block()
         this.expect('end', 'if 文の終わり', ifTok)
         break

@@ -4,6 +4,7 @@ const SESSION_KEY = 'forgecode.session.v1'
 
 export const isTouch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches
 const smallScreen = typeof innerWidth !== 'undefined' && Math.min(innerWidth, innerHeight) < 600
+export const isIOS = typeof navigator !== 'undefined' && (/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
 
 export const DEFAULTS = {
   // 見た目
@@ -11,7 +12,6 @@ export const DEFAULTS = {
   fontSize: smallScreen ? 13 : 15,
   fontFamily: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace',
   lineHeight: 1.55,
-  uiSize: 'auto', // auto | compact | comfortable
   layout: 'auto', // auto | mobile | desktop
   // エディタ
   tabSize: 4,
@@ -30,24 +30,26 @@ export const DEFAULTS = {
   inlineSuggest: true,
   signatureHelp: true,
   hover: true,
-  // チェック
+  // チェック・誤字対策
   lint: true,
   lintUndefined: true,
   lintUnused: true,
-  // API
-  robloxApi: true,
-  executorApi: true,
+  lintTypos: true,     // スペルミスを検出して「もしかして」を提案
+  errorLens: true,     // エラーの内容を行の右に表示
+  fixInput: true,      // 全角記号・スマート引用符を自動で半角に
+  autoCorrect: true,   // fucntion → function などを自動修正
   // ファイル
   autoSave: true,
-  autoSaveDelay: 800,
+  autoSaveDelay: 600,
   formatOnSave: false,
   trimOnSave: true,
   // 実行
-  luaRuntime: 'roblox', // roblox | plain (.lua ファイルの実行環境)
   timeLimit: 10,
   maxRunTime: 60,
   clearOnRun: true,
-  pyodideUrl: 'https://cdn.jsdelivr.net/pyodide/v0.29.5/full/',
+  groupOutput: true,   // 同じ出力をまとめる (×3)
+  outputTime: false,   // 出力に経過時間を表示
+  explainErrors: true, // 実行エラーに日本語の解説を付ける
   // AI
   aiKey: '',
   aiModel: 'claude-opus-5-5',
@@ -66,7 +68,12 @@ export const DEFAULTS = {
 let settings = { ...DEFAULTS }
 try {
   const raw = localStorage.getItem(KEY)
-  if (raw) settings = { ...DEFAULTS, ...JSON.parse(raw) }
+  if (raw) {
+    const saved = JSON.parse(raw)
+    // 廃止した設定は捨てる
+    for (const k of Object.keys(saved)) if (!(k in DEFAULTS)) delete saved[k]
+    settings = { ...DEFAULTS, ...saved }
+  }
 } catch {}
 
 const listeners = new Set()
@@ -84,6 +91,18 @@ export function resetSettings() {
   for (const fn of listeners) fn(settings, {})
 }
 export function onSettings(fn) { listeners.add(fn); return () => listeners.delete(fn) }
+
+// ---- モード: 'studio' (Roblox Studio 用スクリプト) / 'executor' (エグゼキューター用スクリプト) ----
+// 開いているプロジェクトごとに決まります。補完・エラーチェック・実行環境が切り替わります。
+let mode = 'studio'
+export const MODE_LABELS = { studio: 'Studio', executor: 'Executor' }
+export function getMode() { return mode }
+export function setMode(m) {
+  m = m === 'executor' ? 'executor' : 'studio'
+  if (m === mode) return
+  mode = m
+  emit('mode', m)
+}
 
 // セッション (開いているタブなど)
 export function loadSession() {

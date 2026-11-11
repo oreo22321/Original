@@ -1,6 +1,6 @@
 // AI チャット (Claude)
 import { app, command } from './app.js'
-import { getSettings } from './store.js'
+import { getSettings, getMode } from './store.js'
 import { h, icon, toast, copyText } from './ui.js'
 import { renderMarkdown } from './markdown.js'
 import { aiChat } from '../editor/ai.js'
@@ -32,7 +32,7 @@ export class AiView {
       quick.append(h('button', { class: 'chip', onclick: () => {
         let p = q.prompt
         if (q.label === 'エラーを直す') {
-          const errs = [...document.querySelectorAll('.out-line.error')].map(e => e.textContent).slice(-3).join('\n')
+          const errs = [...document.querySelectorAll('.out-error, .out-line.error')].map(e => e.dataset.text || e.textContent).slice(-3).join('\n')
           p += errs || '(エラーの内容を貼り付けてください)'
         }
         this.input.value = p
@@ -51,7 +51,7 @@ export class AiView {
     this.log.innerHTML = ''
     if (!getSettings().aiKey) {
       this.log.append(h('div', { class: 'ai-empty' },
-        h('div', { class: 'ai-empty-icon' }, '✨'),
+        h('div', { class: 'ai-empty-icon' }, icon('sparkle', 36)),
         h('p', null, 'Claude にコードの説明・修正・作成を頼めます。'),
         h('p', { class: 'set-desc' }, '使うには Anthropic の API キーが必要です (利用料金はキーの持ち主に請求されます)。キーはこの端末にのみ保存されます。'),
         h('button', { class: 'btn primary', onclick: () => app.wb.showView('settings', 'Claude API') }, icon('gear', 16), 'API キーを設定')))
@@ -117,7 +117,7 @@ export class AiView {
     if (s.aiIncludeFile && doc) {
       const v = app.editors.activeView()
       const sel = v ? v.state.sliceDoc(v.state.selection.main.from, v.state.selection.main.to) : ''
-      context = `path: ${doc.path}\n${doc.state.doc.toString().slice(0, 60000)}${sel ? `\n</current_file>\n<selected_text>\n${sel}` : ''}`
+      context = `path: ${doc.path}\nmode: ${getMode() === 'executor' ? 'Roblox executor script (UNC executor APIs available)' : 'Roblox Studio script'}\n${doc.state.doc.toString().slice(0, 60000)}${sel ? `\n</current_file>\n<selected_text>\n${sel}` : ''}`
     }
     this.stop()
     this.ctrl = new AbortController()
@@ -146,5 +146,7 @@ export class AiView {
 }
 
 command('aiChat', 'AI アシスタントを開く', () => app.wb.showView('ai'), { icon: 'sparkle' })
+// 実行エラーなどから、質問を入力済みの状態で開いて送信する
+command('aiAsk', 'AI に質問を送る', text => { app.wb.showView('ai'); const v = app.wb.views.ai; if (typeof text === 'string') { v.input.value = text; v.send() } }, { icon: 'sparkle' })
 command('aiExplain', 'AI: 選択したコードを説明', () => { app.wb.showView('ai'); const v = app.wb.views.ai; v.input.value = QUICK[0].prompt; v.send() }, { icon: 'sparkle' })
 command('aiFix', 'AI: バグを探して修正', () => { app.wb.showView('ai'); const v = app.wb.views.ai; v.input.value = QUICK[1].prompt; v.send() }, { icon: 'sparkle' })

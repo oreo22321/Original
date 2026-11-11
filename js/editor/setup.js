@@ -1,41 +1,44 @@
-// エディタ (CodeMirror) の組み立て
+// エディタ (CodeMirror) の組み立て — Luau 専用
 import {
   EditorState, EditorView, Compartment, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, dropCursor,
   rectangularSelection, crosshairCursor, highlightActiveLine, history, historyKeymap, defaultKeymap, indentWithTab, foldGutter, foldKeymap,
   indentOnInput, bracketMatching, closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap, searchKeymap, highlightSelectionMatches,
-  lintKeymap, indentUnit, python, javascript, json, html, css, markdown, Prec, search,
+  lintKeymap, indentUnit, json, Prec, search,
 } from '../../vendor/codemirror.js'
-import { luauLanguage, indentFold } from './luau-lang.js'
+import { luauFor, markdownLanguage, indentFold } from './luau-lang.js'
 import { editorTheme } from './themes.js'
 import { luauCompletionSource, describeAt, signatureAt } from './luau-intel.js'
-import { pythonCompletionSource, describePython, pythonSignatureAt } from './python-intel.js'
 import { inlineSuggestions, luauAutoEnd } from './inline.js'
 import { makeLinter } from './lint.js'
 import { colorSwatches, indentGuides, rainbowBrackets, makeHover, signatureHelp, pinchZoom } from './extras.js'
+import { inputFixer, keywordAutoCorrect } from './typo.js'
+import { errorLens, runErrorMarks } from './errorlens.js'
 
 export function langOf(path) {
   const ext = (path.split('.').pop() || '').toLowerCase()
   if (ext === 'lua' || ext === 'luau') return 'luau'
-  if (ext === 'py' || ext === 'pyw') return 'python'
-  if (ext === 'js' || ext === 'mjs' || ext === 'cjs' || ext === 'ts' || ext === 'jsx' || ext === 'tsx') return 'javascript'
   if (ext === 'json' || ext === 'luaurc') return 'json'
-  if (ext === 'html' || ext === 'htm') return 'html'
-  if (ext === 'css') return 'css'
   if (ext === 'md' || ext === 'markdown') return 'markdown'
   return 'text'
 }
 
-export const LANG_LABELS = { luau: 'Luau', lua: 'Lua', python: 'Python', javascript: 'JavaScript', json: 'JSON', html: 'HTML', css: 'CSS', markdown: 'Markdown', text: 'テキスト' }
+// Studio モードでのスクリプトの種類 (Rojo と同じ命名規則)
+export function scriptKindOf(path, mode) {
+  if (langOf(path) !== 'luau') return null
+  if (mode === 'executor') return 'executor'
+  if (/\.server\.luau?$/i.test(path)) return 'server'
+  if (/\.client\.luau?$/i.test(path)) return 'client'
+  return 'module'
+}
 
-function languageExt(lang, path) {
+export const LANG_LABELS = { luau: 'Luau', json: 'JSON', markdown: 'Markdown', text: 'テキスト' }
+export const KIND_LABELS = { server: 'Script (サーバー)', client: 'LocalScript (クライアント)', module: 'ModuleScript', executor: 'Executor' }
+
+function languageExt(lang, mode) {
   switch (lang) {
-    case 'luau': return luauLanguage
-    case 'python': return python()
-    case 'javascript': return javascript({ typescript: /\.tsx?$/.test(path), jsx: /\.[jt]sx$/.test(path) })
+    case 'luau': return luauFor(mode)
     case 'json': return json()
-    case 'html': return html()
-    case 'css': return css()
-    case 'markdown': return markdown()
+    case 'markdown': return markdownLanguage
     default: return []
   }
 }
@@ -47,32 +50,34 @@ export const comps = {
   wrap: new Compartment(),
   gutter: new Compartment(),
   complete: new Compartment(),
-  inline: new Compartment(),
-  lint: new Compartment(),
   extras: new Compartment(),
   readOnly: new Compartment(),
   activeLine: new Compartment(),
+  brackets: new Compartment(),
 }
 
-// settings: アプリの設定オブジェクト / ctx: { getSettings, path, lang, commands, onUpdate, aiProvider, onScale }
+// ctx: { getSettings, getMode, path, lang, commands, onUpdate, aiProvider, onScale, onFix, onLensTap }
 function themeExt(s) {
   return editorTheme(s.theme, s.fontFamily, s.fontSize, s.lineHeight)
 }
-function tabExt(s, lang) {
-  const spaces = lang === 'python' ? true : s.insertSpaces
-  const size = lang === 'python' && !s.insertSpaces ? 4 : s.tabSize
-  return [EditorState.tabSize.of(size), indentUnit.of(spaces ? ' '.repeat(size) : '\t')]
+function tabExt(s) {
+  return [EditorState.tabSize.of(s.tabSize), indentUnit.of(s.insertSpaces ? ' '.repeat(s.tabSize) : '\t')]
+}
+function gutterExt(s) {
+  const fold = foldGutter({ openText: '⌄', closedText: '›' })
+  return s.lineNumbers ? [lineNumbers(), fold] : [fold]
 }
 function completeExt(s, lang) {
-  const source = lang === 'luau' ? luauCompletionSource : lang === 'python' ? pythonCompletionSource : null
+  const source = lang === 'luau' ? luauCompletionSource : null
   if (!s.autocomplete) return autocompletion({ activateOnTyping: false, override: source ? [source] : undefined })
   return autocompletion({
     activateOnTyping: true,
     override: source ? [source] : undefined,
-    maxRenderedOptions: 60,
+    maxRenderedOptions: 50,
     icons: true,
     optionClass: o => (o.deprecated ? 'cm-deprecated' : ''),
     closeOnBlur: true,
+    interactionDelay: 60,
     tooltipClass: () => 'fc-complete',
   })
 }
@@ -80,14 +85,11 @@ function extrasExt(s, lang, ctx) {
   const out = []
   if (s.indentGuides) out.push(indentGuides)
   if (s.rainbowBrackets) out.push(rainbowBrackets)
-  if (lang === 'luau' && s.colorPicker) out.push(colorSwatches)
-  if (s.hover) {
-    if (lang === 'luau') out.push(makeHover(describeAt))
-    if (lang === 'python') out.push(makeHover(describePython))
-  }
-  if (s.signatureHelp) {
-    if (lang === 'luau') out.push(signatureHelp(signatureAt, () => true))
-    if (lang === 'python') out.push(signatureHelp(pythonSignatureAt, () => true))
+  if (lang === 'luau') {
+    if (s.colorPicker) out.push(colorSwatches)
+    if (s.hover) out.push(makeHover(describeAt))
+    if (s.signatureHelp) out.push(signatureHelp(signatureAt, () => true))
+    if (s.errorLens) out.push(errorLens(ctx.onLensTap))
   }
   if (s.pinchZoom && ctx.onScale) out.push(pinchZoom(ctx.onScale))
   return out
@@ -97,6 +99,7 @@ export function buildExtensions(ctx) {
   const s = ctx.getSettings()
   const lang = ctx.lang
   const cmd = ctx.commands
+  const st = () => ctx.getSettings()
   const appKeys = keymap.of([
     { key: 'Mod-s', run: () => { cmd.save(); return true }, preventDefault: true },
     { key: 'Mod-Enter', run: () => { cmd.run(); return true }, preventDefault: true },
@@ -112,10 +115,12 @@ export function buildExtensions(ctx) {
     { key: 'Mod-w', run: () => { cmd.closeTab(); return true }, preventDefault: true },
     { key: 'Alt-w', run: () => { cmd.closeTab(); return true } },
     { key: 'Mod-Shift-o', run: () => { cmd.outline(); return true }, preventDefault: true },
+    { key: 'Mod-.', run: () => { cmd.quickFix(); return true }, preventDefault: true },
   ])
+  const luau = lang === 'luau'
   return [
     Prec.highest(appKeys),
-    comps.gutter.of(s.lineNumbers ? [lineNumbers(), foldGutter({ openText: '⌄', closedText: '›' })] : [foldGutter({ openText: '⌄', closedText: '›' })]),
+    comps.gutter.of(gutterExt(s)),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
     history(),
@@ -124,50 +129,57 @@ export function buildExtensions(ctx) {
     EditorState.allowMultipleSelections.of(true),
     indentOnInput(),
     bracketMatching(),
-    s.autoClose !== false ? closeBrackets() : [],
+    comps.brackets.of(s.autoClose !== false ? closeBrackets() : []),
     rectangularSelection(),
     crosshairCursor(),
     comps.activeLine.of(s.highlightLine ? highlightActiveLine() : []),
-    highlightSelectionMatches(),
+    highlightSelectionMatches({ minSelectionLength: 2 }),
     search({ top: true }),
     indentFold,
-    comps.lang.of(languageExt(lang, ctx.path)),
+    comps.lang.of(languageExt(lang, ctx.getMode())),
     comps.theme.of(themeExt(s)),
-    comps.tab.of(tabExt(s, lang)),
+    comps.tab.of(tabExt(s)),
     comps.wrap.of(s.wordWrap ? EditorView.lineWrapping : []),
     comps.complete.of(completeExt(s, lang)),
-    comps.inline.of(inlineSuggestions(() => {
-      const st = ctx.getSettings()
-      return { enabled: st.inlineSuggest, local: true, lang, ai: st.aiInline && !!st.aiKey, aiProvider: ctx.aiProvider, aiDelay: st.aiDelay, onError: ctx.onAiError }
-    })),
-    lang === 'luau' ? luauAutoEnd(() => ctx.getSettings().autoEnd) : [],
-    comps.lint.of(makeLinter(() => lang, () => {
-      const st = ctx.getSettings()
-      return { enabled: st.lint, roblox: st.robloxApi, executor: st.executorApi, undefinedGlobals: st.lintUndefined, unused: st.lintUnused }
-    })),
+    // 誤字対策 (設定はその都度読むので再構成は不要)
+    luau ? inputFixer(() => st().fixInput, ctx.onFix) : [],
+    luau ? keywordAutoCorrect(() => st().autoCorrect, ctx.onFix) : [],
+    luau ? inlineSuggestions(() => {
+      const c = st()
+      return { enabled: c.inlineSuggest, mode: ctx.getMode(), ai: c.aiInline && !!c.aiKey, aiProvider: ctx.aiProvider, aiDelay: c.aiDelay, onError: ctx.onAiError }
+    }) : [],
+    luau ? luauAutoEnd(() => st().autoEnd) : [],
+    luau ? makeLinter(() => {
+      const c = st()
+      const mode = ctx.getMode()
+      return { enabled: c.lint, executor: mode === 'executor', undefinedGlobals: c.lintUndefined, unused: c.lintUnused, typos: c.lintTypos, scriptKind: scriptKindOf(ctx.path, mode) }
+    }) : [],
     comps.extras.of(extrasExt(s, lang, ctx)),
+    luau ? runErrorMarks : [],
     comps.readOnly.of(EditorState.readOnly.of(!!ctx.readOnly)),
     keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, ...lintKeymap, indentWithTab]),
-    EditorView.contentAttributes.of({ autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', autocomplete: 'off', 'data-gramm': 'false' }),
+    EditorView.contentAttributes.of({ autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', autocomplete: 'off', 'data-gramm': 'false', enterkeyhint: 'enter' }),
     EditorView.updateListener.of(u => ctx.onUpdate && ctx.onUpdate(u)),
   ]
 }
 
-export function createState(doc, ctx) {
-  return EditorState.create({ doc, extensions: buildExtensions(ctx) })
+export function createState(doc, ctx, extra = {}) {
+  return EditorState.create({ doc, extensions: buildExtensions(ctx), ...extra })
 }
 
-// 設定変更をエディタ状態に反映するエフェクト
-export function reconfigureEffects(ctx) {
+// 設定・モードの変更をエディタ状態に反映するエフェクト
+export function reconfigureEffects(ctx, what = null) {
   const s = ctx.getSettings()
   const lang = ctx.lang
+  if (what === 'mode') return lang === 'luau' ? [comps.lang.reconfigure(languageExt(lang, ctx.getMode()))] : []
   return [
     comps.theme.reconfigure(themeExt(s)),
-    comps.tab.reconfigure(tabExt(s, lang)),
+    comps.tab.reconfigure(tabExt(s)),
     comps.wrap.reconfigure(s.wordWrap ? EditorView.lineWrapping : []),
-    comps.gutter.reconfigure(s.lineNumbers ? [lineNumbers(), foldGutter({ openText: '⌄', closedText: '›' })] : [foldGutter({ openText: '⌄', closedText: '›' })]),
+    comps.gutter.reconfigure(gutterExt(s)),
     comps.complete.reconfigure(completeExt(s, lang)),
     comps.extras.reconfigure(extrasExt(s, lang, ctx)),
     comps.activeLine.reconfigure(s.highlightLine ? highlightActiveLine() : []),
+    comps.brackets.reconfigure(s.autoClose !== false ? closeBrackets() : []),
   ]
 }

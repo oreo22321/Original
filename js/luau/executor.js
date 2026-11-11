@@ -50,14 +50,14 @@ export function installExecutor(G, ctx, rbx) {
     return h.toString(16).padStart(8, '0').repeat(6)
   })
   def('getscriptbytecode', () => '\x1bLuaQ (サンドボックスではバイトコードは取得できません)', 'dumpstring')
-  def('identifyexecutor', () => ['ForgeCode Sandbox', '4.0'], 'getexecutorname')
+  def('identifyexecutor', () => ['ForgeCode Sandbox', '5.0'], 'getexecutorname', 'whatexecutor')
   def('getthreadidentity', () => ctx.identity ?? 8, 'getidentity', 'getthreadcontext')
   def('setthreadidentity', A => { ctx.identity = A[0]; return EMPTY }, 'setidentity', 'setthreadcontext')
   def('checkcaller', () => true)
-  def('isrbxactive', () => true, 'isgameactive')
+  def('isrbxactive', () => true, 'isgameactive', 'iswindowactive')
   def('setfpscap', A => { ctx.fpscap = A[0]; return EMPTY })
   def('getfpscap', () => ctx.fpscap || 60)
-  def('gethui', () => rbx.getService('CoreGui'))
+  def('gethui', () => rbx.getService('CoreGui'), 'get_hidden_gui', 'gethiddengui')
   def('cloneref', A => A[0])
   def('compareinstances', A => A[0] === A[1])
   def('queue_on_teleport', A => { ctx.teleportQueue = A[0]; return EMPTY }, 'queueonteleport')
@@ -74,8 +74,11 @@ export function installExecutor(G, ctx, rbx) {
     const inst = A[0]
     if (!(inst && inst.isInstance)) throw rtError('gethiddenproperty: Instance expected')
     return [inst.props.get(A[1]), true]
-  })
-  def('sethiddenproperty', A => { A[0].props.set(A[1], A[2]); return true })
+  }, 'gethiddenprop')
+  def('sethiddenproperty', A => {
+    if (!(A[0] && A[0].isInstance)) throw rtError('sethiddenproperty: Instance expected')
+    A[0].props.set(A[1], A[2]); return true
+  }, 'sethiddenprop')
   def('isscriptable', A => {
     const m = A[0] && A[0].info && A[0].info.members.get(A[1])
     return !!m
@@ -92,23 +95,40 @@ export function installExecutor(G, ctx, rbx) {
     return c
   })
   def('iscclosure', A => A[0] instanceof LFunc && (!A[0].g || A[0].isCClosure === true))
-  def('islclosure', A => A[0] instanceof LFunc && !!A[0].g && !A[0].isCClosure)
-  def('isexecutorclosure', A => A[0] instanceof LFunc && !!A[0].g, 'checkclosure', 'isourclosure')
+  def('islclosure', A => A[0] instanceof LFunc && ((!!A[0].g && !A[0].isCClosure) || A[0].forceLua === true))
+  def('isexecutorclosure', A => A[0] instanceof LFunc && (!!A[0].g || A[0].isCClosure === true || A[0].forceLua === true), 'checkclosure', 'isourclosure', 'is_synapse_function')
   def('clonefunction', A => {
     const f = A[0]
     const c = new LFunc(f.name, f.g, f.n, f.gn)
     c.isCClosure = f.isCClosure
     return c
   })
+  const hooked = new Map() // 関数 → 元の実装
   def('hookfunction', A => {
     const target = A[0], hook = A[1]
     if (!(target instanceof LFunc) || !(hook instanceof LFunc)) throw rtError('hookfunction: function expected')
     const orig = new LFunc(target.name, target.g, target.n, target.gn)
+    orig.isCClosure = target.isCClosure
+    if (!hooked.has(target)) hooked.set(target, { g: target.g, n: target.n, gn: target.gn })
     target.g = hook.g; target.n = hook.n; target.gn = hook.gn
     return orig
-  }, 'replaceclosure', 'detour_function')
-  def('restorefunction', () => EMPTY)
-  def('isfunctionhooked', () => false)
+  }, 'replaceclosure', 'detour_function', 'hookfunc')
+  def('restorefunction', A => {
+    const o = hooked.get(A[0])
+    if (!o) throw rtError('restorefunction: この関数はフックされていません')
+    A[0].g = o.g; A[0].n = o.n; A[0].gn = o.gn
+    hooked.delete(A[0])
+    return EMPTY
+  })
+  def('isfunctionhooked', A => hooked.has(A[0]))
+  def('newlclosure', A => {
+    const f = A[0]
+    if (!(f instanceof LFunc)) throw rtError('newlclosure: function expected')
+    const c = nativeGen(f.name, function* (B) { return yield* call(f, B) })
+    c.isCClosure = false
+    c.forceLua = true
+    return c
+  })
 
   // ---- メタテーブル ----
   // Instance 共通のメタテーブル (__index / __newindex / __namecall)
@@ -152,7 +172,7 @@ export function installExecutor(G, ctx, rbx) {
   })
   def('setreadonly', A => { if (A[0] instanceof LTable) A[0].readonly = T(A[1]); return EMPTY })
   def('isreadonly', A => A[0] instanceof LTable && A[0].readonly)
-  def('makereadonly', A => { if (A[0] instanceof LTable) A[0].readonly = true; return EMPTY })
+  def('makereadonly', A => { if (A[0] instanceof LTable) A[0].readonly = true; return EMPTY }, 'make_readonly')
   def('makewriteable', A => { if (A[0] instanceof LTable) A[0].readonly = false; return EMPTY }, 'make_writeable')
   def('hookmetamethod', A => {
     const obj = A[0], mm = A[1], hook = A[2]
@@ -206,6 +226,7 @@ export function installExecutor(G, ctx, rbx) {
     pp.fire('TriggerEnded', [rbx.player])
     return EMPTY
   })
+  def('firetouchtransmitter', A => callSync(G.get('firetouchinterest'), A))
   def('firetouchinterest', A => {
     const a = A[0], b = A[1], toggle = A[2]
     const ending = toggle === 1 || toggle === true
@@ -492,6 +513,170 @@ export function installExecutor(G, ctx, rbx) {
   def('getrenderproperty', A => A[0].luaIndex(A[1]))
   def('setrenderproperty', A => { A[0].luaNewIndex(A[1], A[2]); return EMPTY })
   ctx.drawings = drawings
+
+  // ============================================================
+  // 追加の UNC / sUNC 関数と拡張ライブラリ
+  // ============================================================
+  const mock = (key, what) => note(key, `[サンドボックス] ${what} は模擬動作です (実際のエグゼキューターとは結果が異なります)`)
+  const allFunctions = () => {
+    // スクリプトが定義した関数を環境から集める (getgc / filtergc の模擬)
+    const out = [], seen = new Set()
+    const visit = (t, d) => {
+      if (d > 3 || seen.has(t)) return
+      seen.add(t)
+      for (const v of t.hash.values()) {
+        if (v instanceof LFunc && v.g && !seen.has(v)) { seen.add(v); out.push(v) }
+        else if (v instanceof LTable) visit(v, d + 1)
+      }
+      for (const v of t.arr) {
+        if (v instanceof LFunc && v.g && !seen.has(v)) { seen.add(v); out.push(v) }
+        else if (v instanceof LTable) visit(v, d + 1)
+      }
+    }
+    visit(G, 0)
+    return out
+  }
+  def('getgc', A => {
+    mock('getgc', 'getgc (スクリプトのグローバルから到達できる関数だけを返します)')
+    const fns = allFunctions()
+    if (T(A[0])) { const tables = []; for (const v of G.hash.values()) if (v instanceof LTable && v !== G) tables.push(v); return LTable.fromArray([...fns, ...tables]) }
+    return LTable.fromArray(fns)
+  })
+  def('filtergc', A => {
+    mock('getgc', 'filtergc (スクリプトのグローバルから到達できる関数だけを探します)')
+    const kind = fromBytes(A[0] || 'function')
+    const opts = A[1] instanceof LTable ? A[1] : new LTable()
+    const name = opts.get('Name')
+    let list = kind === 'table' ? [...G.hash.values()].filter(v => v instanceof LTable && v !== G) : allFunctions()
+    if (typeof name === 'string') list = list.filter(f => f instanceof LFunc && f.name === fromBytes(name))
+    const keys = opts.get('Keys')
+    if (keys instanceof LTable) list = list.filter(t => t instanceof LTable && keys.arr.every(k => t.get(k) !== undefined))
+    if (T(A[2])) return [list[0]]
+    return LTable.fromArray(list)
+  })
+  def('getsenv', A => {
+    if (A[0] !== undefined && !(A[0] && A[0].isInstance)) throw rtError('getsenv: LocalScript / ModuleScript expected')
+    return G
+  })
+  def('decompile', A => {
+    const sc = A[0]
+    if (sc && sc.isInstance && sc.source !== undefined) return toBytes('-- Decompiled with ForgeCode Sandbox\n' + sc.source)
+    return toBytes('-- サンドボックスではプロジェクト内のスクリプトだけ decompile できます')
+  })
+  def('getfunctionhash', A => {
+    if (!(A[0] instanceof LFunc)) throw rtError('getfunctionhash: function expected')
+    return callSync(G.get('getscripthash'), [{ source: String(A[0].name || 'f') }])
+  })
+  def('clear_teleport_queue', () => { ctx.teleportQueue = undefined; return EMPTY }, 'clearteleportqueue')
+  def('gethwid', () => 'FORGECODE-SANDBOX-0000-0000')
+  def('isluau', () => true)
+  def('getcallstack', () => new LTable())
+  def('saveinstance', () => { hooks.output('info', '[サンドボックス] saveinstance: 実際のエグゼキューターでは workspace フォルダに .rbxl が保存されます'); return EMPTY })
+  defg('getobjects', function* (A) {
+    mock('getobjects', 'GetObjects / getobjects (空の Model を返します)')
+    return LTable.fromArray([rbx.newInstance('Model', undefined, { Name: 'Asset' })])
+  })
+  dm.methods.set('GetObjects', G.get('getobjects'))
+  def('gethiddenproperties', A => {
+    if (!(A[0] && A[0].isInstance)) throw rtError('gethiddenproperties: Instance expected')
+    return new LTable()
+  })
+  def('getproperties', A => {
+    const inst = A[0]
+    if (!(inst && inst.isInstance)) throw rtError('getproperties: Instance expected')
+    const t = new LTable()
+    for (const [k, v] of inst.props) t.set(k, v)
+    t.set('Name', inst.name); t.set('ClassName', inst.ClassName)
+    return t
+  })
+  def('getspecialinfo', A => {
+    if (!(A[0] && A[0].isInstance)) throw rtError('getspecialinfo: Instance expected')
+    return new LTable()
+  })
+  def('isnetworkowner', A => {
+    if (!(A[0] && A[0].isInstance)) throw rtError('isnetworkowner: BasePart expected')
+    return true
+  })
+  def('getsimulationradius', () => ctx.simRadius ?? 1000)
+  def('setsimulationradius', A => { ctx.simRadius = A[0]; return EMPTY })
+  // シグナルのフック
+  const sigHooks = new Map()
+  def('hooksignal', A => {
+    const sig = A[0], cb = A[1]
+    if (!sig || sig.luaTypeName !== 'RBXScriptSignal') throw rtError('hooksignal: RBXScriptSignal expected')
+    if (!(cb instanceof LFunc)) throw rtError('hooksignal: function expected')
+    if (!sigHooks.has(sig)) {
+      const origFire = sig.fire.bind(sig)
+      sigHooks.set(sig, { origFire, cb })
+      sig.fire = args => {
+        const h = sigHooks.get(sig)
+        if (!h) return origFire(args)
+        // フックが true を返したら元の接続も呼ぶ
+        let pass = false
+        try { const r = callSync(h.cb, [new LTable(), ...args]); pass = T(r[0]) } catch (e) { hooks.onError(e) }
+        if (pass) origFire(args)
+      }
+    } else sigHooks.get(sig).cb = cb
+    return EMPTY
+  })
+  def('restoresignal', A => {
+    const h = sigHooks.get(A[0])
+    if (h) { A[0].fire = h.origFire; sigHooks.delete(A[0]) }
+    return EMPTY
+  })
+  def('issignalhooked', A => sigHooks.has(A[0]))
+  def('iskeydown', () => false)
+  G.set('base64encode', crypt.get('base64encode'))
+  G.set('base64decode', crypt.get('base64decode'))
+  // Actor (並列) 系
+  def('getactors', () => LTable.fromArray([...rbx.allInstances].filter(i => i.ClassName === 'Actor')))
+  def('getactorthreads', () => new LTable())
+  def('isparallel', () => false)
+  const runCode = function* (A, at) {
+    const [f, err] = callSync(G.get('loadstring'), [A[at], '@actor'])
+    if (!f) throw new LuaError(err, 0)
+    return yield* call(f, A.slice(at + 1))
+  }
+  defg('run_on_actor', function* (A) { mock('actor', 'run_on_actor / run_on_thread (同じスレッドで実行します)'); return yield* runCode(A, 1) })
+  defg('run_on_thread', function* (A) { mock('actor', 'run_on_actor / run_on_thread (同じスレッドで実行します)'); return yield* runCode(A, 1) })
+  const channels = new Map()
+  def('create_comm_channel', () => {
+    const id = channels.size + 1
+    const ev = rbx.newInstance('BindableEvent', undefined, { Name: 'CommChannel' + id })
+    channels.set(id, ev)
+    return [id, ev]
+  })
+  def('get_comm_channel', A => [channels.get(A[0])])
+  // bit ライブラリ (bit32 と同じ実装を別名で)
+  const bit32 = G.get('bit32'), bit = lib('bit')
+  if (bit32 instanceof LTable) {
+    for (const [k, v] of bit32.hash) bit.set(k, v)
+    const to32 = n => (Number(n) | 0)
+    bit.set('tobit', native('bit.tobit', A => to32(A[0])))
+    bit.set('tohex', native('bit.tohex', A => ((Number(A[0]) >>> 0).toString(16).padStart(Math.abs(A[1] ?? 8), '0')).slice(-Math.abs(A[1] ?? 8))))
+    bit.set('bswap', native('bit.bswap', A => { const n = Number(A[0]) >>> 0; return (((n & 0xff) << 24) | ((n & 0xff00) << 8) | ((n >>> 8) & 0xff00) | (n >>> 24)) >>> 0 }))
+    if (bit32.get('lrotate')) { bit.set('rol', bit32.get('lrotate')); bit.set('ror', bit32.get('rrotate')) }
+  }
+  // debug の保護なしメタテーブル
+  dbg.set('getmetatable', G.get('getrawmetatable'))
+  dbg.set('setmetatable', G.get('setrawmetatable'))
+  for (const n of ['getconstant', 'setconstant', 'getprotos', 'getproto', 'getstack', 'setstack']) G.set(n, dbg.get(n))
+  for (const n of ['getconstants', 'getupvalues', 'getprotos']) {
+    const orig = dbg.get(n)
+    const f = native('debug.' + n, A => { mock('debug', 'debug.getconstants / getupvalues / getprotos (空のテーブルを返します)'); return orig.n ? orig.n(A) : new LTable() })
+    dbg.set(n, f); G.set(n, f)
+  }
+  // syn / fluxus の互換関数
+  syn.set('is_cached', cache.get('iscached'))
+  syn.set('cache_invalidate', cache.get('invalidate'))
+  syn.set('cache_replace', cache.get('replace'))
+  syn.set('is_beta', native('is_beta', () => false))
+  syn.set('write_clipboard', G.get('setclipboard'))
+  syn.set('crypt', crypt)
+  syn.set('websocket', wsLib)
+  syn.set('secure_call', nativeGen('secure_call', function* (A) { return yield* call(A[0], A.slice(2)) }))
+  fluxus.set('queue_on_teleport', G.get('queue_on_teleport'))
+  fluxus.set('set_thread_identity', G.get('setthreadidentity'))
 
   void type; void typeOf; void setindex
   return { drawings }

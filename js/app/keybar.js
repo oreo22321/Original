@@ -24,7 +24,9 @@ export class KeyBar {
     this.selectMode = false
     this.render()
     on('settings', () => this.render())
-    on('editorupdate', () => this.updateGhost())
+    on('editorupdate', () => this.scheduleUpdate())
+    on('active', () => this.scheduleUpdate())
+    on('problems', () => this.scheduleUpdate())
   }
 
   view() { return app.editors && app.editors.activeView() }
@@ -70,9 +72,12 @@ export class KeyBar {
     const row = h('div', { class: 'kb-row' })
     const mv = (plain, sel) => v => (this.selectMode ? sel : plain)(v)
     this.acceptBtn = this.key('✓', v => { if (!acceptGhost(v)) insertTab(v) }, { cls: 'accept hidden', title: '候補を確定 (Tab)' })
+    // その行にエラーがあるときだけ出る「修正」キー
+    this.fixBtn = this.key('', () => runCommand('quickFix'), { icon: 'bulb', cls: 'fix hidden', title: 'この行のエラーを修正' })
     row.append(
       this.key('Tab', v => { if (!acceptGhost(v)) { if (!v.state.selection.main.empty) indentMore(v); else insertTab(v) } }, { cls: 'wide', title: 'Tab (候補があれば確定)' }),
       this.acceptBtn,
+      this.fixBtn,
       this.key('←', mv(cursorCharLeft, selectCharLeft), { repeat: true, cls: 'arrow', title: '左' }),
       this.key('→', mv(cursorCharRight, selectCharRight), { repeat: true, cls: 'arrow', title: '右' }),
       this.key('↑', mv(cursorLineUp, selectLineUp), { repeat: true, cls: 'arrow', title: '上' }),
@@ -100,10 +105,17 @@ export class KeyBar {
     this.updateGhost()
   }
 
+  // 入力のたびに呼ばれるので、1 フレームに 1 回だけ更新する
+  scheduleUpdate() {
+    if (this.raf) return
+    this.raf = requestAnimationFrame(() => { this.raf = 0; this.updateGhost() })
+  }
+
   updateGhost() {
     const v = this.view()
     if (!this.acceptBtn) return
     this.acceptBtn.classList.toggle('hidden', !(v && hasGhost(v.state)))
+    if (this.fixBtn) this.fixBtn.classList.toggle('hidden', !(v && app.editors.lineDiagnostics(v).length))
   }
 }
 

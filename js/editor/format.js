@@ -1,69 +1,55 @@
-// コード整形 (Luau / Lua のインデント再計算)
-import { Lexer, LuauSyntaxError } from '../luau/lexer.js'
+// コード整形 (Luau のインデント再計算)
+import { Lexer } from '../luau/lexer.js'
+import { scanBlocks, makeLineInfo } from './blocks.js'
 
-const OPENERS = new Set(['function', 'then', 'do', 'repeat', '(', '{', '['])
-const CLOSERS = new Set(['end', 'until', ')', '}', ']'])
+const BR_OPEN = new Set(['(', '{', '['])
+const BR_CLOSE = new Set([')', '}', ']'])
 
+// 入力途中のコードでも止まらないように、寛容なスキャナでブロック構造を調べて字下げし直します。
+// (if 式 `local x = if a then b else c` は end を持たないブロックとして扱いません)
 export function formatLuau(src, unit = '\t') {
-  const lx = new Lexer(src)
-  lx.comments = []
-  const tokens = []
-  try {
-    for (;;) {
-      const t = lx.next()
-      if (t.t === 'eof') break
-      tokens.push(t)
-    }
-  } catch (e) {
-    if (e instanceof LuauSyntaxError) throw new Error(`${e.line} 行目: ${e.message} (整形できません)`)
-    throw e
-  }
+  const { tokens } = scanBlocks(src, true)
+  const info = makeLineInfo(src)
   const lines = src.split('\n')
-  const lineStarts = [0]
-  for (let i = 0; i < lines.length; i++) lineStarts.push(lineStarts[i] + lines[i].length + 1)
-  const lineOf = pos => {
-    let lo = 0, hi = lines.length - 1
-    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineStarts[mid] <= pos) lo = mid; else hi = mid - 1 }
-    return lo
-  }
   // 複数行の文字列・コメントの内側の行はそのまま
   const verbatim = new Set()
-  const markSpan = (s, e) => { const a = lineOf(s), b = lineOf(Math.max(s, e - 1)); for (let l = a + 1; l <= b; l++) verbatim.add(l) }
-  for (const t of tokens) if ((t.t === 'string' || t.t === 'interp') && t.e - t.s > 0) markSpan(t.s, t.e)
-  for (const c of lx.comments) markSpan(c.s, c.e)
-
   const byLine = new Map()
   for (const t of tokens) {
-    const l = lineOf(t.s)
-    if (!byLine.has(l)) byLine.set(l, [])
-    byLine.get(l).push(t)
+    const a = info.lineOf(t.s)
+    if (t.t === 'str' || t.t === 'comment') {
+      const b = info.lineOf(Math.max(t.s, t.e - 1))
+      for (let l = a + 1; l <= b; l++) verbatim.add(l)
+      if (t.t === 'comment') continue
+    }
+    let list = byLine.get(a)
+    if (!list) byLine.set(a, list = [])
+    list.push(t)
   }
   const stack = []
-  let pendingLoop = 0
   const out = []
   for (let l = 0; l < lines.length; l++) {
     const raw = lines[l]
-    const toks = byLine.get(l) || []
-    if (verbatim.has(l)) { out.push(raw); continue }
-    const body = raw.trim()
-    let level = stack.length ? stack[stack.length - 1] + 1 : 0
-    const first = toks[0]
-    if (first && (CLOSERS.has(first.t) || first.t === 'else' || first.t === 'elseif') && stack.length && first.s >= lineStarts[l] + raw.indexOf(body)) {
-      level = stack[stack.length - 1]
+    if (verbatim.has(l)) {
+      out.push(raw)
+      // 文字列の閉じと同じ行にあるトークンも数える
+    } else {
+      const body = raw.trim()
+      const toks = byLine.get(l) || []
+      let level = stack.length ? stack[stack.length - 1] + 1 : 0
+      const first = toks[0]
+      if (first && stack.length && (first.role === 'close' || first.role === 'mid' || BR_CLOSE.has(first.t))) level = stack[stack.length - 1]
+      out.push(body ? unit.repeat(level) + body : '')
+      for (const t of toks) {
+        if (t.role === 'open' || BR_OPEN.has(t.t)) stack.push(level)
+        else if (t.role === 'close' || BR_CLOSE.has(t.t)) stack.pop()
+      }
+      continue
     }
-    if (!toks.length && body.startsWith('--')) {
-      // コメントだけの行
+    const level = stack.length ? stack[stack.length - 1] + 1 : 0
+    for (const t of byLine.get(l) || []) {
+      if (t.role === 'open' || BR_OPEN.has(t.t)) stack.push(level)
+      else if (t.role === 'close' || BR_CLOSE.has(t.t)) stack.pop()
     }
-    for (const t of toks) {
-      const v = t.t
-      if (v === 'while' || v === 'for') pendingLoop++
-      else if (v === 'do' && pendingLoop > 0) { pendingLoop--; stack.push(level) }
-      else if (v === 'else') { stack.pop(); stack.push(level) }
-      else if (v === 'elseif') stack.pop()
-      else if (OPENERS.has(v)) stack.push(level)
-      else if (CLOSERS.has(v)) stack.pop()
-    }
-    out.push(body ? unit.repeat(Math.max(0, level)) + body : '')
   }
   return out.join('\n')
 }

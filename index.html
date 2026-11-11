@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
   <title>ForgeCode</title>
-  <meta name="description" content="スマホ・iPad で使える Luau / Lua / Python 対応のコードエディタ">
+  <meta name="description" content="スマホ・iPad で使える Roblox 専用の Luau エディタ (Roblox Studio / エグゼキュータースクリプト)">
   <meta name="theme-color" content="#1e1e1e">
+  <meta name="color-scheme" content="dark light">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -15,11 +16,13 @@
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/app.css">
+  <link rel="modulepreload" href="vendor/codemirror.js">
+  <link rel="preload" href="data/roblox-api.json" as="fetch" crossorigin>
 </head>
 <body>
   <div id="app" class="app">
     <div id="boot" class="boot">
-      <div class="boot-logo">⚒︎</div>
+      <img class="boot-logo" src="icons/icon.svg" alt="" width="72" height="72">
       <div class="boot-title">ForgeCode</div>
       <div class="boot-sub">読み込み中…</div>
     </div>

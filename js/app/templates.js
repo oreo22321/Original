@@ -1,9 +1,10 @@
 // 新規プロジェクトのテンプレート
+// kind: 'studio' (Roblox Studio 用) / 'executor' (エグゼキューター用)
 export const TEMPLATES = {
-  roblox: {
+  studio: {
     name: 'Roblox ゲーム',
-    desc: 'サーバー / クライアント / モジュールの基本構成 (Luau)',
-    icon: '🎮',
+    desc: 'サーバー / クライアント / モジュールの基本構成',
+    icon: 'cube', kind: 'studio',
     main: 'src/server/main.server.luau',
     files: {
       'src/server/main.server.luau': `--!strict
@@ -109,14 +110,22 @@ return Util
 - \`src/shared\` … 共有モジュール
 
 ファイルを開いて ▶ を押すと、Roblox の動作を模したサンドボックスで実行できます。
+クライアントスクリプトを実行すると、下の「ゲーム」タブに GUI が表示され、ボタンをタップして試せます。
 完成したらコードをコピーして Roblox Studio に貼り付けてください。
 `,
     },
   },
+  studioEmpty: {
+    name: '空の Studio プロジェクト',
+    desc: 'サーバースクリプト 1 つから始めます',
+    icon: 'file', kind: 'studio',
+    main: 'main.server.luau',
+    files: { 'main.server.luau': '-- サーバースクリプト\nlocal Players = game:GetService("Players")\n\n' },
+  },
   executor: {
     name: 'エグゼキュータースクリプト',
-    desc: 'getgenv / writefile などのエグゼキューター API を使う Luau',
-    icon: '⚡',
+    desc: '設定の保存・二重実行の防止など、基本のひな形',
+    icon: 'bolt', kind: 'executor',
     main: 'main.lua',
     files: {
       'main.lua': `-- エグゼキューター用スクリプトの例
@@ -179,115 +188,160 @@ game:GetService("StarterGui"):SetCore("SendNotification", {
 `,
     },
   },
-  python: {
-    name: 'Python',
-    desc: 'Python 3 (ブラウザ内で実行)',
-    icon: '🐍',
-    main: 'main.py',
-    files: {
-      'main.py': `# Python のサンプル
-# ▶ で実行します (初回は Python 本体の読み込みに少し時間がかかります)
-from utils import greet, fizzbuzz
-
-name = input("名前を入力してください: ")
-print(greet(name))
-
-for line in fizzbuzz(15):
-    print(line)
-
-scores = {"国語": 82, "数学": 95, "英語": 77}
-average = sum(scores.values()) / len(scores)
-print(f"平均点: {average:.1f}")
-best = max(scores, key=scores.get)
-print(f"最高点の科目: {best} ({scores[best]} 点)")
-`,
-      'utils.py': `def greet(name: str) -> str:
-    """あいさつ文を返します"""
-    if not name:
-        name = "ゲスト"
-    return f"こんにちは、{name} さん!"
-
-
-def fizzbuzz(n: int) -> list[str]:
-    result = []
-    for i in range(1, n + 1):
-        if i % 15 == 0:
-            result.append("FizzBuzz")
-        elif i % 3 == 0:
-            result.append("Fizz")
-        elif i % 5 == 0:
-            result.append("Buzz")
-        else:
-            result.append(str(i))
-    return result
-`,
-    },
-  },
-  lua: {
-    name: 'Lua の練習',
-    desc: 'Lua / Luau の基本文法をひと通り試せます',
-    icon: '🌙',
+  executorGui: {
+    name: 'GUI 付きスクリプト',
+    desc: 'ウィンドウとボタンを表示するひな形 (プレビューで操作できます)',
+    icon: 'window', kind: 'executor',
     main: 'main.lua',
     files: {
-      'main.lua': `-- Lua / Luau の基本
--- ▶ を押すと下のパネルに結果が表示されます
+      'main.lua': `-- GUI 付きエグゼキュータースクリプトのひな形
+-- ▶ で実行すると、下の「ゲーム」タブに GUI が表示されます。ボタンをタップして動作を確認できます
 
--- 変数と型
-local name = "Lua"
-local version = 5.1
-local isFun = true
-print(name, version, isFun, type(name))
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local player = Players.LocalPlayer
 
--- テーブル (配列)
-local fruits = { "りんご", "バナナ", "みかん" }
-table.insert(fruits, "ぶどう")
-for i, fruit in ipairs(fruits) do
-	print(i, fruit)
+-- 二重実行の防止: 前回の GUI が残っていたら消す
+if getgenv().MyHub then
+	getgenv().MyHub:Destroy()
 end
 
--- テーブル (辞書)
-local player = { name = "Alex", level = 5, hp = 100 }
-for key, value in pairs(player) do
-	print(key, "=", value)
+-- ---- 設定の保存と読み込み (workspace フォルダ) ----
+local CONFIG_FILE = "MyHub/config.json"
+local config = { clicks = 0, notify = true }
+
+if isfile(CONFIG_FILE) then
+	local ok, data = pcall(function()
+		return HttpService:JSONDecode(readfile(CONFIG_FILE))
+	end)
+	if ok and type(data) == "table" then
+		for key, value in pairs(data) do
+			config[key] = value
+		end
+	end
 end
 
--- 関数
-local function add(a, b)
-	return a + b
+local function saveConfig()
+	if not isfolder("MyHub") then
+		makefolder("MyHub")
+	end
+	writefile(CONFIG_FILE, HttpService:JSONEncode(config))
 end
-print("1 + 2 =", add(1, 2))
 
--- Luau の便利な書き方
-local count = 0
-count += 1
-print(\`count は {count} です\`)
-local label = if count > 0 then "正" else "0 以下"
-print(label)
+-- ---- GUI を作る ----
+local function create(className, props)
+	local inst = Instance.new(className)
+	for key, value in pairs(props) do
+		inst[key] = value
+	end
+	return inst
+end
 
--- エラー処理
-local ok, err = pcall(function()
-	error("わざとエラー")
+local gui = create("ScreenGui", { Name = "MyHub", ResetOnSpawn = false, Parent = gethui() })
+getgenv().MyHub = gui
+
+local window = create("Frame", {
+	Size = UDim2.fromOffset(260, 230),
+	Position = UDim2.fromScale(0.5, 0.5),
+	AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = Color3.fromRGB(24, 26, 32),
+	Parent = gui,
+})
+create("UICorner", { CornerRadius = UDim.new(0, 12), Parent = window })
+create("UIStroke", { Color = Color3.fromRGB(70, 76, 92), Thickness = 1, Parent = window })
+
+create("TextLabel", {
+	Size = UDim2.new(1, 0, 0, 40),
+	BackgroundTransparency = 1,
+	Text = "My Hub",
+	TextColor3 = Color3.fromRGB(255, 255, 255),
+	TextSize = 18,
+	Font = Enum.Font.GothamBold,
+	Parent = window,
+})
+
+local list = create("Frame", {
+	Size = UDim2.new(1, -24, 1, -52),
+	Position = UDim2.fromOffset(12, 44),
+	BackgroundTransparency = 1,
+	Parent = window,
+})
+create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = list })
+
+local function addButton(text, onClick)
+	local button = create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 36),
+		BackgroundColor3 = Color3.fromRGB(45, 110, 240),
+		Text = text,
+		TextColor3 = Color3.fromRGB(255, 255, 255),
+		TextSize = 15,
+		Font = Enum.Font.Gotham,
+		AutoButtonColor = true,
+		Parent = list,
+	})
+	create("UICorner", { CornerRadius = UDim.new(0, 8), Parent = button })
+	button.Activated:Connect(function()
+		onClick(button)
+	end)
+	return button
+end
+
+-- ---- ボタンの動作 ----
+addButton(\`クリック回数: {config.clicks}\`, function(button)
+	config.clicks += 1
+	button.Text = \`クリック回数: {config.clicks}\`
+	saveConfig()
 end)
-print("pcall:", ok, err)
+
+addButton("通知: " .. (config.notify and "オン" or "オフ"), function(button)
+	config.notify = not config.notify
+	button.Text = "通知: " .. (config.notify and "オン" or "オフ")
+	saveConfig()
+end)
+
+addButton("自分の位置をコピー", function()
+	local character = player.Character or player.CharacterAdded:Wait()
+	local root = character:WaitForChild("HumanoidRootPart")
+	setclipboard(tostring(root.Position))
+	if config.notify then
+		game:GetService("StarterGui"):SetCore("SendNotification", { Title = "My Hub", Text = "位置をコピーしました", Duration = 3 })
+	end
+end)
+
+addButton("閉じる", function()
+	gui:Destroy()
+	getgenv().MyHub = nil
+	print("GUI を閉じました")
+end)
+
+print("読み込み完了:", identifyexecutor())
 `,
+      'workspace/': '',
     },
   },
-  empty: {
-    name: '空のプロジェクト',
-    desc: '何もない状態から始めます',
-    icon: '📄',
+  executorEmpty: {
+    name: '空のスクリプト',
+    desc: '何もない状態から書き始めます',
+    icon: 'file', kind: 'executor',
     main: 'main.lua',
-    files: { 'main.lua': '' },
+    files: { 'main.lua': '', 'workspace/': '' },
   },
 }
 
+// 「新しいファイル」の種類 (モードごと)
 export const NEW_FILE_TEMPLATES = {
-  'Script (サーバー)': { ext: '.server.luau', content: 'local Players = game:GetService("Players")\n\n' },
-  'LocalScript (クライアント)': { ext: '.client.luau', content: 'local Players = game:GetService("Players")\nlocal player = Players.LocalPlayer\n\n' },
-  'ModuleScript': { ext: '.luau', content: 'local module = {}\n\n\n\nreturn module\n' },
-  'Lua': { ext: '.lua', content: '' },
-  'Python': { ext: '.py', content: '' },
-  'Markdown': { ext: '.md', content: '# タイトル\n' },
-  'JSON': { ext: '.json', content: '{\n  \n}\n' },
-  'テキスト': { ext: '.txt', content: '' },
+  studio: {
+    'Script (サーバー)': { ext: '.server.luau', stem: 'Script', content: 'local Players = game:GetService("Players")\n\n' },
+    'LocalScript (クライアント)': { ext: '.client.luau', stem: 'LocalScript', content: 'local Players = game:GetService("Players")\nlocal player = Players.LocalPlayer\n\n' },
+    'ModuleScript': { ext: '.luau', stem: 'Module', content: 'local Module = {}\n\n\n\nreturn Module\n' },
+    'JSON': { ext: '.json', stem: 'data', content: '{\n  \n}\n' },
+    'メモ': { ext: '.md', stem: 'README', content: '# タイトル\n' },
+  },
+  executor: {
+    'スクリプト': { ext: '.lua', stem: 'script', content: '' },
+    'モジュール': { ext: '.lua', stem: 'module', content: 'local Module = {}\n\n\n\nreturn Module\n' },
+    'JSON': { ext: '.json', stem: 'config', content: '{\n  \n}\n' },
+    'テキスト': { ext: '.txt', stem: 'note', content: '' },
+    'メモ': { ext: '.md', stem: 'README', content: '# タイトル\n' },
+  },
 }

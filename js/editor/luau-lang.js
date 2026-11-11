@@ -1,5 +1,6 @@
-// Luau / Lua のシンタックスハイライト (StreamLanguage)
+// Luau のシンタックスハイライトと字下げ (StreamLanguage)
 import { StreamLanguage, foldService, indentUnit } from '../../vendor/codemirror.js'
+import { EXECUTOR_GLOBALS } from '../data/executor-api.js'
 
 const KEYWORDS = new Set(['and', 'break', 'do', 'else', 'elseif', 'end', 'for', 'function', 'if', 'in', 'local', 'not', 'or', 'repeat', 'return', 'then', 'until', 'while'])
 const OP_KW = new Set(['and', 'or', 'not'])
@@ -9,9 +10,11 @@ const BUILTINS = new Set(['print', 'warn', 'error', 'assert', 'pcall', 'xpcall',
 const RBX_GLOBALS = new Set(['game', 'workspace', 'script', 'plugin', 'shared', '_G', '_VERSION', 'Enum', 'Game', 'Workspace'])
 const DATATYPES = new Set(['Instance', 'Vector3', 'Vector2', 'CFrame', 'Color3', 'UDim', 'UDim2', 'TweenInfo', 'BrickColor', 'NumberRange', 'NumberSequence', 'NumberSequenceKeypoint', 'ColorSequence', 'ColorSequenceKeypoint', 'Rect', 'Ray', 'Region3', 'Random', 'DateTime', 'RaycastParams', 'OverlapParams', 'PhysicalProperties', 'Font', 'Vector3int16', 'Vector2int16', 'PathWaypoint', 'Axes', 'Faces', 'CatalogSearchParams', 'Drawing', 'WebSocket'])
 const BLOCK_OPEN = new Set(['function', 'do', 'then', 'repeat'])
+const CLOSER_START = /^\s*(?:(?:end|until|else|elseif)(?![A-Za-z0-9_])|[)}\]])/
 
-export let extraGlobals = new Set() // エグゼキューター関数など (設定で切り替え)
-export function setExtraGlobals(names) { extraGlobals = new Set(names) }
+// エグゼキューターモードで特別な色にするグローバル (getgenv, writefile など)
+const NO_EXTRA = new Set()
+const EXEC_GLOBALS = new Set(Object.keys(EXECUTOR_GLOBALS))
 
 function longBracket(stream) {
   // stream は '[' の位置。レベルを返す (なければ -1)
@@ -107,7 +110,10 @@ function tokenBase(stream, state) {
     const nextCh = stream.string.slice(stream.pos).match(/^\s*(.)/)
     const next = nextCh ? nextCh[1] : ''
     const isCall = next === '(' || next === '"' || next === "'" || next === '{' || next === '`'
-    if (state.typeMode) return typeWord(word)
+    if (state.typeMode) {
+      // 型注釈の途中でもキーワードが来たら型は終わり (for k: string, v: number in ... do など)
+      if (KEYWORDS.has(word)) { state.typeMode = false; state.typeDepth = 0 } else return typeWord(word)
+    }
     if (prev === '.' || prev === ':') {
       if (prev === ':' && state.typeAfterColon) { state.typeMode = true; return typeWord(word) }
       return isCall ? 'propertyName.function' : (/^[A-Z][A-Z0-9_]+$/.test(word) ? 'propertyName.constant' : 'propertyName')
@@ -116,11 +122,10 @@ function tokenBase(stream, state) {
       state.prevWord = word
       if (word === 'local') state.localDecl = true
       if (word === 'function') { state.funcDecl = true; state.localDecl = false }
-      if (BLOCK_OPEN.has(word)) state.depth++
-      if (word === 'end' || word === 'until') state.depth = Math.max(0, state.depth - 1)
-      if (word === 'elseif') state.depth = Math.max(0, state.depth - 1)
-      if (word === 'do' && (state.pendingDo > 0)) { state.pendingDo--; state.depth-- }
-      if (word === 'while' || word === 'for') state.pendingDo++
+      // インデント用: この行で開いた / 閉じたブロックを数える
+      if (BLOCK_OPEN.has(word)) state.delta++
+      else if (word === 'end' || word === 'until' || word === 'elseif') closer(state)
+      else if (word === 'else' && state.leading) { state.delta++; state.keep = false }
       if (word === 'then' || word === 'do') state.typeAfterColon = false
       return OP_KW.has(word) ? 'operatorKeyword' : (word === 'function' || word === 'local' ? 'definitionKeyword' : 'controlKeyword')
     }
@@ -145,7 +150,7 @@ function tokenBase(stream, state) {
     if (DATATYPES.has(word)) return 'className'
     if (RBX_GLOBALS.has(word)) return 'variableName.standard'
     if (BUILTINS.has(word)) return isCall ? 'variableName.function.standard' : 'variableName.standard'
-    if (extraGlobals.has(word)) return isCall ? 'variableName.function.special' : 'variableName.special'
+    if (state.ex.has(word)) return isCall ? 'variableName.function.special' : 'variableName.special'
     if (isCall) return 'variableName.function'
     return 'variableName'
   }
@@ -173,23 +178,23 @@ function tokenBase(stream, state) {
     if (op === '(') {
       state.parenDepth++
       if (state.prevFunc) { state.paramDepth++; state.paramStart = state.parenDepth; state.prevFunc = false }
-      state.depth++
+      state.delta++
       if (state.typeMode) state.typeDepth++
     }
-    if (op === ')') { state.parenDepth--; state.depth = Math.max(0, state.depth - 1); if (state.typeMode && state.typeDepth > 0) state.typeDepth-- }
-    if (op === '{') { state.depth++; if (state.typeMode) state.typeDepth++; else if (state.interpDepth.length) state.interpDepth[state.interpDepth.length - 1]++ }
+    if (op === ')') { state.parenDepth--; closer(state); if (state.typeMode && state.typeDepth > 0) state.typeDepth-- }
+    if (op === '{') { state.delta++; if (state.typeMode) state.typeDepth++; else if (state.interpDepth.length) state.interpDepth[state.interpDepth.length - 1]++ }
     if (op === '}') {
       if (state.interpDepth.length && !state.typeMode && state.interpDepth[state.interpDepth.length - 1] === 0) {
         state.interpDepth.pop()
         state.tokenize = readInterp
         return 'brace.special'
       }
-      state.depth = Math.max(0, state.depth - 1)
+      closer(state)
       if (state.typeMode && state.typeDepth > 0) state.typeDepth--
       else if (state.interpDepth.length) state.interpDepth[state.interpDepth.length - 1]--
     }
-    if (op === '[') state.depth++
-    if (op === ']') state.depth = Math.max(0, state.depth - 1)
+    if (op === '[') state.delta++
+    if (op === ']') closer(state)
     if (op === '(' || op === ')') return 'paren'
     if (op === '{' || op === '}') return 'brace'
     if (op === '[' || op === ']') return 'squareBracket'
@@ -202,6 +207,12 @@ function tokenBase(stream, state) {
   return 'operator'
 }
 
+// 行頭に並んだ閉じ (end / ) / } など) はその行自身を字下げ解除するだけで、次の行には影響しない
+function closer(state) {
+  if (state.leading) state.keep = true
+  else state.delta--
+}
+
 function typeWord(word) {
   if (word === 'nil') return 'null'
   if (word === 'true' || word === 'false') return 'bool'
@@ -212,20 +223,25 @@ function typeWord(word) {
 const luauParser = {
   name: 'luau',
   startState: () => ({
-    tokenize: null, depth: 0, pendingDo: 0, lastSig: null, prevWord: null, localDecl: false, funcDecl: false, prevFunc: false,
+    tokenize: null, base: 0, delta: 0, leading: true, keep: false, lastSig: null, prevWord: null, localDecl: false, funcDecl: false, prevFunc: false,
     typeMode: false, typeDepth: 0, typeDecl: false, typeAfterColon: false, paramDepth: 0, paramStart: 0, parenDepth: 0,
-    interp: [], interpDepth: [], lineStartDepth: 0,
+    interp: [], interpDepth: [], ex: NO_EXTRA,
   }),
   copyState: s => ({ ...s, interp: s.interp.slice(), interpDepth: s.interpDepth.slice() }),
   token(stream, state) {
     if (stream.sol()) {
-      state.lineStartDepth = state.depth
+      // 複数行の文字列・コメントの途中でなければ、この行をインデントの基準にする
+      if (!state.tokenize) { state.base = stream.indentation(); state.delta = 0; state.leading = true }
       state.localDecl = false
       if (state.typeMode && state.typeDepth === 0) state.typeMode = false
       state.typeDecl = false
     }
     const style = state.tokenize ? state.tokenize(stream, state) : tokenBase(stream, state)
     const cur = stream.current()
+    if (style !== null) {
+      if (state.keep) state.keep = false
+      else state.leading = false
+    }
     // function の直後の ( は引数リスト (型注釈の判定に使用)
     if (cur === 'function') state.prevFunc = true
     else if (style !== null && cur !== '(' && !/^variableName/.test(style) && cur !== '.' && cur !== ':' && style !== 'propertyName' && style !== 'typeName' && cur !== '<' && cur !== '>' && cur !== ',') state.prevFunc = false
@@ -234,21 +250,50 @@ const luauParser = {
     if (style === 'typeName.definition') state.lastTypeAlias = true
     return style
   },
+  // 前の行のインデントを基準に、ブロックを開いていれば 1 段深く、閉じで始まる行は 1 段浅くします。
+  // (深さを数える方式と違い、括弧と function が同じ行にあっても 1 段だけ字下げされます)
   indent(state, textAfter, cx) {
     if (state.tokenize) return null
-    let d = state.depth
-    if (/^\s*(end|until|else|elseif)\b/.test(textAfter) || /^\s*[)}\]]/.test(textAfter)) d--
-    return Math.max(0, d) * cx.unit
+    let n = state.base + (state.delta > 0 ? cx.unit : state.delta < 0 ? -cx.unit : 0)
+    if (CLOSER_START.test(textAfter)) n -= cx.unit
+    return Math.max(0, n)
   },
   languageData: {
     commentTokens: { line: '--', block: { open: '--[[', close: ']]' } },
     closeBrackets: { brackets: ['(', '[', '{', '"', "'", '`'] },
-    indentOnInput: /^\s*(end|until|else|elseif|\}|\)|\])$/,
+    // end などを打った瞬間に字下げを戻す。endTime のように続きを打ったら元に戻す
+    indentOnInput: /^\s*(?:(?:end|until|else|elseif|\}|\)|\])|(?:end|until|elseif)\w|else[^i\W])$/,
     wordChars: '_',
   },
 }
 
-export const luauLanguage = StreamLanguage.define(luauParser)
+// Studio 用と Executor 用で別の言語オブジェクトを使います (切り替えると色付けをやり直します)
+const baseState = luauParser.startState
+export const luauStudio = StreamLanguage.define(luauParser)
+export const luauExecutor = StreamLanguage.define({ ...luauParser, startState: () => ({ ...baseState(), ex: EXEC_GLOBALS }) })
+export const luauLanguage = luauStudio
+export const luauFor = mode => (mode === 'executor' ? luauExecutor : luauStudio)
+
+// Markdown (README やメモ用の簡易ハイライト)
+export const markdownLanguage = StreamLanguage.define({
+  name: 'markdown',
+  startState: () => ({ code: false }),
+  token(stream, state) {
+    if (stream.sol() && stream.match(/^\s*```/)) { state.code = !state.code; stream.skipToEnd(); return 'meta' }
+    if (state.code) { stream.skipToEnd(); return 'string' }
+    if (stream.sol()) {
+      if (stream.match(/^#{1,6}\s.*/)) return 'heading'
+      if (stream.match(/^\s*(?:[-*+]|\d+\.)\s/)) return 'keyword'
+      if (stream.match(/^>.*/)) return 'comment'
+    }
+    if (stream.match(/^`[^`]+`/)) return 'string'
+    if (stream.match(/^\*\*[^*]+\*\*/)) return 'strong'
+    if (stream.match(/^\[[^\]]*\]\([^)]*\)/)) return 'link'
+    stream.next()
+    stream.eatWhile(/[^`*[]/)
+    return null
+  },
+})
 
 // インデントに基づく折りたたみ (全言語共通)
 export const indentFold = foldService.of((state, lineStart) => {
@@ -267,7 +312,6 @@ export const indentFold = foldService.of((state, lineStart) => {
     const ind = indentOf(l.text)
     if (ind < 0) continue
     if (ind <= base) {
-      // Lua の end / Python の次の文などはここで終わり
       break
     }
     end = l.to

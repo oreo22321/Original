@@ -1,7 +1,7 @@
 // エクスプローラー (ファイルツリー) とプロジェクト管理
 import * as vfs from './vfs.js'
-import { app, refreshFiles, newFile, newFolder, deletePath, renamePath, openProject, runCommand, command } from './app.js'
-import { on, getSettings, emit } from './store.js'
+import { app, refreshFiles, newFile, newFolder, deletePath, renamePath, openProject, runCommand, command, setRunTarget } from './app.js'
+import { on, getSettings, getMode, emit, MODE_LABELS } from './store.js'
 import { h, icon, fileIcon, menu, onLongPress, promptDialog, confirmDialog, toast, modal, download, shareFile, copyText, relTime } from './ui.js'
 import { TEMPLATES, NEW_FILE_TEMPLATES } from './templates.js'
 
@@ -15,6 +15,7 @@ export class Explorer {
     on('active', () => this.render())
     on('tabs', () => this.renderDirty())
     on('project', () => { this.renderHeader(); this.render() })
+    on('mode', () => this.render())
   }
 
   build() {
@@ -34,7 +35,7 @@ export class Explorer {
     this.header.innerHTML = ''
     const name = app.project ? app.project.name : 'プロジェクトなし'
     this.header.append(
-      h('button', { class: 'project-btn', title: 'プロジェクトを切り替え', onclick: () => runCommand('projects') }, icon('folder', 16), h('span', { class: 'project-name' }, name), icon('chevronDown', 14)),
+      h('button', { class: 'project-btn', title: 'プロジェクトを切り替え', onclick: () => runCommand('projects') }, icon(app.project && app.project.kind === 'executor' ? 'bolt' : 'cube', 16, 'k-' + (app.project ? app.project.kind : 'studio')), h('span', { class: 'project-name' }, name), icon('chevronDown', 14)),
       h('div', { class: 'side-actions' },
         h('button', { class: 'icon-btn', title: '新しいファイル', 'aria-label': '新しいファイル', onclick: () => runCommand('newFile', this.selectedDir) }, icon('newFile', 18)),
         h('button', { class: 'icon-btn', title: '新しいフォルダ', 'aria-label': '新しいフォルダ', onclick: () => runCommand('newFolder', this.selectedDir) }, icon('newFolder', 18)),
@@ -80,6 +81,7 @@ export class Explorer {
     }
     const sortFn = (a, b) => (a.dir === b.dir ? a.path.localeCompare(b.path, 'ja') : a.dir ? -1 : 1)
     const active = app.editors && app.editors.active
+    const target = app.project.runTarget
     const walk = (dir, depth) => {
       const list = (children.get(dir) || []).sort(sortFn)
       for (const f of list) {
@@ -95,6 +97,7 @@ export class Explorer {
         fileIcon(f.path, f.dir, open),
         h('span', { class: 'tree-name' }, name),
         name === 'workspace' && depth === 0 && f.dir ? h('span', { class: 'tree-tag', title: 'readfile / writefile の保存先' }, 'FS') : null,
+        target === f.path ? h('span', { class: 'tree-tag run', title: '▶ で実行するファイル' }, '▶') : null,
         h('span', { class: 'tree-dot' }),
         h('button', { class: 'tree-more icon-btn', 'aria-label': 'メニュー', onclick: e => { e.stopPropagation(); this.itemMenu(f, e.currentTarget) } }, icon('more', 16)))
         row.addEventListener('keydown', e => { if (e.key === 'Enter') this.activate(f); if (e.key === 'Delete' || (e.key === 'Backspace' && e.metaKey)) this.remove(f) ; if (e.key === 'F2') this.rename(f) })
@@ -133,9 +136,11 @@ export class Explorer {
 
   itemMenu(f, anchor) {
     const dir = f.dir ? f.path : vfs.dirname(f.path)
-    const runnable = !f.dir && /\.(luau?|py)$/i.test(f.path)
+    const runnable = !f.dir && /\.luau?$/i.test(f.path)
+    const pinned = app.project.runTarget === f.path
     menu([
-      runnable ? { label: '実行', icon: 'play', run: async () => { await app.editors.open(f.path); runCommand('run') } } : null,
+      runnable ? { label: '開いて実行', icon: 'play', run: async () => { await app.editors.open(f.path); if (app.project.runTarget && !pinned) await setRunTarget(null); runCommand('run') } } : null,
+      runnable ? { label: pinned ? '実行ファイルの固定を解除' : '▶ で常にこのファイルを実行', icon: 'pin', checked: pinned, run: () => setRunTarget(pinned ? null : f.path).then(() => toast(pinned ? '固定を解除しました。開いているファイルを実行します' : `▶ で "${vfs.basename(f.path)}" を実行します`, { icon: 'pin' })) } : null,
       { label: '新しいファイル', icon: 'newFile', run: () => runCommand('newFile', dir) },
       { label: '新しいフォルダ', icon: 'newFolder', run: () => runCommand('newFolder', dir) },
       '-',
@@ -179,7 +184,7 @@ export class Explorer {
 // ============================================================
 // 読み込み / 書き出し
 // ============================================================
-const TEXT_EXT = /\.(luau?|py|txt|md|json|js|mjs|ts|html?|css|xml|ya?ml|toml|csv|ini|cfg|rbxs|server|client|sh|gitignore)$/i
+const TEXT_EXT = /\.(luau?|txt|md|json|xml|ya?ml|toml|csv|ini|cfg|luaurc)$/i
 
 export async function importFileList(fileList, dir = '') {
   let n = 0
@@ -244,28 +249,32 @@ export async function showProjects() {
   const m = modal({ title: 'プロジェクト', body, wide: true })
   const render = (projects) => {
     body.innerHTML = ''
-    body.append(h('div', { class: 'section-title' }, '新しく作る'))
-    const grid = h('div', { class: 'template-grid' })
-    for (const [key, t] of Object.entries(TEMPLATES)) {
-      grid.append(h('button', { class: 'template-card', onclick: async () => { m.close(); await createFromTemplate(key) } },
-        h('div', { class: 'tc-icon' }, t.icon), h('div', { class: 'tc-name' }, t.name), h('div', { class: 'tc-desc' }, t.desc)))
+    for (const [kind, title, ic] of [['studio', 'Roblox Studio 用', 'cube'], ['executor', 'エグゼキューター用', 'bolt']]) {
+      body.append(h('div', { class: 'section-title k-' + kind }, icon(ic, 16), `新しく作る — ${title}`))
+      const grid = h('div', { class: 'template-grid' })
+      for (const [key, t] of Object.entries(TEMPLATES)) {
+        if (t.kind !== kind) continue
+        grid.append(h('button', { class: 'template-card k-' + kind, onclick: async () => { m.close(); await createFromTemplate(key) } },
+          h('div', { class: 'tc-icon' }, icon(t.icon, 24)), h('div', { class: 'tc-name' }, t.name), h('div', { class: 'tc-desc' }, t.desc)))
+      }
+      body.append(grid)
     }
-    grid.append(h('button', { class: 'template-card', onclick: async () => {
+    body.append(h('div', { class: 'template-grid one' }, h('button', { class: 'template-card row', onclick: async () => {
       m.close()
       const files = await pickFiles({ accept: '.zip,application/zip' })
       if (!files || !files.length) return
       const p = await vfs.createProject(files[0].name.replace(/\.zip$/i, ''), {})
       await openProject(p.id)
       await importZipFile(files[0])
-    } }, h('div', { class: 'tc-icon' }, '📦'), h('div', { class: 'tc-name' }, 'ZIP から作成'), h('div', { class: 'tc-desc' }, 'ZIP ファイルを読み込みます')))
-    body.append(grid)
+      await openProject(p.id, { openMain: true })
+    } }, h('div', { class: 'tc-icon' }, icon('zip', 22)), h('div', null, h('div', { class: 'tc-name' }, 'ZIP から作成'), h('div', { class: 'tc-desc' }, 'ZIP ファイルを読み込みます (モードは中身から自動判定)')))))
     body.append(h('div', { class: 'section-title' }, `保存済み (${projects.length})`))
     const ul = h('div', { class: 'project-list' })
     for (const p of projects) {
       const isCur = app.project && app.project.id === p.id
       ul.append(h('div', { class: 'project-row' + (isCur ? ' current' : '') },
         h('button', { class: 'project-open', onclick: async () => { m.close(); if (!isCur) await openProject(p.id, { openMain: true }) } },
-          icon('folder', 18), h('div', null, h('div', { class: 'pr-name' }, p.name), h('div', { class: 'pr-meta' }, (isCur ? '開いています ・ ' : '') + relTime(p.opened || p.created)))),
+          icon(p.kind === 'executor' ? 'bolt' : 'cube', 18, 'k-' + (p.kind || 'studio')), h('div', null, h('div', { class: 'pr-name' }, p.name), h('div', { class: 'pr-meta' }, (MODE_LABELS[p.kind] || 'Studio') + ' ・ ' + (isCur ? '開いています ・ ' : '') + relTime(p.opened || p.created)))),
         h('button', { class: 'icon-btn', 'aria-label': 'メニュー', onclick: e => menu([
           { label: '名前を変更', icon: 'edit', run: async () => {
             const name = await promptDialog('プロジェクト名', { value: p.name })
@@ -279,7 +288,7 @@ export async function showProjects() {
             const files = await vfs.readAll(p.id)
             const obj = {}
             for (const f of files) obj[f.path + (f.dir ? '/' : '')] = f.content || ''
-            await vfs.createProject(p.name + ' のコピー', obj)
+            await vfs.createProject(p.name + ' のコピー', obj, { kind: p.kind })
             render(await vfs.listProjects())
           } },
           { label: '削除', icon: 'trash', danger: true, run: async () => {
@@ -288,7 +297,7 @@ export async function showProjects() {
             const rest = await vfs.listProjects()
             if (isCur) {
               if (rest.length) await openProject(rest[0].id, { openMain: true })
-              else await createFromTemplate('lua')
+              else await createFromTemplate('studio')
             }
             render(await vfs.listProjects())
           } },
@@ -300,41 +309,45 @@ export async function showProjects() {
 }
 
 export async function createFromTemplate(key, name) {
-  const t = TEMPLATES[key] || TEMPLATES.empty
+  const t = TEMPLATES[key] || TEMPLATES.studio
   const existing = await vfs.listProjects()
   let base = name || t.name
   let n = 1, pname = base
   while (existing.some(p => p.name === pname)) pname = `${base} ${++n}`
-  const p = await vfs.createProject(pname, t.files)
+  const p = await vfs.createProject(pname, t.files, { kind: t.kind })
   await openProject(p.id, { openMain: t.main })
   return p
 }
 
 export async function newFileDialog(dir = '') {
-  const keys = Object.keys(NEW_FILE_TEMPLATES)
+  const mode = getMode()
+  const kinds = NEW_FILE_TEMPLATES[mode]
   const body = h('div', { class: 'form' })
-  const input = h('input', { class: 'input', placeholder: '例: main.luau / src/utils.py', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' })
+  const input = h('input', { class: 'input', placeholder: mode === 'executor' ? '例: main.lua' : '例: src/server/Game.server.luau', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' })
   const chips = h('div', { class: 'chips' })
   let chosen = null
-  for (const k of keys) {
-    const t = NEW_FILE_TEMPLATES[k]
+  for (const [k, t] of Object.entries(kinds)) {
     const chip = h('button', { class: 'chip', onclick: () => {
       chosen = t
       chips.querySelectorAll('.chip').forEach(c => c.classList.remove('on'))
       chip.classList.add('on')
       const cur = input.value.trim()
-      const stem = cur ? cur.replace(/(\.server|\.client)?\.[\w]+$/, '') : (dir ? dir + '/' : '') + (t.ext.startsWith('.server') || t.ext.startsWith('.client') ? 'Script' : t.ext === '.py' ? 'main' : t.ext === '.md' ? 'README' : 'module')
+      const stem = cur && !cur.endsWith('/') ? cur.replace(/(\.server|\.client)?\.[\w]+$/, '') : (cur || (dir ? dir + '/' : '')) + t.stem
       input.value = stem + t.ext
       input.focus()
-    } }, k)
+      const slash = input.value.lastIndexOf('/') + 1
+      input.setSelectionRange(slash, input.value.length - t.ext.length)
+    } }, fileIcon('x' + t.ext), k)
     chips.append(chip)
   }
   input.value = dir ? dir + '/' : ''
-  body.append(h('label', { class: 'label' }, 'ファイル名 (フォルダは / で区切ります)'), input, h('label', { class: 'label' }, '種類'), chips)
+  body.append(h('label', { class: 'label' }, '種類'), chips, h('label', { class: 'label' }, 'ファイル名 (フォルダは / で区切ります)'), input)
   const create = async () => {
-    const path = input.value.trim()
+    let path = input.value.trim()
     if (!path || path.endsWith('/')) { toast('ファイル名を入力してください', { kind: 'error' }); return false }
-    const t = chosen || Object.values(NEW_FILE_TEMPLATES).find(x => path.endsWith(x.ext))
+    // 拡張子がなければ Luau ファイルにする
+    if (!/\.[A-Za-z0-9]+$/.test(path)) path += chosen ? chosen.ext : mode === 'executor' ? '.lua' : '.luau'
+    const t = chosen && path.endsWith(chosen.ext) ? chosen : Object.values(kinds).find(x => path.endsWith(x.ext))
     const ok = await newFile(path, t ? t.content : '')
     if (ok) m.close()
     return false

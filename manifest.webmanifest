@@ -1,13 +1,13 @@
 {
-  "name": "ForgeCode — モバイルコードエディタ",
+  "name": "ForgeCode — Roblox Luau エディタ",
   "short_name": "ForgeCode",
-  "description": "スマホ・iPad で使える Luau / Lua / Python 対応のコードエディタ",
+  "description": "スマホ・iPad で使える Roblox 専用の Luau エディタ。Roblox Studio 用とエグゼキューター用のスクリプトを書いて、その場で試せます",
   "lang": "ja",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#1e1e1e",
+  "background_color": "#0b1020",
   "theme_color": "#1e1e1e",
   "categories": ["developer", "productivity", "education"],
   "icons": [

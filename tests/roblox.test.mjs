@@ -114,7 +114,7 @@ print(isfile("config.json"), readfile("config.json"))
 makefolder("data")
 writefile("data/a.txt", "A")
 print(#listfiles("data"), isfolder("data"), identifyexecutor())
-appendfile("data/a.txt", "B") print(readfile("data/a.txt"))`, 'true {"x":1}\n1 true ForgeCode Sandbox 4.0\nAB'],
+appendfile("data/a.txt", "B") print(readfile("data/a.txt"))`, 'true {"x":1}\n1 true ForgeCode Sandbox 5.0\nAB'],
   ['hookfunction & namecall', `
 local function greet() return "hi" end
 local old = hookfunction(greet, function() return "hooked" end)

@@ -1,7 +1,8 @@
 // 画面全体のレイアウト (スマホ / タブレット・PC 両対応)
-import { app, command, runCommand, persistSession } from './app.js'
-import { getSettings, setSettings, on, emit, isTouch } from './store.js'
-import { h, icon, menu, toast, copyText, shareFile, haptic } from './ui.js'
+import { app, command, runCommand, setProjectKind, setRunTarget } from './app.js'
+import { getSettings, setSettings, getMode, on, isTouch, MODE_LABELS } from './store.js'
+import { h, icon, menu, toast, copyText, shareFile, haptic, promptDialog } from './ui.js'
+import * as vfs from './vfs.js'
 import { EditorManager } from './editors.js'
 import { Explorer } from './explorer.js'
 import { Runner } from './runner.js'
@@ -9,7 +10,7 @@ import { KeyBar } from './keybar.js'
 import { SearchView, OutlineView } from './views.js'
 import { SettingsView } from './settings-ui.js'
 import { AiView } from './ai-panel.js'
-import { LANG_LABELS } from '../editor/setup.js'
+import { LANG_LABELS, KIND_LABELS, scriptKindOf } from '../editor/setup.js'
 import { openSearchPanel, toggleComment, foldAll, unfoldAll, undo, redo, selectAll } from '../../vendor/codemirror.js'
 import { minifyLuau } from '../editor/format.js'
 
@@ -35,10 +36,12 @@ export class Workbench {
     this.setupViewport()
     on('active', () => { this.updateTop(); this.updateStatus() })
     on('tabs', () => this.updateTop())
-    on('cursor', () => this.updateStatus())
+    on('cursor', () => this.scheduleCursor())
     on('problems', () => this.updateStatus())
     on('running', () => { this.updateTop(); this.updateStatus() })
-    on('project', () => this.updateStatus())
+    on('project', () => { this.updateTop(); this.updateStatus() })
+    on('mode', () => { this.updateTop(); this.updateStatus() })
+    on('saveState', () => this.updateStatus())
     on('fileOpened', () => { if (this.layout === 'mobile') this.toggleSidebar(false) })
   }
 
@@ -51,6 +54,7 @@ export class Workbench {
       this.activity.append(h('button', { class: 'act-btn', 'data-view': id, title: label, 'aria-label': label, onclick: () => this.onActivity(id) }, icon(ic, 24)))
     }
     this.activity.append(h('div', { class: 'act-spacer' }), h('button', { class: 'act-btn', title: '使い方', 'aria-label': '使い方', onclick: () => runCommand('help') }, icon('book', 22)))
+    this.buildStatus()
     // サイドバー
     this.sideTabs = h('div', { class: 'side-tabs' }, VIEWS.map(([id, ic, label]) => h('button', { class: 'side-tab', 'data-view': id, 'aria-label': label, onclick: () => this.showView(id) }, icon(ic, 20), h('span', null, label))),
       h('button', { class: 'side-tab close', 'aria-label': '閉じる', onclick: () => this.toggleSidebar(false) }, icon('close', 20)))
@@ -68,7 +72,6 @@ export class Workbench {
     this.panelResize = h('div', { class: 'resizer h', title: 'ドラッグで高さを変更' })
     this.center = h('main', { class: 'center' }, this.topbar, this.editorRoot, this.panelResize, this.panelRoot)
     this.keybarRoot = h('div', { class: 'keybar' })
-    this.status = h('footer', { class: 'statusbar' })
     this.mainEl = h('div', { class: 'main' }, this.activity, this.sidebar, this.sideResize, this.scrim, this.center)
     r.append(this.mainEl, this.keybarRoot, this.status)
 
@@ -206,35 +209,50 @@ export class Workbench {
   // ---- 上部バー ----
   updateTop() {
     const a = this.topActions
-    a.innerHTML = ''
+    a.textContent = ''
     const doc = app.editors.activeDoc()
-    const running = app.runner && app.runner.running
-    const runnable = doc && ['luau', 'python', 'javascript', 'html', 'markdown'].includes(doc.lang)
-    if (doc && doc.lang === 'luau') a.append(h('button', { class: 'icon-btn', title: 'コードをコピー', 'aria-label': 'コードをコピー', onclick: () => runCommand('copyCode') }, icon('copy', 20)))
-    if (doc && (doc.lang === 'markdown' || doc.lang === 'html')) a.append(h('button', { class: 'icon-btn' + (app.editors.preview ? ' on' : ''), title: 'プレビュー', 'aria-label': 'プレビュー', onclick: () => { app.editors.togglePreview(); this.updateTop() } }, icon('eye', 20)))
-    if (this.layout === 'desktop' && app.editors.order.length > 1) a.append(h('button', { class: 'icon-btn' + (app.editors.split ? ' on' : ''), title: 'エディタを分割', 'aria-label': 'エディタを分割', onclick: () => { app.editors.toggleSplit(); this.updateTop() } }, icon('split', 20)))
-    a.append(h('button', { class: 'icon-btn' + (this.panelOpen ? ' on' : ''), title: '出力パネル', 'aria-label': '出力パネル', onclick: () => this.togglePanel() }, icon('terminal', 20)))
-    if (running) a.append(h('button', { class: 'run-btn stop', title: '停止', 'aria-label': '停止', onclick: () => runCommand('stop') }, icon('stop', 18), h('span', null, '停止')))
-    else a.append(h('button', { class: 'run-btn', title: '実行 (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') }, icon('play', 18), h('span', null, '実行')))
-    a.append(h('button', { class: 'icon-btn', title: 'その他', 'aria-label': 'その他', onclick: e => this.moreMenu(e.currentTarget) }, icon('more', 20)))
+    const runner = app.runner
+    const running = runner && runner.running
+    const target = runner && runner.runTarget()
+    const runnable = !!target || (doc && doc.lang === 'luau') || app.files.some(f => !f.dir && /\.luau?$/.test(f.path))
+    const btn = (ic, title, fn, on) => h('button', { class: 'icon-btn' + (on ? ' on' : ''), title, 'aria-label': title, onclick: fn }, icon(ic, 20))
+    if (doc && doc.lang === 'luau') a.append(btn('copy', 'コードをコピー', () => runCommand('copyCode')))
+    if (doc && doc.lang === 'markdown') a.append(btn('eye', 'プレビュー', () => { app.editors.togglePreview(); this.updateTop() }, app.editors.preview))
+    if (this.layout === 'desktop' && app.editors.order.length > 1) a.append(btn('split', 'エディタを分割', () => { app.editors.toggleSplit(); this.updateTop() }, app.editors.split))
+    a.append(btn('terminal', '出力パネル', () => this.togglePanel(), this.panelOpen))
+    if (running) {
+      a.append(h('button', { class: 'run-btn stop' + (runner.waiting ? ' waiting' : ''), title: '停止', 'aria-label': '停止', onclick: () => runCommand('stop') }, icon('stop', 18), h('span', null, '停止')))
+    } else {
+      const pinned = target && (!doc || doc.path !== target)
+      a.append(h('button', { class: 'run-btn', title: target ? `${target} を実行 (⌘/Ctrl + Enter)` : '実行 (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') },
+        icon('play', 18), h('span', null, pinned ? vfs.basename(target).replace(/\.(server|client)?\.?luau?$/, '') : '実行')))
+    }
+    a.append(btn('more', 'その他', e => this.moreMenu(e.currentTarget)))
   }
 
   moreMenu(anchor) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
+    const luau = doc && doc.lang === 'luau'
+    const v = app.editors.activeView()
+    const hasSel = v && !v.state.selection.main.empty
     menu([
       { label: '保存', icon: 'save', hint: '⌘S', run: () => runCommand('save'), disabled: !doc },
       { label: '整形', icon: 'format', hint: '⇧⌥F', run: () => runCommand('format'), disabled: !doc },
+      { label: 'この行のエラーを修正', icon: 'bulb', hint: '⌘.', run: () => runCommand('quickFix'), disabled: !luau },
+      { label: '誤字・全角記号をまとめて直す', icon: 'wand', run: () => runCommand('fixAllTypos'), disabled: !luau },
+      '-',
+      hasSel && luau ? { label: '選択範囲だけ実行', icon: 'play', run: () => runCommand('runSelection') } : null,
+      { label: 'コードをコピー', icon: 'copy', run: () => runCommand('copyCode'), disabled: !doc },
+      { label: '圧縮してコピー', icon: 'copy', run: () => runCommand('copyMinified'), disabled: !luau },
+      getMode() === 'executor' ? { label: 'loadstring の 1 行を作る', icon: 'bolt', run: () => runCommand('copyLoader') } : null,
+      { label: '共有 / ファイルに保存', icon: 'share', run: () => runCommand('shareFile'), disabled: !doc },
+      '-',
       { label: '検索・置換', icon: 'search', hint: '⌘F', run: () => runCommand('find'), disabled: !doc },
       { label: '全ファイルから検索', icon: 'search', hint: '⇧⌘F', run: () => runCommand('findInFiles') },
-      { label: '行へ移動', hint: '⌘G', run: () => runCommand('gotoLine'), disabled: !doc },
       { label: '関数・変数へ移動', icon: 'outline', run: () => runCommand('gotoSymbol'), disabled: !doc },
-      '-',
-      { label: 'コードをコピー', icon: 'copy', run: () => runCommand('copyCode'), disabled: !doc },
-      { label: '共有 / ファイルに保存', icon: 'share', run: () => runCommand('shareFile'), disabled: !doc },
       { label: '変更履歴', icon: 'history', run: () => runCommand('history'), disabled: !doc },
       { label: '長い行を折り返す', icon: 'wrap', checked: s.wordWrap, run: () => setSettings({ wordWrap: !s.wordWrap }) },
-      this.layout === 'desktop' ? { label: 'エディタを分割', icon: 'split', checked: app.editors.split, run: () => runCommand('toggleSplit') } : null,
       '-',
       { label: 'AI に質問', icon: 'sparkle', run: () => runCommand('aiChat') },
       { label: 'コマンドパレット', icon: 'command', hint: '⇧⌘P', run: () => runCommand('palette') },
@@ -244,30 +262,87 @@ export class Workbench {
     ], anchor)
   }
 
-  // ---- ステータスバー ----
-  updateStatus() {
-    const st = this.status
-    st.innerHTML = ''
-    const doc = app.editors && app.editors.activeDoc()
-    const pc = app.runner ? app.runner.problemCount : { error: 0, warning: 0 }
-    const running = app.runner && app.runner.running
-    const add = (...els) => st.append(...els.filter(Boolean))
-    add(
-      h('button', { class: 'sb-item', onclick: () => runCommand('projects') }, icon('folder', 14), app.project ? app.project.name : ''),
-      h('button', { class: 'sb-item' + (pc.error ? ' err' : ''), onclick: () => { this.togglePanel(true); app.runner.show('problems') } }, icon('close', 13), String(pc.error), icon('alert', 13), String(pc.warning)),
-      running ? h('span', { class: 'sb-item running' }, h('span', { class: 'spinner' }), '実行中') : null,
-      h('span', { class: 'sb-spacer' }))
-    if (doc) {
-      const sel = doc.state.selection.main
-      const line = doc.state.doc.lineAt(sel.head)
-      const s = getSettings()
-      const selLen = Math.abs(sel.to - sel.from)
-      add(
-        h('button', { class: 'sb-item', onclick: () => runCommand('gotoLine') }, `${line.number} 行, ${sel.head - line.from + 1} 列${selLen ? ` (${selLen} 文字選択)` : ''}`),
-        h('button', { class: 'sb-item hide-mobile', onclick: () => setSettings({ insertSpaces: !s.insertSpaces }) }, doc.lang === 'python' || s.insertSpaces ? `スペース: ${s.tabSize}` : `タブ: ${s.tabSize}`),
-        h('span', { class: 'sb-item' }, LANG_LABELS[doc.lang] || doc.lang),
-        doc.lang === 'luau' && (s.robloxApi || s.executorApi) ? h('button', { class: 'sb-item hide-mobile', onclick: () => this.showView('settings', 'API') }, s.executorApi ? 'Roblox + Executor' : 'Roblox') : null)
+  // ---- ステータスバー (要素は 1 度だけ作り、中身だけ書き換える) ----
+  buildStatus() {
+    const item = (cls, onclick, title) => h(onclick ? 'button' : 'span', { class: 'sb-item ' + cls, onclick, title })
+    this.sb = {
+      mode: item('sb-mode', e => this.modeMenu(e.currentTarget), 'モードを切り替え'),
+      project: item('sb-project', () => runCommand('projects'), 'プロジェクト一覧'),
+      problems: item('sb-problems', () => { this.togglePanel(true); app.runner.show('problems') }, '問題を表示'),
+      save: item('sb-save', () => runCommand('save'), '保存の状態'),
+      run: item('sb-run running hidden'),
+      cursor: item('sb-cursor', () => runCommand('gotoLine'), '行へ移動'),
+      indent: item('sb-indent hide-mobile', () => setSettings({ insertSpaces: !getSettings().insertSpaces }), 'タブ / スペースを切り替え'),
+      kind: item('sb-kind'),
     }
+    this.status = h('footer', { class: 'statusbar' }, this.sb.mode, this.sb.project, this.sb.problems, this.sb.save, this.sb.run, h('span', { class: 'sb-spacer' }), this.sb.cursor, this.sb.indent, this.sb.kind)
+    this.sbCache = {}
+  }
+
+  // 値が変わったときだけ DOM を触る
+  sbSet(key, sig, build) {
+    if (this.sbCache[key] === sig) return
+    this.sbCache[key] = sig
+    const el = this.sb[key]
+    el.textContent = ''
+    const parts = build()
+    if (parts) el.append(...[].concat(parts).filter(x => x !== null && x !== undefined && x !== false))
+  }
+
+  updateStatus() {
+    if (!this.sb) return
+    const doc = app.editors && app.editors.activeDoc()
+    const runner = app.runner
+    const pc = runner ? runner.problemCount : { error: 0, warning: 0 }
+    const mode = getMode()
+    const s = getSettings()
+    this.sb.mode.className = 'sb-item sb-mode k-' + mode
+    this.sbSet('mode', mode, () => [icon(mode === 'executor' ? 'bolt' : 'cube', 14), MODE_LABELS[mode]])
+    this.sbSet('project', app.project ? app.project.name : '', () => (app.project ? [icon('folder', 13), h('span', { class: 'sb-clip' }, app.project.name)] : null))
+    this.sb.problems.classList.toggle('err', pc.error > 0)
+    this.sb.problems.classList.toggle('warn', !pc.error && pc.warning > 0)
+    this.sbSet('problems', pc.error + ':' + pc.warning, () => [icon('close', 13), String(pc.error), icon('alert', 13), String(pc.warning)])
+    const st = app.editors ? app.editors.saveState : 'saved'
+    const auto = s.autoSave
+    this.sb.save.className = 'sb-item sb-save s-' + st
+    this.sbSet('save', st + auto, () => st === 'saving' ? [icon('saving', 14), h('span', { class: 'hide-mobile' }, '保存中…')] : st === 'error' ? [icon('alert', 14), '保存できません'] : st === 'dirty' ? [h('span', { class: 'sb-dot' }), h('span', { class: 'hide-mobile' }, auto ? '未保存' : '未保存 (⌘S)')] : [icon('saved', 14), h('span', { class: 'hide-mobile' }, '保存済み')])
+    const running = runner && runner.running
+    this.sb.run.classList.toggle('hidden', !running)
+    this.sbSet('run', running ? (runner.waiting ? 'w' : 'r') : '', () => (running ? [h('span', { class: 'spinner' }), runner.waiting ? '操作待ち' : '実行中'] : null))
+    this.sb.indent.classList.toggle('none', !doc)
+    this.sb.cursor.classList.toggle('none', !doc)
+    this.sb.kind.classList.toggle('none', !doc)
+    if (doc) {
+      this.sbSet('indent', s.insertSpaces + ':' + s.tabSize, () => (s.insertSpaces ? `スペース: ${s.tabSize}` : `タブ: ${s.tabSize}`))
+      const kind = scriptKindOf(doc.path, mode)
+      // Executor モードは左端に表示済みなので、ここでは言語名だけ
+      this.sbSet('kind', doc.lang + kind, () => (kind && kind !== 'executor' ? KIND_LABELS[kind].replace(/ \(.*\)$/, '') : LANG_LABELS[doc.lang] || doc.lang))
+      this.updateCursor()
+    }
+  }
+
+  // カーソル位置の表示は 1 フレームに 1 回だけ更新
+  scheduleCursor() {
+    if (this.cursorRaf) return
+    this.cursorRaf = requestAnimationFrame(() => { this.cursorRaf = 0; this.updateCursor() })
+  }
+  updateCursor() {
+    const doc = app.editors && app.editors.activeDoc()
+    if (!doc || !this.sb) return
+    const sel = doc.state.selection.main
+    const line = doc.state.doc.lineAt(sel.head)
+    const selLen = sel.to - sel.from
+    const text = `${line.number} 行, ${sel.head - line.from + 1} 列${selLen ? ` (${selLen} 文字選択)` : ''}`
+    if (this.sbCache.cursor !== text) { this.sbCache.cursor = text; this.sb.cursor.textContent = text }
+  }
+
+  modeMenu(anchor) {
+    const mode = getMode()
+    menu([
+      { note: 'モードによって、補完・エラーチェック・実行環境が切り替わります' },
+      { label: 'Roblox Studio — ゲーム用のスクリプト', icon: 'cube', checked: mode === 'studio', run: () => runCommand('setMode', 'studio') },
+      { label: 'Executor — エグゼキューター API も使う', icon: 'bolt', checked: mode === 'executor', run: () => runCommand('setMode', 'executor') },
+    ], anchor, { title: 'このプロジェクトのモード' })
   }
 }
 
@@ -291,7 +366,7 @@ command('selectAll', 'すべて選択', () => { const v = app.editors.activeView
 command('closeTab', 'タブを閉じる', () => app.editors.close(app.editors.active), { icon: 'close', key: '⌘W' })
 command('closeAll', 'すべてのタブを閉じる', () => app.editors.closeAll())
 command('toggleSplit', 'エディタを分割', () => app.editors.toggleSplit(), { icon: 'split' })
-command('togglePreview', 'プレビューの切り替え (Markdown / HTML)', () => { app.editors.togglePreview(); app.wb.updateTop() }, { icon: 'eye' })
+command('togglePreview', 'プレビューの切り替え (Markdown)', () => { app.editors.togglePreview(); app.wb.updateTop() }, { icon: 'eye' })
 command('toggleWrap', '折り返しの切り替え', () => setSettings({ wordWrap: !getSettings().wordWrap }), { icon: 'wrap' })
 command('zoomIn', '文字を大きく', () => setSettings({ fontSize: Math.min(32, getSettings().fontSize + 1) }))
 command('zoomOut', '文字を小さく', () => setSettings({ fontSize: Math.max(9, getSettings().fontSize - 1) }))
@@ -304,14 +379,26 @@ command('copyCode', 'コードをすべてコピー', async () => {
   haptic(10)
   toast(ok ? (sel ? '選択範囲をコピーしました' : 'コード全体をコピーしました') : 'コピーできませんでした', { icon: ok ? 'copy' : 'alert' })
 }, { icon: 'copy' })
-command('copyMinified', 'コードを圧縮してコピー (Lua)', async () => {
+command('copyMinified', 'コードを圧縮してコピー', async () => {
   const doc = app.editors.activeDoc()
   if (!doc || doc.lang !== 'luau') return
-  try { await copyText(minifyLuau(doc.state.doc.toString())); toast('圧縮したコードをコピーしました') } catch (e) { toast(e.message, { kind: 'error' }) }
+  try { await copyText(minifyLuau(doc.state.doc.toString())); toast('圧縮したコードをコピーしました', { icon: 'copy' }) } catch (e) { toast(e.message, { kind: 'error' }) }
 }, { icon: 'copy' })
+command('copyLoader', 'loadstring の 1 行を作る (エグゼキューター)', async () => {
+  const url = await promptDialog('loadstring の 1 行を作る', { label: 'スクリプトを置いた URL (GitHub の Raw や Pastebin の raw など)', placeholder: 'https://raw.githubusercontent.com/...', okLabel: 'コピー' })
+  if (!url) return
+  if (!/^https?:\/\//.test(url)) { toast('http:// か https:// で始まる URL を入力してください', { kind: 'error' }); return }
+  const ok = await copyText(`loadstring(game:HttpGet(${JSON.stringify(url)}))()`)
+  toast(ok ? 'コピーしました。エグゼキューターに貼り付けて実行できます' : 'コピーできませんでした', { icon: ok ? 'copy' : 'alert' })
+}, { icon: 'bolt' })
 command('shareFile', '共有 / ファイルに保存', () => {
   const doc = app.editors.activeDoc()
   if (doc) shareFile(doc.path.split('/').pop(), doc.state.doc.toString())
 }, { icon: 'share' })
+command('setMode', 'モードを切り替え (Studio / Executor)', async kind => {
+  const next = kind === 'studio' || kind === 'executor' ? kind : getMode() === 'studio' ? 'executor' : 'studio'
+  await setProjectKind(next)
+  toast(`${MODE_LABELS[next]} モードにしました`, { icon: next === 'executor' ? 'bolt' : 'cube' })
+}, { icon: 'swap' })
+command('unpinRun', '実行ファイルの固定を解除', () => setRunTarget(null).then(() => toast('開いているファイルを実行します')), { icon: 'pin' })
 command('reload', 'アプリを再読み込み', () => location.reload())
-void emit; void persistSession

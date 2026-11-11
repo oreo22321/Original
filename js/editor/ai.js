@@ -18,7 +18,12 @@ export const AI_MODELS = [
   { id: 'claude-fable-5-2', label: 'Claude Fable 5.2 (最上位)' },
 ]
 
-const LANG_NAMES = { luau: 'Luau (Roblox)', lua: 'Lua', python: 'Python', javascript: 'JavaScript', json: 'JSON', html: 'HTML', css: 'CSS', markdown: 'Markdown', text: 'plain text' }
+const LANG_NAMES = { luau: 'Luau (Roblox)', json: 'JSON', markdown: 'Markdown', text: 'plain text' }
+// プロジェクトのモードに合わせた前提
+const MODE_NOTES = {
+  studio: 'The file is a Roblox Studio script (Script / LocalScript / ModuleScript). Use only official Roblox APIs.',
+  executor: 'The file is a Roblox executor script (client-side). Executor APIs following the UNC standard are available (getgenv, writefile/readfile, request, hookmetamethod, Drawing, gethui ...).',
+}
 
 const INLINE_SYSTEM = `You are the inline code-completion engine of ForgeCode, a code editor used on phones and tablets.
 You receive the code before and after the cursor. Reply with ONLY the exact text to insert at the cursor:
@@ -28,10 +33,10 @@ You receive the code before and after the cursor. Reply with ONLY the exact text
 - for Roblox Luau prefer modern APIs (task.wait, task.spawn, game:GetService, :Connect)
 If nothing useful can be inserted, reply with an empty message.`
 
-const CHAT_SYSTEM = `You are the coding assistant built into ForgeCode, a mobile/tablet code editor for Luau (Roblox), Lua and Python.
+const CHAT_SYSTEM = `You are the coding assistant built into ForgeCode, a mobile/tablet code editor for Roblox Luau.
 Answer in Japanese unless the user writes in another language. Keep answers practical and concise; beginners use this app.
-When you show code, put it in fenced code blocks with a language tag (\`\`\`lua, \`\`\`python ...). When fixing code, show the full corrected snippet.
-For Roblox, prefer current APIs (task.wait over wait, GetService, :Connect, Instance properties set before Parent).`
+When you show code, put it in fenced code blocks with the lua language tag. When fixing code, show the full corrected snippet.
+Prefer current Roblox APIs (task.wait over wait, GetService, :Connect, Instance properties set before Parent).`
 
 function friendlyError(e, Anthropic) {
   if (!Anthropic) return e && e.message ? e.message : String(e)
@@ -52,7 +57,7 @@ function stripFences(text) {
 }
 
 // インライン候補: カーソル位置に挿入するテキストを返す
-export async function aiInline({ apiKey, model, before, after, lang, filename, signal }) {
+export async function aiInline({ apiKey, model, before, after, lang, filename, mode, signal }) {
   const { client, Anthropic } = await getClient(apiKey)
   try {
     const resp = await client.beta.messages.create({
@@ -64,7 +69,7 @@ export async function aiInline({ apiKey, model, before, after, lang, filename, s
       system: INLINE_SYSTEM,
       messages: [{
         role: 'user',
-        content: `File: ${filename} (${LANG_NAMES[lang] || lang})\n<code_before_cursor>\n${before}</code_before_cursor>\n<code_after_cursor>\n${after}\n</code_after_cursor>\nReply with only the text to insert at the cursor.`,
+        content: `File: ${filename} (${LANG_NAMES[lang] || lang})\n${MODE_NOTES[mode] || ''}\n<code_before_cursor>\n${before}</code_before_cursor>\n<code_after_cursor>\n${after}\n</code_after_cursor>\nReply with only the text to insert at the cursor.`,
       }],
     }, { signal })
     if (resp.stop_reason === 'refusal') return ''
@@ -120,6 +125,6 @@ export function makeAiProvider(getSettings, getFile) {
     const file = getFile()
     const before = state.doc.sliceString(Math.max(0, pos - 6000), pos)
     const after = state.doc.sliceString(pos, Math.min(state.doc.length, pos + 2000))
-    return aiInline({ apiKey: s.aiKey, model: s.aiModel, before, after, lang: file.lang, filename: file.name, signal: ctrl.signal })
+    return aiInline({ apiKey: s.aiKey, model: s.aiModel, before, after, lang: file.lang, filename: file.name, mode: file.mode, signal: ctrl.signal })
   }
 }
