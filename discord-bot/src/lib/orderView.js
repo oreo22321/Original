@@ -31,6 +31,10 @@ function buildOrderView(order, config) {
       { name: '希望納期', value: truncate(order.details.deadline, 1024) || '—', inline: true },
     );
   }
+  if (order.coupon) embed.addFields({ name: 'クーポン', value: `\`${order.coupon}\` (−${yen(order.discount)})`, inline: true });
+  if (order.paymentReport) {
+    embed.addFields({ name: '支払い報告', value: `✅ ${truncate(order.paymentReport.method, 200)} (${ts(order.paymentReport.at, 'R')})`, inline: true });
+  }
   if (order.note) embed.addFields({ name: '備考', value: truncate(order.note, 1024) });
   if (order.quoteNote) embed.addFields({ name: '見積もりメモ', value: truncate(order.quoteNote, 1024) });
 
@@ -48,9 +52,15 @@ function buildOrderView(order, config) {
       );
       break;
     case 'pending':
-      guide = `**お支払い方法**\n${config.paymentInfo}\n\nお支払い後、このチャンネルにスクリーンショットなどを送ってください。スタッフが確認します。`;
+      guide =
+        `**お支払い方法**\n${config.paymentInfo}\n\n` +
+        'お支払いが済んだら **「支払いました」** を押して、このチャンネルにスクリーンショットを貼ってください。スタッフが確認します。' +
+        (config.autoCancelHours ? `\n⏰ ${config.autoCancelHours} 時間以内にお支払いがない場合は自動でキャンセルされます。` : '');
       rows.push(
         new ActionRowBuilder().addComponents(
+          btn(`order:report:${n}`, order.paymentReport ? '支払い報告済み' : '支払いました', ButtonStyle.Primary, '💸').setDisabled(
+            !!order.paymentReport,
+          ),
           btn(`order:paid:${n}`, '支払いを確認 (スタッフ)', ButtonStyle.Success, '💰'),
           btn(`order:cancel:${n}`, 'キャンセル', ButtonStyle.Secondary, '✖️'),
         ),

@@ -109,3 +109,58 @@ test('表示の書式', () => {
   assert.equal(orderNo(12), '#0012');
   assert.equal(stars(4), '★★★★☆');
 });
+
+test('コード在庫: 追加・重複スキップ・取り出し・返却・クリア', () => {
+  const { store } = tmpStore();
+  const p = store.addProduct(G, { name: 'ギフト', price: 500 });
+  const r = store.addCodes(G, p.id, ['A', 'B', ' ', 'A', 'C\r']);
+  assert.deepEqual(r, { added: 3, duplicates: 1, total: 3 });
+  assert.equal(store.getProduct(G, p.id).stock, 3);
+  assert.throws(() => store.updateProduct(G, p.id, { stock: 10 }), /コード在庫/);
+  assert.deepEqual(store.takeCodes(G, p.id, 2), ['A', 'B']);
+  assert.equal(store.getProduct(G, p.id).stock, 1);
+  assert.equal(store.takeCodes(G, p.id, 5), false);
+  store.returnCodes(G, p.id, ['A', 'B']);
+  assert.deepEqual(store.getProduct(G, p.id).codes, ['A', 'B', 'C']);
+  assert.equal(store.clearCodes(G, p.id), 3);
+  assert.equal(store.getProduct(G, p.id).stock, 0);
+  const normal = store.addProduct(G, { name: '普通', price: 1, stock: 5 });
+  assert.equal(store.takeCodes(G, normal.id, 1), null);
+});
+
+test('カテゴリ', () => {
+  const { store } = tmpStore();
+  store.addProduct(G, { name: 'a', price: 1, category: 'ゲーム' });
+  store.addProduct(G, { name: 'b', price: 1 });
+  store.addProduct(G, { name: 'c', price: 1, category: 'ゲーム' });
+  assert.deepEqual(store.categories(G), ['ゲーム', 'その他']);
+});
+
+test('クーポン: 割引計算・期限・回数・商品限定', () => {
+  const { store } = tmpStore();
+  const p = store.addProduct(G, { name: 'a', price: 1000 });
+  store.createCoupon(G, { code: 'sale10', type: 'percent', value: 10 });
+  assert.equal(store.checkCoupon(G, 'SALE10', p.id, 1999).discount, 199);
+  store.createCoupon(G, { code: 'OFF500', type: 'yen', value: 500, maxUses: 1 });
+  assert.equal(store.checkCoupon(G, 'off500', p.id, 300).discount, 300);
+  store.useCoupon(G, 'OFF500');
+  assert.throws(() => store.checkCoupon(G, 'OFF500', p.id, 1000), /上限/);
+  store.useCoupon(G, 'OFF500', -1);
+  assert.equal(store.checkCoupon(G, 'OFF500', p.id, 1000).discount, 500);
+  store.createCoupon(G, { code: 'OLD', type: 'yen', value: 1, expiresAt: 1000 });
+  assert.throws(() => store.checkCoupon(G, 'OLD', p.id, 100, 2000), /期限/);
+  store.createCoupon(G, { code: 'ONLY', type: 'yen', value: 1, productId: 'p99' });
+  assert.throws(() => store.checkCoupon(G, 'ONLY', p.id, 100), /この商品/);
+  assert.throws(() => store.checkCoupon(G, 'NOPE', p.id, 100), /見つかりません/);
+  assert.throws(() => store.createCoupon(G, { code: 'sale10', type: 'yen', value: 1 }), /すでに/);
+  assert.throws(() => store.createCoupon(G, { code: 'X', type: 'percent', value: 150 }));
+  assert.equal(store.deleteCoupon(G, 'sale10').code, 'SALE10');
+});
+
+test('ブラックリスト', () => {
+  const { store } = tmpStore();
+  store.setBlacklist(G, 'u1', { reason: 'test', at: 1, by: 's' });
+  assert.equal(store.isBlacklisted(G, 'u1').reason, 'test');
+  store.setBlacklist(G, 'u1', null);
+  assert.equal(store.isBlacklisted(G, 'u1'), null);
+});

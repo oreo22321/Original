@@ -35,9 +35,22 @@ module.exports = {
         .setDescription('チャンネルを設定')
         .addChannelOption((o) => o.setName('log').setDescription('ログチャンネル').addChannelTypes(ChannelType.GuildText))
         .addChannelOption((o) => o.setName('review').setDescription('レビュー投稿先').addChannelTypes(ChannelType.GuildText))
+        .addChannelOption((o) => o.setName('news').setDescription('お知らせ (新商品・再入荷・/announce) の投稿先').addChannelTypes(ChannelType.GuildText))
         .addChannelOption((o) =>
           o.setName('ticket_category').setDescription('注文チャンネルを作るカテゴリ').addChannelTypes(ChannelType.GuildCategory),
         ),
+    )
+    .addSubcommand((s) =>
+      s
+        .setName('autocancel')
+        .setDescription('お支払い待ちのまま放置された注文を自動キャンセルするまでの時間')
+        .addIntegerOption((o) => o.setName('hours').setDescription('時間 (0 で自動キャンセルしない)').setRequired(true).setMinValue(0).setMaxValue(720)),
+    )
+    .addSubcommand((s) =>
+      s
+        .setName('notify')
+        .setDescription('新商品・再入荷をお知らせチャンネルに自動投稿するか')
+        .addBooleanOption((o) => o.setName('enabled').setDescription('する / しない').setRequired(true)),
     )
     .addSubcommand((s) =>
       s
@@ -78,8 +91,13 @@ module.exports = {
       const patch = {};
       if (opt.getChannel('log')) patch.logChannelId = opt.getChannel('log').id;
       if (opt.getChannel('review')) patch.reviewChannelId = opt.getChannel('review').id;
+      if (opt.getChannel('news')) patch.newsChannelId = opt.getChannel('news').id;
       if (opt.getChannel('ticket_category')) patch.ticketCategoryId = opt.getChannel('ticket_category').id;
       store.setConfig(gid, patch);
+    } else if (sub === 'autocancel') {
+      store.setConfig(gid, { autoCancelHours: opt.getInteger('hours') });
+    } else if (sub === 'notify') {
+      store.setConfig(gid, { announceProducts: opt.getBoolean('enabled') });
     } else if (sub === 'limit') {
       store.setConfig(gid, { maxOpenTickets: opt.getInteger('count') });
     }
@@ -96,7 +114,10 @@ module.exports = {
         { name: 'レビュー', value: show(c.reviewChannelId), inline: true },
         { name: '注文カテゴリ', value: show(c.ticketCategoryId), inline: true },
         { name: '商品一覧パネル', value: c.shopPanel ? `<#${c.shopPanel.channelId}>` : '未設置', inline: true },
+        { name: 'お知らせ', value: show(c.newsChannelId), inline: true },
         { name: '同時注文数の上限', value: `${c.maxOpenTickets} 件`, inline: true },
+        { name: '未払いの自動キャンセル', value: c.autoCancelHours ? `${c.autoCancelHours} 時間後` : 'しない', inline: true },
+        { name: '新商品・再入荷のお知らせ', value: c.announceProducts ? 'する' : 'しない', inline: true },
         { name: 'お支払い方法', value: c.paymentInfo.slice(0, 1024) },
       );
     return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });

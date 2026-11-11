@@ -214,6 +214,7 @@ module.exports = {
       ticketCategoryId: channels.tickets.id,
       logChannelId: channels.log.id,
       reviewChannelId: channels.reviews.id,
+      newsChannelId: channels.news.id,
     };
     if (shopMsg) patch.shopPanel = { channelId: channels.shop.id, messageId: shopMsg.id };
     const config = store.setConfig(guild.id, patch);
@@ -228,7 +229,8 @@ module.exports = {
           '**次にやること**',
           '1. `/config payment` で支払い方法 (PayPay・振込先など) を登録',
           `2. スタッフに <@&${roles.staff.id}> ロールを付ける`,
-          '3. `/product add` で商品を登録 (商品一覧パネルが自動で更新されます)',
+          '3. `/product add` で商品を登録 (商品一覧パネルが自動で更新され、お知らせにも投稿されます)',
+          '　 1 個ずつ違うコードを売るなら `/codes add` で登録すると、支払い確認だけで自動納品されます',
           '4. ルール文は「📌｜ルール」のメッセージを自分のお店に合わせて投稿し直してください',
           '',
           `⚠️ Bot のロールは、サーバー設定 → ロール で **${roles.staff.name}・${roles.buyer.name}・${roles.verified.name} より上** に置いてください（ロールを付けられなくなります）。`,

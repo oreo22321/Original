@@ -16,6 +16,10 @@ async function createTicket(interaction, store, data) {
   const config = store.getConfig(guild.id);
   const userId = interaction.user.id;
 
+  if (store.isBlacklisted(guild.id, userId)) {
+    throw new UserError('申し訳ありませんが、現在ご注文をお受けできません。');
+  }
+
   const open = store.openOrdersOf(guild.id, userId);
   if (open.length >= config.maxOpenTickets) {
     const links = open.map((o) => (o.channelId ? `<#${o.channelId}>` : orderNo(o.number))).join(' ');

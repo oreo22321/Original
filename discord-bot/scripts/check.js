@@ -3,7 +3,7 @@
 // Discord に接続せずに、コマンド定義・パネル・モーダルが正しく作れるかを確認する
 const fs = require('node:fs');
 const path = require('node:path');
-const { buildShopPanel, buildServicePanel, buildVerifyPanel } = require('../src/lib/panels');
+const { buildShopPanel, buildServicePanel, buildVerifyPanel, buildProductCard, buildCategoryMenu } = require('../src/lib/panels');
 const { buildOrderView } = require('../src/lib/orderView');
 const { modal } = require('../src/lib/modal');
 
@@ -25,7 +25,19 @@ for (const payload of [buildShopPanel(products), buildShopPanel([]), buildServic
   payload.embeds.forEach((e) => e.toJSON());
   payload.components.forEach((c) => c.toJSON());
 }
-console.log('✅ パネル OK');
+// 商品が 25 個を超えるとカテゴリ選択になる
+const many = Array.from({ length: 40 }, (_, i) => ({
+  id: `p${i}`, name: `商品${i}`, price: 100 * i, stock: i % 7 === 0 ? 0 : null, category: `カテゴリ${i % 4}`, createdAt: i,
+}));
+const big = buildShopPanel(many);
+const bigJson = big.components[0].toJSON();
+if (bigJson.components[0].custom_id !== 'shop:cat') throw new Error('26 個以上でカテゴリ選択になっていません');
+big.embeds.forEach((e) => e.toJSON());
+buildCategoryMenu(many, 'カテゴリ1').components.forEach((c) => c.toJSON());
+const card = buildProductCard({ ...products[0], imageUrl: 'https://example.com/a.png', codes: ['x'] });
+card.embeds.forEach((e) => e.toJSON());
+card.components.forEach((c) => c.toJSON());
+console.log('✅ パネル OK (カテゴリ・商品カード含む)');
 
 const config = { paymentInfo: 'PayPay' };
 for (const status of ['quote', 'pending', 'paid', 'delivered', 'closed', 'cancelled']) {

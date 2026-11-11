@@ -14,48 +14,128 @@ function inStock(p) {
   return p.stock === null || p.stock === undefined || p.stock > 0;
 }
 
-/** 商品一覧 + 購入セレクトメニュー */
+function categoryOf(p) {
+  return p.category || 'その他';
+}
+
+function productOption(p, withCategory) {
+  const opt = {
+    label: truncate(p.name, 100),
+    value: p.id,
+    description: truncate(`${withCategory ? `[${categoryOf(p)}] ` : ''}${yen(p.price)} / ${stockText(p.stock)}`, 100),
+  };
+  if (p.emoji) opt.emoji = parseEmoji(p.emoji);
+  return opt;
+}
+
+/** カテゴリごとにまとめる (登録順を保つ) */
+function groupByCategory(products) {
+  const groups = new Map();
+  for (const p of products) {
+    const c = categoryOf(p);
+    if (!groups.has(c)) groups.set(c, []);
+    groups.get(c).push(p);
+  }
+  return groups;
+}
+
+/**
+ * 商品一覧パネル。
+ * - 販売中が 25 個以下: 商品メニュー 1 つ
+ * - 26 個以上: まずカテゴリを選び、そのカテゴリの商品メニューを本人だけに表示
+ */
 function buildShopPanel(products) {
   const embed = new EmbedBuilder()
     .setTitle('🛍️ 商品一覧')
     .setColor(COLORS.brand)
-    .setFooter({ text: '下のメニューから商品を選ぶと、あなた専用の注文チャンネルが作られます' });
+    .setFooter({ text: '商品を選ぶと詳細が表示され、そこから購入できます' });
 
   if (!products.length) {
     embed.setDescription('現在販売中の商品はありません。入荷をお待ちください！');
     return { embeds: [embed], components: [] };
   }
 
-  // 埋め込みのフィールドは最大 25 個
-  embed.setDescription('ご希望の商品を下のメニューから選んでください。');
-  for (const p of products.slice(0, 25)) {
-    embed.addFields({
-      name: `${p.emoji ? `${p.emoji} ` : ''}${truncate(p.name, 200)} — ${yen(p.price)}`,
-      value: `${truncate(p.description, 900) || '—'}\n\`${stockText(p.stock)}\``,
-    });
+  const groups = groupByCategory(products);
+  for (const [category, list] of [...groups].slice(0, 25)) {
+    const lines = list.map(
+      (p) => `${p.emoji ? `${p.emoji} ` : '・'}**${truncate(p.name, 60)}** — ${yen(p.price)}${inStock(p) ? '' : ' ~~売り切れ~~'}`,
+    );
+    let value = '';
+    for (const line of lines) {
+      if (value.length + line.length + 20 > 1024) {
+        value += '\n…ほか';
+        break;
+      }
+      value += (value ? '\n' : '') + line;
+    }
+    embed.addFields({ name: groups.size > 1 ? `📁 ${truncate(category, 200)}` : '​', value });
   }
 
-  const available = products.filter(inStock).slice(0, 25);
+  const available = products.filter(inStock);
   if (!available.length) {
     embed.setDescription('ただいま全商品が売り切れです。入荷をお待ちください！');
     return { embeds: [embed], components: [] };
   }
 
+  let menu;
+  if (available.length <= 25) {
+    embed.setDescription('下のメニューから気になる商品を選んでください。');
+    menu = new StringSelectMenuBuilder()
+      .setCustomId('shop:select')
+      .setPlaceholder('🛒 商品を選ぶ')
+      .addOptions(available.map((p) => productOption(p, groups.size > 1)));
+  } else {
+    embed.setDescription('まず下のメニューでカテゴリを選んでください。');
+    const cats = [...groupByCategory(available)].slice(0, 25);
+    menu = new StringSelectMenuBuilder()
+      .setCustomId('shop:cat')
+      .setPlaceholder('📁 カテゴリを選ぶ')
+      .addOptions(
+        cats.map(([c, list]) => ({
+          label: truncate(c, 100),
+          value: truncate(c, 100),
+          description: `${list.length} 商品`,
+        })),
+      );
+  }
+  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(menu)] };
+}
+
+/** カテゴリ内の商品メニュー (本人だけに表示) */
+function buildCategoryMenu(products, category) {
+  const list = products.filter((p) => inStock(p) && truncate(categoryOf(p), 100) === category).slice(0, 25);
+  if (!list.length) return { content: 'このカテゴリの商品は現在売り切れです。', embeds: [], components: [] };
   const menu = new StringSelectMenuBuilder()
     .setCustomId('shop:select')
-    .setPlaceholder('🛒 購入する商品を選択')
-    .addOptions(
-      available.map((p) => {
-        const opt = {
-          label: truncate(p.name, 100),
-          value: p.id,
-          description: truncate(`${yen(p.price)} / ${stockText(p.stock)}`, 100),
-        };
-        if (p.emoji) opt.emoji = parseEmoji(p.emoji);
-        return opt;
-      }),
+    .setPlaceholder(`🛒 ${truncate(category, 80)} の商品を選ぶ`)
+    .addOptions(list.map((p) => productOption(p, false)));
+  return { content: `📁 **${category}**`, embeds: [], components: [new ActionRowBuilder().addComponents(menu)] };
+}
+
+/** 商品の詳細カード + 購入ボタン (本人だけに表示) */
+function buildProductCard(p) {
+  const embed = new EmbedBuilder()
+    .setTitle(`${p.emoji ? `${p.emoji} ` : ''}${truncate(p.name, 200)}`)
+    .setColor(COLORS.brand)
+    .setDescription(truncate(p.description, 4000) || '—')
+    .addFields(
+      { name: '価格', value: yen(p.price), inline: true },
+      { name: '在庫', value: stockText(p.stock), inline: true },
+      { name: 'カテゴリ', value: categoryOf(p), inline: true },
     );
-  return { embeds: [embed], components: [new ActionRowBuilder().addComponents(menu)] };
+  if (Array.isArray(p.codes) || (p.delivery && p.autoDeliver !== false)) {
+    embed.addFields({ name: '受け取り', value: '⚡ お支払い確認後すぐに自動でお渡しします' });
+  }
+  if (p.imageUrl) embed.setImage(p.imageUrl);
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`shop:buy:${p.id}`)
+      .setLabel(inStock(p) ? '購入する' : '売り切れ')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('🛒')
+      .setDisabled(!inStock(p)),
+  );
+  return { content: '', embeds: [embed], components: [row] };
 }
 
 function buildServicePanel() {
@@ -107,4 +187,12 @@ async function refreshShopPanel(guild, store) {
   }
 }
 
-module.exports = { buildShopPanel, buildServicePanel, buildVerifyPanel, refreshShopPanel, inStock };
+module.exports = {
+  buildShopPanel,
+  buildCategoryMenu,
+  buildProductCard,
+  buildServicePanel,
+  buildVerifyPanel,
+  refreshShopPanel,
+  inStock,
+};
