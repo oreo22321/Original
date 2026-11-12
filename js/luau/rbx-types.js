@@ -506,6 +506,8 @@ const makeRay = defineType('Ray', {
   tostring: r => `{${r.o.luaToString()}}, {${r.d.luaToString()}}`,
 })
 const makeRegion3 = simple('Region3', ['CFrame', 'Size'])
+// workspace:Raycast の結果 (グローバルからは作れない)
+export const makeRaycastResult = simple('RaycastResult', ['Instance', 'Position', 'Normal', 'Material', 'Distance'], o => `RaycastResult{${o.Instance ? fromBytes(String(o.Instance.name)) : 'nil'} @ ${o.Position.luaToString()}; ${o.Normal.luaToString()}; ${o.Material.name}}`)
 const makeV3i16 = simple('Vector3int16', ['X', 'Y', 'Z'])
 const makeV2i16 = simple('Vector2int16', ['X', 'Y'])
 const makePhys = simple('PhysicalProperties', ['Density', 'Friction', 'Elasticity', 'FrictionWeight', 'ElasticityWeight'])

@@ -119,10 +119,10 @@ eq('type }', type('local t = {\n    a = 1,\n    |', '}'), 'local t = {\n    a = 
 {
   const messy = 'local M = {}\n   function M.go(p)\nlocal v = if p then 1 else 2\n  for i = 1, v do\n print(i)\n      end\nev:Connect(function(x)\nif x then\nreturn {\na = 1,\nb = { 2 },\n}\nelse\nreturn nil\nend\nend)\nlocal s = [[\n  keep\n    this]]\nrepeat\nv -= 1\nuntil v < 0\nend\nreturn M'
   const want = 'local M = {}\nfunction M.go(p)\n    local v = if p then 1 else 2\n    for i = 1, v do\n        print(i)\n    end\n    ev:Connect(function(x)\n        if x then\n            return {\n                a = 1,\n                b = { 2 },\n            }\n        else\n            return nil\n        end\n    end)\n    local s = [[\n  keep\n    this]]\n    repeat\n        v -= 1\n    until v < 0\nend\nreturn M'
-  eq('format', formatLuau(messy, '    '), want)
-  eq('format idempotent', formatLuau(want, '    '), want)
-  eq('format broken code does not throw', formatLuau('if x then\nlocal s = "a\nend', '\t'), 'if x then\n\tlocal s = "a\nend')
-  eq('format else after if-expr', formatLuau('if c then\nx = if a then 1 else 2\nelse if d then\ny()\nend\nend', ' '), 'if c then\n x = if a then 1 else 2\nelse if d then\n y()\nend\nend')
+  eq('format', formatLuau(messy, '    ', { finalNewline: false }), want)
+  eq('format idempotent', formatLuau(want, '    ', { finalNewline: false }), want)
+  eq('format broken code does not throw', formatLuau('if x then\nlocal s = "a\nend', '\t', { finalNewline: false }), 'if x then\n\tlocal s = "a\nend')
+  eq('format else after if-expr', formatLuau('if c then\nx = if a then 1 else 2\nelse if d then\ny()\nend\nend', ' ', { finalNewline: false }), 'if c then\n x = if a then 1 else 2\nelse if d then\n y()\nend\nend')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -111,7 +111,10 @@ export class GuiStage {
       h('span', { class: 'g-tb-btn' }, icon('menu', 16)),
       h('span', { class: 'g-tb-btn' }, icon('chat', 16)))
     this.fx = h('div', { class: 'g-fx' })
-    this.stage = h('div', { class: 'g-stage', tabindex: '0', 'aria-label': 'ゲーム画面' }, this.topbar, this.layer, this.fx)
+    // Drawing (エグゼキューターの描画 API) は GUI の上に重ねて描く
+    this.draw = h('canvas', { class: 'g-draw', 'aria-hidden': 'true' })
+    this.drawList = []
+    this.stage = h('div', { class: 'g-stage', tabindex: '0', 'aria-label': 'ゲーム画面' }, this.topbar, this.layer, this.draw, this.fx)
     this.empty = h('div', { class: 'g-empty' }, icon('layers', 22), h('div', null, 'GUI はまだありません'), h('div', { class: 'g-empty-sub' }, 'ScreenGui を PlayerGui や gethui() に入れると、ここに表示されます'))
     this.frame = h('div', { class: 'g-frame' }, this.stage, this.empty)
     this.setScreen(screen)
@@ -126,13 +129,66 @@ export class GuiStage {
     this.stage.style.width = sc.w + 'px'
     this.stage.style.height = sc.h + 'px'
     this.fit()
+    this.paintDrawings()
   }
 
   reset() {
     this.nodes.clear()
     this.layer.textContent = ''
     this.closeText()
+    this.drawList = []
+    this.paintDrawings()
     this.frame.classList.remove('has-gui')
+  }
+
+  // ---- Drawing ----
+  setDrawings(list) {
+    this.drawList = list || []
+    this.paintDrawings()
+    this.frame.classList.toggle('has-gui', this.nodes.size > 0 || this.drawList.length > 0)
+  }
+  paintDrawings() {
+    const cv = this.draw
+    const list = this.drawList
+    if (!list.length) { if (cv.width) { cv.width = 0; cv.height = 0 } return }
+    const dpr = Math.min(2, (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1)
+    if (cv.width !== Math.round(this.w * dpr) || cv.height !== Math.round(this.h * dpr)) { cv.width = Math.round(this.w * dpr); cv.height = Math.round(this.h * dpr) }
+    const g = cv.getContext('2d')
+    if (!g) return
+    g.setTransform(dpr, 0, 0, dpr, 0, 0)
+    g.clearRect(0, 0, this.w, this.h)
+    const col = c => (c ? `rgb(${c.map(v => Math.round(Math.max(0, Math.min(1, v)) * 255)).join(',')})` : '#fff')
+    const DRAW_FONT = ['system-ui,sans-serif', 'Arial,sans-serif', '"Segoe UI",Roboto,sans-serif', 'ui-monospace,Menlo,monospace']
+    for (const d of [...list].sort((a, b) => (a.ZIndex || 0) - (b.ZIndex || 0))) {
+      g.globalAlpha = Math.max(0, Math.min(1, d.Transparency === undefined ? 1 : d.Transparency))
+      g.strokeStyle = g.fillStyle = col(d.Color)
+      g.lineWidth = d.Thickness || 1
+      g.lineJoin = 'round'
+      const fillOrStroke = () => (d.Filled ? g.fill() : g.stroke())
+      if (d.kind === 'Line' && d.From && d.To) { g.beginPath(); g.moveTo(d.From[0], d.From[1]); g.lineTo(d.To[0], d.To[1]); g.stroke() }
+      else if (d.kind === 'Circle' && d.Position) {
+        const n = Math.max(3, Math.min(128, d.NumSides || 64)), r = Math.max(0, d.Radius || 0)
+        g.beginPath()
+        for (let i = 0; i <= n; i++) { const a = (i / n) * Math.PI * 2; const x = d.Position[0] + Math.cos(a) * r, y = d.Position[1] + Math.sin(a) * r; i ? g.lineTo(x, y) : g.moveTo(x, y) }
+        fillOrStroke()
+      } else if (d.kind === 'Square' && d.Position && d.Size) { d.Filled ? g.fillRect(d.Position[0], d.Position[1], d.Size[0], d.Size[1]) : g.strokeRect(d.Position[0], d.Position[1], d.Size[0], d.Size[1]) }
+      else if (d.kind === 'Text' && d.Position) {
+        const size = d.Size || 16
+        g.font = `${size}px ${DRAW_FONT[d.Font | 0] || DRAW_FONT[0]}`
+        g.textAlign = d.Center ? 'center' : 'left'
+        g.textBaseline = 'top'
+        const lines = String(d.Text || '').split('\n')
+        lines.forEach((t, i) => {
+          if (d.Outline) { g.lineWidth = 2; g.strokeStyle = col(d.OutlineColor || [0, 0, 0]); g.strokeText(t, d.Position[0], d.Position[1] + i * size) }
+          g.fillText(t, d.Position[0], d.Position[1] + i * size)
+        })
+      } else if ((d.kind === 'Triangle' || d.kind === 'Quad') && d.PointA && d.PointB && d.PointC) {
+        g.beginPath(); g.moveTo(d.PointA[0], d.PointA[1]); g.lineTo(d.PointB[0], d.PointB[1]); g.lineTo(d.PointC[0], d.PointC[1]); if (d.PointD) g.lineTo(d.PointD[0], d.PointD[1]); g.closePath(); fillOrStroke()
+      } else if (d.kind === 'Image' && d.Position && d.Size) {
+        g.setLineDash([4, 3]); g.strokeStyle = 'rgba(255,255,255,.5)'; g.strokeRect(d.Position[0], d.Position[1], d.Size[0], d.Size[1]); g.setLineDash([])
+      }
+    }
+    g.globalAlpha = 1
   }
 
   // ---- 差分の反映 ----
@@ -163,7 +219,7 @@ export class GuiStage {
       }
       while (ref) { const next = ref.nextSibling; if (!this.nodes.has(+ref.dataset.id)) ref.remove(); ref = next }
     }
-    this.frame.classList.toggle('has-gui', this.nodes.size > 0)
+    this.frame.classList.toggle('has-gui', this.nodes.size > 0 || this.drawList.length > 0)
   }
 
   update(n, p) {

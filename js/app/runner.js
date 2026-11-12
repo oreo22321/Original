@@ -410,6 +410,12 @@ export class Runner {
         this.game.gui = this.stage.nodes.size > 0
         this.onGui()
         break
+      case 'drawings':
+        // Drawing (エグゼキューター) をゲーム画面に重ねて描く
+        this.stage.setDrawings(m.list)
+        this.game.drawings = m.list
+        if (m.list.length) { this.game.gui = true; this.onGui() }
+        break
       case 'guiAvail':
         // ゲーム画面が隠れている間に GUI ができた
         this.game.gui = true
@@ -450,7 +456,8 @@ export class Runner {
 
   applySnapshot(m) {
     if (m.gui) this.stage.apply(m.gui)
-    Object.assign(this.game, { tree: m.tree, gui: this.stage.nodes.size > 0, interact: m.interact, drawings: m.drawings })
+    if (m.drawings !== undefined) this.stage.setDrawings(m.drawings || [])
+    Object.assign(this.game, { tree: m.tree, gui: this.stage.nodes.size > 0 || this.stage.drawList.length > 0, interact: m.interact, drawings: m.drawings })
   }
 
   onGui(force) {
@@ -649,7 +656,6 @@ export class Runner {
       }
       el.append(box)
     }
-    if (g.drawings && g.drawings.length) el.append(this.drawingPreview(g.drawings))
     if (g.tree) {
       el.append(h('div', { class: 'game-title tree-title' }, 'オブジェクト'))
       el.append(this.treeNode(g.tree, 0, true))
@@ -674,27 +680,6 @@ export class Runner {
     return box
   }
 
-  drawingPreview(list) {
-    const W = 1920, H = 1080
-    const canvas = h('canvas', { width: W, height: H, class: 'draw-canvas' })
-    const g = canvas.getContext('2d')
-    g.fillStyle = '#1b2433'
-    g.fillRect(0, 0, W, H)
-    const col = c => c ? `rgb(${c.map(v => Math.round(v * 255)).join(',')})` : '#fff'
-    for (const d of [...list].sort((a, b) => (a.ZIndex || 0) - (b.ZIndex || 0))) {
-      g.globalAlpha = d.Transparency ?? 1
-      g.strokeStyle = g.fillStyle = col(d.Color)
-      g.lineWidth = d.Thickness || 1
-      if (d.kind === 'Line' && d.From && d.To) { g.beginPath(); g.moveTo(...d.From); g.lineTo(...d.To); g.stroke() }
-      else if (d.kind === 'Circle' && d.Position) { g.beginPath(); g.arc(d.Position[0], d.Position[1], d.Radius || 10, 0, Math.PI * 2); d.Filled ? g.fill() : g.stroke() }
-      else if (d.kind === 'Square' && d.Position && d.Size) { d.Filled ? g.fillRect(...d.Position, ...d.Size) : g.strokeRect(...d.Position, ...d.Size) }
-      else if (d.kind === 'Text' && d.Position) { g.font = `${d.Size || 16}px sans-serif`; g.textAlign = d.Center ? 'center' : 'left'; g.fillText(d.Text || '', d.Position[0], d.Position[1] + (d.Size || 16)) }
-      else if ((d.kind === 'Triangle' || d.kind === 'Quad') && d.PointA) {
-        g.beginPath(); g.moveTo(...d.PointA); g.lineTo(...d.PointB); g.lineTo(...d.PointC); if (d.PointD) g.lineTo(...d.PointD); g.closePath(); d.Filled ? g.fill() : g.stroke()
-      }
-    }
-    return h('div', { class: 'draw-wrap' }, h('div', { class: 'game-title' }, `Drawing のプレビュー (${list.length} 個・1920×1080)`), canvas)
-  }
 }
 
 // オブジェクト一覧のアイコン色の分類

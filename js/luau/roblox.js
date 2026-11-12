@@ -2,7 +2,8 @@
 // API ダンプ (data/roblox-api.json) を元に、全クラス・全メンバーを「模擬的に」使えるようにします。
 import { LTable, LFunc, LuaError, Coroutine, rt, native, nativeGen, call, callSync, rtError, tostring, fmtNum, typeOf, T, EMPTY, index } from './runtime.js'
 import { fromBytes, toBytes, LuauSyntaxError } from './lexer.js'
-import { V3, V2, CF, C3, UD, UD2, BC, is, makeEnums, installDatatypes, IDR, nearestBrick } from './rbx-types.js'
+import { V3, V2, CF, C3, UD, UD2, BC, is, makeEnums, installDatatypes, IDR, nearestBrick, makeRaycastResult } from './rbx-types.js'
+import { makeSpatial, project, unproject } from './spatial.js'
 import { loadChunk } from './compiler.js'
 import * as runtime from './runtime.js'
 import { awaitSignal, waitSignal } from './stdlib.js'
@@ -630,7 +631,7 @@ export function installRoblox(G, ctx) {
     },
     methods: {
       GetMass: M('GetMass', A => { const s = A[0].getProp('Size'); return s.x * s.y * s.z * 0.7 }),
-      GetTouchingParts: M('GetTouchingParts', () => new LTable()),
+      GetTouchingParts: M('GetTouchingParts', A => spatial.GetTouchingParts(A)),
       GetConnectedParts: M('GetConnectedParts', () => new LTable()),
       GetRootPart: M('GetRootPart', A => A[0]),
       CanCollideWith: M('CanCollideWith', () => true),
@@ -1232,6 +1233,29 @@ export function installRoblox(G, ctx) {
       NumPlayers: { get: i => i.children.filter(c => c.ClassName === 'Player').length },
     },
   }
+  // マウス: Hit / Target / UnitRay はカメラから画面の点を通るレイで計算
+  const mouseRay = m => {
+    const cam = workspace && workspace.props.get('CurrentCamera')
+    if (!cam) return null
+    return { cam, ...unproject(cam, m.props.get('X') || 0, m.props.get('Y') || 0, 1000, 58) }
+  }
+  const mouseCast = m => {
+    const r = mouseRay(m)
+    if (!r) return null
+    const tf = m.props.get('TargetFilter')
+    const hit = spatial.castRay(r.o, r.d, tf && tf.info ? [tf] : [])
+    return { r, hit }
+  }
+  const MOUSE_IMPL = {
+    props: {
+      Hit: { get: m => { const c = mouseCast(m); if (!c) return m.props.get('Hit'); const p = c.hit ? c.hit.pos : V3(c.r.o.x + c.r.d.x, c.r.o.y + c.r.d.y, c.r.o.z + c.r.d.z); return CF(p.x, p.y, p.z, c.r.cam.getProp('CFrame').r) } },
+      Target: { get: m => { const c = mouseCast(m); return c && c.hit ? c.hit.part : undefined } },
+      UnitRay: { get: m => { const r = mouseRay(m); const o = r ? r.o : V3(0, 10, 20), d = r ? V3(r.d.x / 1000, r.d.y / 1000, r.d.z / 1000) : V3(0, 0, -1); return callSync(index(index(G, 'Ray'), 'new'), [o, d])[0] } },
+      Origin: { get: m => { const cam = workspace && workspace.props.get('CurrentCamera'); return cam ? cam.getProp('CFrame') : m.props.get('Origin') } },
+    },
+  }
+  IMPL.PlayerMouse = MOUSE_IMPL
+  IMPL.Mouse = MOUSE_IMPL
   IMPL.Player = {
     methods: {
       Kick: M('Kick', A => { hooks.output('warn', `[キック] ${A[0].name} がゲームから退出させられました${A[1] ? ': ' + str(A[1]) : ''}`); return EMPTY }),
@@ -1265,19 +1289,23 @@ export function installRoblox(G, ctx) {
     },
     props: { Character: { get: i => i.props.get('Character'), set: (i, v) => i.props.set('Character', v) } },
   }
+  // レイキャスト・範囲内のパーツ (パーツの位置と大きさから計算)
+  const spatial = makeSpatial({ getWorkspace: () => workspace, enums, makeResult: makeRaycastResult })
+  const one = v => (Array.isArray(v) ? v : [v])
+  const SP = name => M(name, A => one(spatial[name](A)))
   IMPL.Workspace = {
     methods: {
-      Raycast: M('Raycast', () => [undefined]),
-      Spherecast: M('Spherecast', () => [undefined]),
-      Blockcast: M('Blockcast', () => [undefined]),
+      Raycast: SP('Raycast'),
+      Spherecast: SP('Spherecast'),
+      Blockcast: SP('Blockcast'),
       Shapecast: M('Shapecast', () => [undefined]),
-      FindPartOnRay: M('FindPartOnRay', A => [undefined, A[1] ? V3(A[1].o.x + A[1].d.x, A[1].o.y + A[1].d.y, A[1].o.z + A[1].d.z) : V3(0, 0, 0)]),
-      FindPartOnRayWithIgnoreList: M('FindPartOnRayWithIgnoreList', A => [undefined, A[1] ? V3(A[1].o.x + A[1].d.x, A[1].o.y + A[1].d.y, A[1].o.z + A[1].d.z) : V3(0, 0, 0)]),
-      FindPartOnRayWithWhitelist: M('FindPartOnRayWithWhitelist', () => [undefined]),
-      GetPartBoundsInBox: M('GetPartBoundsInBox', () => new LTable()),
-      GetPartBoundsInRadius: M('GetPartBoundsInRadius', () => new LTable()),
-      GetPartsInPart: M('GetPartsInPart', () => new LTable()),
-      FindPartsInRegion3: M('FindPartsInRegion3', () => new LTable()),
+      FindPartOnRay: SP('FindPartOnRay'),
+      FindPartOnRayWithIgnoreList: SP('FindPartOnRayWithIgnoreList'),
+      FindPartOnRayWithWhitelist: SP('FindPartOnRayWithWhitelist'),
+      GetPartBoundsInBox: SP('GetPartBoundsInBox'),
+      GetPartBoundsInRadius: SP('GetPartBoundsInRadius'),
+      GetPartsInPart: SP('GetPartsInPart'),
+      FindPartsInRegion3: SP('FindPartsInRegion3'),
       GetServerTimeNow: M('GetServerTimeNow', () => Date.now() / 1000),
       GetRealPhysicsFPS: M('GetRealPhysicsFPS', () => 60),
     },
@@ -1288,10 +1316,11 @@ export function installRoblox(G, ctx) {
   }
   IMPL.Camera = {
     methods: {
-      WorldToScreenPoint: M('WorldToScreenPoint', () => [V3(960, 540, 10), true]),
-      WorldToViewportPoint: M('WorldToViewportPoint', () => [V3(960, 540, 10), true]),
-      ScreenPointToRay: M('ScreenPointToRay', A => callSync(index(index(G, 'Ray'), 'new'), [A[0].getProp('CFrame').luaIndex('Position'), V3(0, 0, -1)])),
-      ViewportPointToRay: M('ViewportPointToRay', A => callSync(index(index(G, 'Ray'), 'new'), [A[0].getProp('CFrame').luaIndex('Position'), V3(0, 0, -1)])),
+      // 3D の位置 → 画面の位置 (カメラの CFrame・視野角・画面の大きさから計算)
+      WorldToScreenPoint: M('WorldToScreenPoint', A => project(A[0], A[1] || V3(0, 0, 0), 58)),
+      WorldToViewportPoint: M('WorldToViewportPoint', A => project(A[0], A[1] || V3(0, 0, 0), 0)),
+      ScreenPointToRay: M('ScreenPointToRay', A => { const r = unproject(A[0], A[1] || 0, A[2] || 0, A[3] || 1, 58); return callSync(index(index(G, 'Ray'), 'new'), [r.o, r.d]) }),
+      ViewportPointToRay: M('ViewportPointToRay', A => { const r = unproject(A[0], A[1] || 0, A[2] || 0, A[3] || 1, 0); return callSync(index(index(G, 'Ray'), 'new'), [r.o, r.d]) }),
       GetPartsObscuringTarget: M('GetPartsObscuringTarget', () => new LTable()),
     },
   }
