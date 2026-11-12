@@ -102,6 +102,12 @@ export class EditorManager {
         else if (!this.fixNoted) { this.fixNoted = true; toast(`全角の記号を半角の ${to.trim() || 'スペース'} に直しました (設定でオフにできます)`, { icon: 'wand', duration: 3500 }) }
       },
       onLensTap: (view, diags, anchor) => this.diagMenu(view, diags, anchor),
+      // 自動整形でファイル全体を整えたとき (何行か変わったら知らせて、元に戻せるように)
+      onAutoFormat: (lines, revert) => {
+        if (this.autoFmtNoted && lines < 8) return
+        this.autoFmtNoted = true
+        toast(`自動で整えました (${lines} 行)`, { icon: 'format', duration: 3200, action: { label: '元に戻す', run: () => { if (!revert()) toast('すでに編集したため元に戻せません', { duration: 2000 }) } } })
+      },
       // デバッガー
       getBreakpoints: () => bpStore.get(doc.path),
       onBreakpoints: list => { bpStore.set(doc.path, list); if (app.runner) app.runner.debug.syncRun() },

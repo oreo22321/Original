@@ -45,6 +45,7 @@ export const DEFAULTS = {
   autoSave: true,
   autoSaveDelay: 600,
   formatOnSave: false,
+  autoFormat: true,    // 入力した行・エラーのないコード全体の見た目を裏で整える
   trimOnSave: true,
   // 実行
   timeLimit: 10,

@@ -139,6 +139,10 @@ code { font-family: var(--editor-font); font-size: .92em; background: var(--pane
 /* ゴーストテキスト・補完 */
 .cm-ghost { pointer-events: auto; white-space: pre; cursor: pointer; }
 .cm-ghost-ai { opacity: .7; }
+/* 自動整形した行: 一瞬だけ色を付けて、何が変わったかを知らせる */
+.cm-fmt-flash { animation: fmt-flash .9s ease-out; }
+@keyframes fmt-flash { 0% { background-color: color-mix(in srgb, var(--accent, #4fc1ff) 22%, transparent); } 100% { background-color: transparent; } }
+@media (prefers-reduced-motion: reduce) { .cm-fmt-flash { animation: none; } }
 .cm-tooltip.cm-tooltip-autocomplete > ul { font-family: var(--editor-font); max-height: min(50vh, 320px); }
 .cm-tooltip.cm-tooltip-autocomplete > ul > li { padding: 3px 10px 3px 4px !important; line-height: 1.5; display: flex; align-items: center; }
 body.touch .cm-tooltip.cm-tooltip-autocomplete > ul > li { padding: 7px 12px 7px 6px !important; font-size: 15px; }

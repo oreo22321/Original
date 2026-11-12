@@ -2,7 +2,7 @@
 // 入力途中の壊れたコードでも止まらないように、専用の寛容な字句解析を使います。
 // ・end の自動入力の判定
 // ・「end が足りない / 余分」なときに、どのブロックが原因かを特定
-const TOKEN_RE = /--\[(=*)\[[\s\S]*?(?:\]\1\]|$)|--[^\n]*|\[(=*)\[[\s\S]*?(?:\]\2\]|$)|"(?:\\[\s\S]|[^"\\\n])*(?:"|(?=\n)|$)|'(?:\\[\s\S]|[^'\\\n])*(?:'|(?=\n)|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)|[A-Za-z_][A-Za-z0-9_]*|\d[\w.]*|\.\.\.|\.\.=?|[=~<>]=|::|->|\/\/=?|[+\-*/%^]=|\S/g
+const TOKEN_RE = /--\[(=*)\[[\s\S]*?(?:\]\1\]|$)|--[^\n]*|\[(=*)\[[\s\S]*?(?:\]\2\]|$)|"(?:\\[\s\S]|[^"\\\n])*(?:"|(?=\n)|$)|'(?:\\[\s\S]|[^'\\\n])*(?:'|(?=\n)|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)|[A-Za-z_][A-Za-z0-9_]*|0[xXbB]\w*|(?:\d[\d_]*(?:\.(?!\.)[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d[\d_]*)?\w*|\.\.\.|\.\.=?|[=~<>]=|::|->|\/\/=?|[+\-*/%^]=|\S/g
 
 const KEYWORDS = new Set(['and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true', 'until', 'while'])
 
@@ -20,7 +20,7 @@ export function lightTokens(text, keepComments = false) {
     if (c === 45 && s.charCodeAt(1) === 45) { if (keepComments) out.push({ t: 'comment', s: m.index, e: m.index + s.length }); continue }
     if (c === 34 || c === 39 || c === 96 || (c === 91 && (s.charCodeAt(1) === 91 || s.charCodeAt(1) === 61) && s.length > 1)) t = 'str'
     else if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95) t = KEYWORDS.has(s) ? s : 'name'
-    else if (c >= 48 && c <= 57) t = 'num'
+    else if ((c >= 48 && c <= 57) || (c === 46 && s.length > 1 && s.charCodeAt(1) >= 48 && s.charCodeAt(1) <= 57)) t = 'num'
     else t = s
     out.push({ t, s: m.index, e: m.index + s.length })
   }
