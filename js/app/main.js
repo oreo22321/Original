@@ -11,6 +11,7 @@ import { createFromTemplate } from './explorer.js'
 import { APP_VERSION } from './settings-ui.js'
 import { showWhatsNew } from './views.js'
 import './palette.js'
+import './code-nav.js'
 import { toast } from './ui.js'
 
 function applyTheme(s) {

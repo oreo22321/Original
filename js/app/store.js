@@ -20,8 +20,11 @@ export const DEFAULTS = {
   lineNumbers: true,
   highlightLine: true,
   autoClose: true,
-  autoEnd: true,
+  autoEnd: true,       // then / do / function() を書いたら end を追加
+  autoEndDelete: true, // if / for / function などを消したら対の end も消す
   indentGuides: true,
+  stickyScroll: true,      // 画面の上に、いま見ている function / if の行を固定表示
+  highlightSymbols: true,  // カーソル位置の変数を同じ変数ごとハイライト
   rainbowBrackets: true,
   colorPicker: true,
   pinchZoom: true,

@@ -65,8 +65,9 @@ export function makeLineInfo(text, tabSize = 4) {
 //   extra: 対応するブロックがない end / until
 // 各トークンには role が付きます:
 //   'open' (ブロック開始) / 'close' (end・until) / 'mid' (文の else・elseif) / 'expr' (if 式の一部)
-export function scanBlocks(text, keepComments = false) {
+export function scanBlocks(text, keepComments = false, opts = null) {
   const tokens = lightTokens(text, keepComments)
+  const strictDo = !!(opts && opts.strictDo)
   const blocks = []
   const stack = []
   const extra = []
@@ -101,7 +102,10 @@ export function scanBlocks(text, keepComments = false) {
       case 'repeat': open('repeat', tok).headerEnd = tok.e; break
       case 'do': {
         const top = topReal()
-        if (top && top.needDo) { top.needDo = false; top.headerEnd = tok.e; popExprs() } else open('do', tok).headerEnd = tok.e
+        if (top && top.needDo) { top.needDo = false; top.headerEnd = tok.e; popExprs() }
+        // strictDo: 同じ行で値の直後にある do は、for / while の見出しが消えた残り (ブロックとして数えない)
+        else if (strictDo && prev && VALUE_END.has(prev.t) && !text.slice(prev.e, tok.s).includes('\n')) tok.role = 'orphan'
+        else open('do', tok).headerEnd = tok.e
         break
       }
       case 'then': {
@@ -156,9 +160,11 @@ export function headerAt(text, pos, tabSize = 4) {
   if (!block) return null
   let atHeader = false
   // elseif ... then や if 式の then は対象外 (headerEnd は最初の then の位置)
-  if (last.t === 'then') atHeader = block.kind === 'if' && block.headerEnd === last.e
+  if (last.t === 'then') atHeader = block.kind === 'if' && last.role !== 'expr'
   else if (last.t === 'do') atHeader = (block.kind === 'while' || block.kind === 'for' || block.kind === 'do') && block.headerEnd === last.e
   else if (last.t === 'repeat') atHeader = block.kind === 'repeat' && block.s === last.s
+  // else / elseif ... then の後ろ (if 文がまだ閉じていなければ end を足す)
+  else if (last.t === 'else' && last.role === 'mid') atHeader = block.kind === 'if'
   else if (block.kind === 'function' && block.headerEnd !== undefined && pos >= block.headerEnd) {
     // function(...) の後ろに戻り値の型注釈だけがある
     const between = text.slice(block.headerEnd, pos).replace(/--.*$/, '')
@@ -166,23 +172,160 @@ export function headerAt(text, pos, tabSize = 4) {
   }
   if (!atHeader) return null
   const closer = block.kind === 'repeat' ? 'until ' : 'end'
-  let needsCloser
-  if (!block.close) needsCloser = true
-  else {
-    const outer = scan.unclosed.filter(b => b.s < block.s)
-    if (!outer.length) needsCloser = false
-    else {
-      // どこかで end が足りない。インデントから「この end は自分のものか」を推定
-      const mine = info.indentAt(block.s)
-      const closeInd = info.indentAt(block.close.s)
-      const closeLine = info.lineOf(block.close.s)
-      if (closeLine === line) needsCloser = false
-      else if (closeInd < mine) needsCloser = true
-      else if (closeInd === mine) needsCloser = info.indentAt(outer[outer.length - 1].s) >= mine
-      else needsCloser = false
+  return { block, closer, needsCloser: needsCloserFor(scan, info, block, line), closedOnLine: !!block.close && info.lineOf(block.close.s) === line }
+}
+
+// ブロックに end を足す必要があるか (閉じていない、または end を外側のブロックに取られている)
+function needsCloserFor(scan, info, block, line) {
+  if (!block.close) return true
+  const outer = scan.unclosed.filter(b => b.s < block.s)
+  if (!outer.length) return false
+  // どこかで end が足りない。インデントから「この end は自分のものか」を推定
+  const mine = info.indentAt(block.s)
+  const closeInd = info.indentAt(block.close.s)
+  const closeLine = info.lineOf(block.close.s)
+  if (closeLine === line) return false
+  if (closeInd < mine) return true
+  if (closeInd === mine) return info.indentAt(outer[outer.length - 1].s) >= mine
+  return false
+}
+
+// ============================================================
+// 入力に合わせた end の自動挿入・自動削除
+// ============================================================
+const STRICT = { strictDo: true }
+const OPENER_WORD = /(?:^|[^\w])(if|for|while|function|repeat|do)(?![\w])/
+const VALUE_END = new Set(['name', 'num', 'str', ')', ']', '}', 'true', 'false', 'nil', '...'])
+
+// 見出し (if ... then / for ... do / while ... do / function(...)) を書き終えた直後なら、
+// 追加する end の情報を返します: { at, text, block }  (at から行末までを text に置き換え)
+//   ・then / do はカーソルがその直後 (行の残りは空かコメント)
+//   ・function はカーソルが引数リストの中か直後 (行の残りは閉じ括弧だけ)
+export function completedHeader(text, pos, tabSize = 4) {
+  const lineStart = text.lastIndexOf('\n', pos - 1) + 1
+  let lineEnd = text.indexOf('\n', pos)
+  if (lineEnd < 0) lineEnd = text.length
+  const before = text.slice(lineStart, pos)
+  const rest = text.slice(pos, lineEnd)
+  const kw = /(?:^|[^\w])(then|do)$/.exec(before)
+  if (!kw && !/\bfunction\b/.test(before)) return null
+  if (kw && !/^\s*(--.*)?$/.test(rest)) return null
+  if (text.length > 400000) return null
+  const scan = scanBlocks(text)
+  const info = makeLineInfo(text, tabSize)
+  const line = info.lineOf(pos)
+  let block = null, cut = lineEnd
+  if (kw) {
+    let i = scan.tokens.findIndex(t => t.e === pos)
+    if (i < 1) return null
+    const tok = scan.tokens[i], prev = scan.tokens[i - 1]
+    // 条件が書きかけ (if then / while x and do など) なら入れない
+    if (!VALUE_END.has(prev.t)) return null
+    const b = innermostAt(scan.blocks, pos)
+    if (!b || info.lineOf(b.s) !== line) return null
+    if (tok.t === 'then' && !(b.kind === 'if' && b.headerEnd === tok.e)) return null
+    if (tok.t === 'do' && !((b.kind === 'while' || b.kind === 'for') && b.headerEnd === tok.e)) return null
+    block = b
+  } else {
+    // カーソルを含む function の見出し
+    for (const b of scan.blocks) {
+      if (b.s >= pos) break
+      if (b.kind !== 'function' || b.headerEnd === undefined || info.lineOf(b.s) !== line) continue
+      const open = scan.tokens.find(t => t.s >= b.e && t.t === '(')
+      if (open && open.s < pos && pos <= b.headerEnd) block = b
+    }
+    if (!block) return null
+    const after = text.slice(block.headerEnd, lineEnd)
+    // 戻り値の型注釈のあとに閉じ括弧だけが続く
+    const m = /^(\s*(?::\s*[\w.<>, ?|&{}]+?)?)\s*([)\]},;\s]*)$/.exec(after)
+    if (!m || /^\s*:\s*$/.test(m[1])) return null
+    cut = block.headerEnd + m[1].length
+  }
+  if (!needsCloserFor(scan, info, block, line)) return null
+  const trailing = text.slice(cut, lineEnd).trim()
+  // ブロックの中身にあたる行 (見出しより深いインデントが続く範囲) の後ろに置く
+  const ind = info.indentOfLine(line)
+  let last = line
+  for (let ln = line + 1; ln < info.starts.length; ln++) {
+    if (info.isBlank(ln)) continue
+    if (info.indentOfLine(ln) <= ind) break
+    last = ln
+  }
+  const lead = /^[ \t]*/.exec(text.slice(info.starts[line], lineEnd))[0]
+  const insert = '\n' + lead + 'end' + trailing
+  if (last === line) return { changes: [{ from: cut, to: lineEnd, insert }], at: cut, offset: 1 + lead.length, block }
+  // 既存の行を包む: 本体 (見出しより深いインデントの行) の後ろに end を置く
+  const at = info.lineEnd(last)
+  const changes = [{ from: at, insert }]
+  if (trailing) changes.unshift({ from: cut, to: lineEnd })
+  return { changes, at, offset: 1 + lead.length, block }
+}
+
+// 削除でブロックの開始語 (if / for / while / function / repeat / do) が消えたとき、
+// それと対になっていた end (until) の削除範囲を返します (新しい文書での位置)。
+//   changes: 旧→新の ChangeSet (iterChanges と mapPos を持つもの)
+export function orphanedClosers(oldText, newText, changes) {
+  const removed = []
+  changes.iterChanges((fromA, toA) => { if (toA > fromA) removed.push([fromA, toA]) })
+  if (!removed.length) return []
+  // 速い判定: 消した範囲 (の前後の単語を含む) にブロックの開始語があるか
+  const isW = c => /[\w]/.test(c || '')
+  const hit = removed.some(([a, b]) => {
+    while (a > 0 && isW(oldText[a - 1])) a--
+    while (b < oldText.length && isW(oldText[b])) b++
+    return OPENER_WORD.test(oldText.slice(a, b))
+  })
+  if (!hit || oldText.length > 400000) return []
+  const touched = (s, e) => removed.some(([a, b]) => a < e && b > s)
+  const old = scanBlocks(oldText, false, STRICT)
+  const cands = old.blocks.filter(b => b.close && touched(b.s, b.e) && !touched(b.close.s, b.close.e))
+  if (!cands.length) return []
+  const now = scanBlocks(newText, false, STRICT)
+  if (now.extra.length - old.extra.length !== cands.length) return []
+  const brackets = strayClosers(now.tokens)
+  const out = []
+  for (const b of cands) {
+    const s = changes.mapPos(b.close.s, 1)
+    const tok = now.tokens.find(t => t.s === s)
+    if (!tok || tok.t !== b.close.t) return []
+    const ls = newText.lastIndexOf('\n', s - 1) + 1
+    let le = newText.indexOf('\n', s)
+    if (le < 0) le = newText.length
+    const lead = newText.slice(ls, s)
+    let tail = newText.slice(tok.e, le)
+    if (b.close.t === 'until') tail = ''
+    // end の後ろが、対応する開き括弧を失った閉じ括弧だけ ( end) など ) ならまとめて消す
+    const tailToks = now.tokens.filter(t => t.s >= tok.e && t.s < le)
+    const strayTail = tailToks.length > 0 && tailToks.every(t => brackets.has(t.s) || t.t === ',' || t.t === ';')
+    if (!lead.trim() && (!tail.trim() || /^\s*--/.test(tail) || strayTail)) {
+      // 行ごと消す (前の改行も含めて、空行を残さない)
+      out.push(ls > 0 ? { from: ls - 1, to: le } : { from: 0, to: Math.min(newText.length, le + 1) })
+    } else {
+      const to = b.close.t === 'until' ? le : tok.e
+      out.push({ from: lead.trim() && lead.endsWith(' ') ? tok.s - 1 : tok.s, to })
     }
   }
-  return { block, closer, needsCloser, closedOnLine: !!block.close && info.lineOf(block.close.s) === line }
+  // 消した結果、end の過不足が元より悪くならないことを確かめる
+  const sorted = out.sort((a, b) => b.from - a.from)
+  let result = newText
+  for (const r of sorted) result = result.slice(0, r.from) + result.slice(r.to)
+  const check = scanBlocks(result, false, STRICT)
+  if (check.extra.length > old.extra.length || check.unclosed.length > old.unclosed.length) return []
+  return sorted.reverse()
+}
+
+// 対応する開き括弧がない閉じ括弧の位置
+function strayClosers(tokens) {
+  const stack = [], stray = new Set()
+  const pair = { ')': '(', ']': '[', '}': '{' }
+  for (const t of tokens) {
+    if (t.t === '(' || t.t === '[' || t.t === '{') stack.push(t.t)
+    else if (pair[t.t]) {
+      if (stack.length && stack[stack.length - 1] === pair[t.t]) stack.pop()
+      else stray.add(t.s)
+    }
+  }
+  return stray
 }
 
 // end の過不足を診断します。

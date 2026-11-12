@@ -92,6 +92,15 @@ const P = {
   device: '<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M10.5 18h3"/>',
   braces: '<path d="M8 4c-2 0-3 1-3 3v2c0 1.5-1 2.5-2 3 1 .500 2 1.5 2 3v2c0 2 1 3 3 3M16 4c2 0 3 1 3 3v2c0 1.5 1 2.5 2 3-1 .500-2 1.5-2 3v2c0 2-1 3-3 3"/>',
   text: '<path d="M5 6h14M5 10h14M5 14h9M5 18h11"/>',
+  pause: '<rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/>',
+  debugContinue: '<path d="M5 5v14" stroke-width="2.4"/><path d="M9 5.5v13l10-6.5z" fill="currentColor" stroke="none"/>',
+  stepOver: '<path d="M4 12a8 8 0 0 1 15.2-3.5"/><path d="M20 4v5h-5"/><circle cx="12" cy="18" r="2.2" fill="currentColor" stroke="none"/>',
+  stepInto: '<path d="M12 3v10M7.5 8.5 12 13l4.5-4.5"/><circle cx="12" cy="19" r="2.2" fill="currentColor" stroke="none"/>',
+  stepOut: '<path d="M12 14V4M7.5 8.5 12 4l4.5 4.5"/><circle cx="12" cy="19" r="2.2" fill="currentColor" stroke="none"/>',
+  target: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  refs: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5 10.5 16M16 7.5 13.5 16M8.5 6h7"/>',
+  rename: '<path d="M4 7V5h10v2M9 5v14M7 19h4"/><path d="M15 12h5M17.5 9.5v7"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
   gamepad: '<rect x="2.5" y="7" width="19" height="11" rx="5.5"/><path d="M7.5 11v3M6 12.500h3M15 11.500h.01M17.5 13.500h.01"/>',
 }
 export function icon(name, size = 20, cls = '') {

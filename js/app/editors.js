@@ -10,6 +10,7 @@ import { app, runCommand, persistSession, command } from './app.js'
 import { getSettings, setSettings, getMode, emit, on } from './store.js'
 import { h, icon, fileIcon, toast, menu, onLongPress, confirmDialog, copyText, modal } from './ui.js'
 import { renderMarkdown } from './markdown.js'
+import { bpStore } from './debug-panel.js'
 
 const MAX_WAIT = 4000 // 打ち続けていても、この間隔では必ず保存する
 
@@ -82,6 +83,7 @@ export class EditorManager {
         closeTab: () => this.close(this.active),
         outline: () => runCommand('outline'),
         quickFix: () => this.quickFix(),
+        command: (id, ...a) => runCommand(id, ...a),
       },
       onUpdate: u => this.onUpdate(doc, u),
       aiProvider: this.aiProvider || (this.aiProvider = makeAiProvider(getSettings, () => ({ lang: this.activeDoc() ? this.activeDoc().lang : 'text', name: this.active || '', mode: getMode() }))),
@@ -100,6 +102,12 @@ export class EditorManager {
         else if (!this.fixNoted) { this.fixNoted = true; toast(`全角の記号を半角の ${to.trim() || 'スペース'} に直しました (設定でオフにできます)`, { icon: 'wand', duration: 3500 }) }
       },
       onLensTap: (view, diags, anchor) => this.diagMenu(view, diags, anchor),
+      // デバッガー
+      getBreakpoints: () => bpStore.get(doc.path),
+      onBreakpoints: list => { bpStore.set(doc.path, list); if (app.runner) app.runner.debug.syncRun() },
+      onBreakpointEdit: (line, anchor) => app.runner && app.runner.debug.editBp(doc.path, line, anchor),
+      debugValue: expr => (app.runner ? app.runner.debugValue(expr) : null),
+      isPaused: () => !!(app.runner && app.runner.debug.paused),
     }
   }
 

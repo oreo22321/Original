@@ -7,7 +7,7 @@ import * as vfs from './vfs.js'
 import { apiVersion } from '../editor/apidb.js'
 import { app, command, setProjectKind } from './app.js'
 
-export const APP_VERSION = '5.0.0'
+export const APP_VERSION = '6.0.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -18,8 +18,8 @@ const FONTS = [
 ]
 
 const PRESETS = [
-  { icon: 'sparkle', name: 'おまかせ (おすすめ)', desc: '補完・誤字の自動修正・エラーの解説をすべてオン', patch: { autocomplete: true, inlineSuggest: true, signatureHelp: true, lint: true, lintUndefined: true, lintUnused: true, lintTypos: true, errorLens: true, fixInput: true, autoCorrect: true, autoEnd: true, autoClose: true, autoSave: true, explainErrors: true } },
-  { icon: 'edit', name: '自分で書きたい', desc: '自動修正とインライン候補をオフ。チェックだけ残す', patch: { inlineSuggest: false, autoCorrect: false, fixInput: false, autoEnd: false, lint: true, errorLens: true } },
+  { icon: 'sparkle', name: 'おまかせ (おすすめ)', desc: '補完・誤字の自動修正・エラーの解説をすべてオン', patch: { autocomplete: true, inlineSuggest: true, signatureHelp: true, lint: true, lintUndefined: true, lintUnused: true, lintTypos: true, errorLens: true, fixInput: true, autoCorrect: true, autoEnd: true, autoEndDelete: true, autoClose: true, autoSave: true, explainErrors: true } },
+  { icon: 'edit', name: '自分で書きたい', desc: '自動修正とインライン候補をオフ。チェックだけ残す', patch: { inlineSuggest: false, autoCorrect: false, fixInput: false, autoEnd: false, autoEndDelete: false, lint: true, errorLens: true } },
   { icon: 'eye', name: '大きな文字', desc: '見やすさ重視', patch: { fontSize: 18, lineHeight: 1.7, wordWrap: true } },
   { icon: 'history', name: '初期設定に戻す', desc: 'すべての設定を元に戻します', reset: true },
 ]
@@ -34,6 +34,8 @@ const SCHEMA = [
     { key: 'lineNumbers', type: 'bool', label: '行番号を表示' },
     { key: 'highlightLine', type: 'bool', label: 'カーソルのある行を強調' },
     { key: 'indentGuides', type: 'bool', label: 'インデントガイド (縦線)' },
+    { key: 'stickyScroll', type: 'bool', label: 'スティッキースクロール', desc: '長いコードをスクロールしても、いま見ている function / if / for の行を画面の上に固定表示します (タップでその行へ)' },
+    { key: 'highlightSymbols', type: 'bool', label: '同じ変数をハイライト', desc: 'カーソルを置いた変数を、使われている場所すべてで強調します (同じ名前の別の変数は除く)' },
     { key: 'rainbowBrackets', type: 'bool', label: '括弧を色分け' },
     { key: 'layout', type: 'select', label: '画面レイアウト', options: [['auto', '自動 (画面の幅で切り替え)'], ['mobile', 'スマホ向け'], ['desktop', 'タブレット / PC 向け']] },
   ] },
@@ -41,7 +43,8 @@ const SCHEMA = [
     { key: 'autocomplete', type: 'bool', label: '入力中に補完候補を表示' },
     { key: 'inlineSuggest', type: 'bool', label: 'インライン候補 (薄い文字の続き)', desc: 'Tab (スマホは ✓) で確定。イベントの引数や、似た行の続きを予測します' },
     { key: 'signatureHelp', type: 'bool', label: '関数の引数ヒント' },
-    { key: 'autoEnd', type: 'bool', label: 'end を自動で入力', desc: 'then / do / function の後で改行すると end を追加します' },
+    { key: 'autoEnd', type: 'bool', label: 'end を自動で入力', desc: 'if ... then / for ... do / function() を書いた時点で、次の行に end を追加します。自分で end を書いても二重になりません' },
+    { key: 'autoEndDelete', type: 'bool', label: 'ブロックを消したら end も消す', desc: 'if / for / while / function を消すと、対になっていた end も一緒に消します (⌘Z 1 回で元に戻せます)' },
     { key: 'autoClose', type: 'bool', label: '括弧・引用符を自動で閉じる' },
     { key: 'hover', type: 'bool', label: 'マウスを乗せたときの説明 (iPad / PC)' },
     { key: 'colorPicker', type: 'bool', label: 'Color3 の色見本とカラーピッカー' },

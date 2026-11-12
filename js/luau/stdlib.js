@@ -23,6 +23,8 @@ export class Scheduler {
     this.frameTimer = null
     this.stopped = false
     this.running = 0
+    this.paused = null      // デバッガーで一時停止中: { co, sig }
+    this.held = []          // 一時停止中に動こうとしたスレッド (再開後に実行)
   }
   now() { return (performance.now() - this.t0) / 1000 }
 
@@ -49,6 +51,8 @@ export class Scheduler {
     if (r.done) { co.status = 'dead'; return [true, ...r.value] }
     co.status = 'suspended'
     const sig = r.value
+    // デバッガーの一時停止は、呼び出し元へそのまま伝える
+    if (sig && sig.kind === 'dbg') { const out = [true]; out.dbg = sig; return out }
     if (sig && sig.kind === 'park') {
       this.park(co, sig.setup, sig.counts !== false)
       return [true]
@@ -59,6 +63,7 @@ export class Scheduler {
   // 新しいスレッドで実行 (エラーは出力へ)
   run(co, args) {
     if (this.stopped) return
+    if (this.paused) { this.held.push([co, args]); return }
     const top = rt.current === null
     if (top) rt.sliceStart = Date.now()
     this.running++
@@ -68,11 +73,33 @@ export class Scheduler {
     } finally {
       this.running--
     }
+    if (r.dbg) {
+      if (r.dbg.follow || this.paused) this.held.push([co, EMPTY])
+      else {
+        this.paused = { co, sig: r.dbg }
+        if (rt.debugger) rt.debugger.onPaused(co, r.dbg)
+      }
+      return
+    }
     if (r[0] === false) this.hooks.onError(r[2] || new LuaError(r[1], 0), co)
     if (top) {
       this.flushDeferred()
       this.checkIdle()
     }
+  }
+
+  // デバッガー: 一時停止から再開
+  continue() {
+    const p = this.paused
+    if (!p || this.stopped) return
+    this.paused = null
+    this.run(p.co, EMPTY)
+    // 止まっている間に待たせていたスレッドを順に動かす (途中でまた止まったら残りは次の再開で)
+    while (this.held.length && !this.paused && !this.stopped) {
+      const [co, args] = this.held.shift()
+      if (co.status === 'suspended' && !co.cancelled) this.run(co, args)
+    }
+    if (!this.paused) { this.flushDeferred(); this.checkIdle() }
   }
 
   spawn(f, args) {
@@ -134,6 +161,7 @@ export class Scheduler {
         const now = performance.now()
         const dt = (now - last) / 1000
         last = now
+        if (this.paused) { last = now; return }
         for (const s of [...this.frameSignals]) {
           if (!s.hasConnections()) { this.frameSignals.delete(s); continue }
           s.fireFrame(dt)
@@ -144,7 +172,7 @@ export class Scheduler {
   }
 
   isIdle() {
-    return this.pending === 0 && this.deferred.length === 0 && !this.frameTimer && this.running === 0
+    return this.pending === 0 && this.deferred.length === 0 && !this.frameTimer && this.running === 0 && !this.paused && !this.held.length
   }
 
   checkIdle() {
@@ -400,8 +428,11 @@ export function createStdlib(env, hooks, sched) {
     if (!(A[0] instanceof Coroutine)) throw argError(1, fname, `thread expected, got ${A.length ? type(A[0]) : 'no value'}`)
     return A[0]
   }
-  def(co, 'resume', A => {
-    const r = sched.resume(checkCo(A, 'resume'), A.slice(1))
+  defg(co, 'resume', function* (A) {
+    const c = checkCo(A, 'resume')
+    let r = sched.resume(c, A.slice(1))
+    // 中のコルーチンがデバッガーで止まった → 外側も一緒に止まり、再開したら中を続ける
+    while (r.dbg) { yield r.dbg; r = sched.resume(c, EMPTY) }
     return r[0] === false ? [false, r[1]] : r
   })
   defg(co, 'yield', function* (A) {
@@ -415,8 +446,9 @@ export function createStdlib(env, hooks, sched) {
   def(co, 'wrap', A => {
     if (!(A[0] instanceof LFunc)) throw argError(1, 'wrap', 'function expected')
     const c = new Coroutine(A[0])
-    return native('wrap', B => {
-      const r = sched.resume(c, B)
+    return nativeGen('wrap', function* (B) {
+      let r = sched.resume(c, B)
+      while (r.dbg) { yield r.dbg; r = sched.resume(c, EMPTY) }
       if (r[0] === false) {
         const e = r[2] instanceof LuaError ? r[2] : new LuaError(r[1], 0)
         e.positioned = true

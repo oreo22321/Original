@@ -125,6 +125,7 @@ export async function deletePath(path) {
 export async function renamePath(from, to) {
   const moved = await vfs.rename(app.project.id, from, to)
   for (const [a, b] of moved) {
+    emit('renamed', { from: a, to: b })
     app.editors.renamed(a, b)
     if (app.project.runTarget === a) await setRunTarget(b)
   }
