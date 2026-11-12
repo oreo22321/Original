@@ -98,6 +98,21 @@ string]])`, 'tab\tend AB A あ long\nstring'],
   ['and/or', `print(nil or "default", false and 1, 1 and 2, nil and nil or 3, not nil, not 0)`, 'default false 2 3 true false'],
   ['multiple assign', `local a, b = 1, 2 a, b = b, a print(a, b) local t = {} t.x, t.y = 1 print(t.x, t.y)`, '2 1\n1 nil'],
   ['string methods', `local s = "a,b,,c" local p = s:split(",") print(#p, p[3] == "", ("  trim  "):match("^%s*(.-)%s*$"))`, '4 true trim'],
+  ['string.pack', `local s = string.pack(">i2 <I4 z d", -2, 7, "hi", 1.5) print(#s, string.unpack(">i2 <I4 z d", s)) print(string.packsize("i4 h"))`, '17 -2 7 hi 1.5 18\n6'],
+  ['setfenv / getfenv', `local function f() return secret end
+setfenv(f, { secret = 42 })
+print(f(), secret, getfenv(f).secret, getfenv().print == print)
+local g = loadstring("y = 5 return y")
+local env = setmetatable({}, { __index = getfenv() })
+setfenv(g, env) print(g(), env.y, y)`, '42 nil 42 true\n5 5 nil'],
+  ['setfenv(1) affects running code', `local env = setmetatable({}, { __index = getfenv() })
+setfenv(1, env)
+x = 1
+local function inner() return y end
+y = 7
+print(rawget(env, "x"), rawget(getfenv(0), "x"), inner(), pcall(string.pack, "i4", math.huge))`, '1 nil 7 false number has no integer representation'],
+  ['unknown escape keeps utf-8', `print("\\あ" == "あ", #"\\あ")`, 'true 3'],
+  ['unknown escape is the char', `print("a\\.b", "\\q")`, 'a.b q'],
 ]
 
 let pass = 0, fail = 0

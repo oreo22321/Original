@@ -246,7 +246,13 @@ export class Lexer {
           if (v > 255) this.error('エスケープの値が大きすぎます', i)
           return [String.fromCharCode(v), j]
         }
-        this.error(`不正なエスケープシーケンス '\\${c}'`, i)
+        // 本物の Luau と同じく、知らないエスケープ ("\." など) はその文字として扱う
+        {
+          // 文字コード単位ではなく 1 文字 (サロゲートペアも) を、UTF-8 のバイト列として扱う
+          const ch = String.fromCodePoint(s.codePointAt(i))
+          if (this.warnings) this.warnings.push({ message: `不明なエスケープ '\\${ch}' (「${ch}」として扱われます)`, pos: i - 1 })
+          return [toBytes(ch), i + ch.length]
+        }
     }
   }
 

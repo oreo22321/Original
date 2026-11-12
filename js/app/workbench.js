@@ -252,6 +252,7 @@ export class Workbench {
       { label: 'コードをコピー', icon: 'copy', run: () => runCommand('copyCode'), disabled: !doc },
       { label: '圧縮してコピー', icon: 'copy', run: () => runCommand('copyMinified'), disabled: !luau },
       getMode() === 'executor' ? { label: 'loadstring の 1 行を作る', icon: 'bolt', run: () => runCommand('copyLoader') } : null,
+      getMode() === 'executor' ? { label: 'UI ライブラリで GUI を作る', icon: 'layers', run: () => runCommand('uiGallery') } : null,
       { label: '共有 / ファイルに保存', icon: 'share', run: () => runCommand('shareFile'), disabled: !doc },
       '-',
       { label: '検索・置換', icon: 'search', hint: '⌘F', run: () => runCommand('find'), disabled: !doc },

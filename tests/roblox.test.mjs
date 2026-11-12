@@ -155,6 +155,16 @@ print(workspace.Terrain.ClassName, workspace.CurrentCamera.ClassName)
 print(c.PrimaryPart == c.Root, c.PrimaryPart ~= p)
 p:Destroy()
 print(p.Parent, #m:GetChildren(), pcall(function() p.Parent = workspace end))`, 'Terrain Camera\ntrue true\nnil 0 false main.lua:9: The Parent property of Root is locked, current parent: NULL, new parent Workspace'],
+  ['legacy enums & lenient datatypes', `print(Enum.KeyCode.Unknown.Value, Enum.Font.GothamSemibold ~= nil, UDim2.new(1, 0, 1, false).Y.Offset, Vector3.new(nil, "2").Y)`, '0 true 0 2'],
+  ['tween override', `local f = Instance.new("Frame")
+local ts = game:GetService("TweenService")
+local a = ts:Create(f, TweenInfo.new(0.2), { BackgroundTransparency = 1 })
+local b = ts:Create(f, TweenInfo.new(0.05), { BackgroundTransparency = 0.5 })
+local stateA
+a.Completed:Connect(function(s) stateA = s.Name end)
+a:Play() task.wait(0.03) b:Play() task.wait(0.3)
+print(stateA, f.BackgroundTransparency)`, 'Cancelled 0.5'],
+  ['stats', `local st = game:GetService("Stats") print(type(st.Network.ServerStatsItem["Data Ping"]:GetValue()), typeof(st:GetTotalMemoryUsageMb()))`, 'number number'],
 ]
 
 let pass = 0, fail = 0

@@ -4,7 +4,7 @@
 import { parse } from './parser.js'
 import { LuauSyntaxError, toBytes } from './lexer.js'
 
-const HELPERS = 'topLocals:$topl,call:$call,callMethod:$callm,index:$idx,setindex:$set,T:$T,add:$add,sub:$sub,mul:$mul,div:$div,mod:$mod,pow:$pow,idiv:$idiv,unm:$unm,eq:$eq,lt:$lt,le:$le,gt:$gt,ge:$ge,concat:$cat,len:$len,chk:$chk,annot:$annot,fn:$fn,tbl:$tbl,iter:$iter,interp:$interp,forNum:$forNum,EMPTY:$EMPTY,rtError:$err'
+const HELPERS = 'topLocals:$topl,call:$call,callMethod:$callm,index:$idx,setindex:$set,T:$T,add:$add,sub:$sub,mul:$mul,div:$div,mod:$mod,pow:$pow,idiv:$idiv,unm:$unm,eq:$eq,lt:$lt,le:$le,gt:$gt,ge:$ge,concat:$cat,len:$len,chk:$chk,annot:$annot,fn:$fn0,tbl:$tbl,iter:$iter,interp:$interp,forNum:$forNum,EMPTY:$EMPTY,rtError:$err'
 
 const ARITH = { '+': '$add', '-': '$sub', '*': '$mul', '/': '$div', '%': '$mod', '^': '$pow', '//': '$idiv', '..': '$cat' }
 const CMP = { '==': '$eq', '<': '$lt', '<=': '$le', '>': '$gt', '>=': '$ge' }
@@ -99,11 +99,14 @@ class Compiler {
     this.scope = saveScope
     this.loops = saveLoops
     this.stmtLine = saveLine
+    const envNow = parentFs ? '($F.env||$Ep)' : '$E0'
     if (this.debug) {
       // デバッグ実行: 呼び出し履歴 (どの関数の何行目か) を記録する
-      return `$fn(function*($A){let $L=${node.line};const $fr=$D.e(${S(name)},()=>$L);${head}${temps}try{${body}return $EMPTY;}catch($e){throw $annot($e,$L,$CH,${S(name)})}finally{$D.x($fr)}},${S(name)})`
+      return `$fn((($Ep)=>function*($A){const $F=this||$NOF;let $L=${node.line};const $fr=$D.e(${S(name)},()=>$L);${head}${temps}try{${body}return $EMPTY;}catch($e){throw $annot($e,$L,$CH,${S(name)})}finally{$D.x($fr)}})(${envNow}),${S(name)},${envNow})`
     }
-    return `$fn(function*($A){let $L=${node.line};${head}${temps}try{${body}return $EMPTY;}catch($e){throw $annot($e,$L,$CH,${S(name)})}},${S(name)})`
+    // 関数ごとの環境 (setfenv で変えられる)。作られたときの、作った関数の環境を引き継ぐ (Lua 5.1 と同じ)。
+    // グローバル変数を使うたびに $F.env を見るので、実行中に setfenv(1, t) しても反映されます
+    return `$fn((($Ep)=>function*($A){const $F=this||$NOF;let $L=${node.line};${head}${temps}try{${body}return $EMPTY;}catch($e){throw $annot($e,$L,$CH,${S(name)})}})(${envNow}),${S(name)},${envNow})`
   }
 
   // ---- 文 ----
@@ -267,7 +270,7 @@ class Compiler {
     if (target.t === 'Name') {
       const js = this.resolve(target.name)
       if (js) return `${js}=${valueJs}`
-      return `$set($E,${S(toBytes(target.name))},${valueJs})`
+      return `$set(($F.env||$Ep),${S(toBytes(target.name))},${valueJs})`
     }
     return `$set(${this.single(target.obj)},${this.key(target)},${valueJs})`
   }
@@ -308,7 +311,7 @@ class Compiler {
       const js = this.resolve(tg.name)
       if (js) return `${js}=${op}(${js},${val});`
       const k = S(toBytes(tg.name))
-      return `$set($E,${k},${op}($idx($E,${k}),${val}));`
+      return `{const $g=$F.env||$Ep;$set($g,${k},${op}($idx($g,${k}),${val}));}`
     }
     const o = this.temp(), k = this.temp()
     return `${o}=${this.single(tg.obj)};${k}=${this.key(tg)};$set(${o},${k},${op}($idx(${o},${k}),${val}));`
@@ -389,7 +392,7 @@ class Compiler {
       }
       case 'Name': {
         const js = this.resolve(e.name)
-        return js || `$idx($E,${S(toBytes(e.name))})`
+        return js || `$idx(($F.env||$Ep),${S(toBytes(e.name))})`
       }
       case 'Index': return `$idx(${this.single(e.obj)},${this.key(e)})`
       case 'Call': case 'Method': return `${this.callExpr(e)}[0]`
@@ -443,14 +446,15 @@ export function compileToJs(src, chunkname = 'main', debug = false) {
   const c = new Compiler(chunkname, debug)
   const main = { t: 'Func', params: [], isVararg: true, body: ast.body, name: null, line: 1, isChunk: true }
   const code = c.func(main)
-  return `"use strict";const {${HELPERS}}=$;return ${code};`
+  // 関数ごとの環境: $F.env (setfenv で設定) か、作られたときの環境 $Ep。envD は getfenv 用
+  return `"use strict";const {${HELPERS}}=$;const $NOF={};const $fn=(g,n,e)=>{const f=$fn0(g,n);f.envD=e;return f};return ${code};`
 }
 
 // ソースを読み込み LFunc を返す
 export function loadChunk(src, chunkname, env, helpers) {
   const dbg = helpers.rt && helpers.rt.debugger
   const js = compileToJs(src, chunkname, !!dbg)
-  const factory = new Function('$', '$E', '$CH', '$D', js)
+  const factory = new Function('$', '$E0', '$CH', '$D', js)
   const f = factory(helpers, env, chunkname, dbg ? dbg.handle(chunkname) : null)
   f.name = chunkname
   return f

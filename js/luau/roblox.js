@@ -6,6 +6,8 @@ import { V3, V2, CF, C3, UD, UD2, BC, is, makeEnums, installDatatypes, IDR, near
 import { loadChunk } from './compiler.js'
 import * as runtime from './runtime.js'
 import { awaitSignal, waitSignal } from './stdlib.js'
+import { installGui } from './gui.js'
+import { fetchText, fetchOther, shortUrl } from './remote.js'
 
 const str = v => fromBytes(String(v))
 
@@ -51,6 +53,9 @@ export function installRoblox(G, ctx) {
   const sigConnect = connectFn(false), sigOnce = connectFn(true)
   const sigWait = nativeGen('Wait', function* (A) {
     const sig = A[0]
+    if (!sig || !sig.waiting) throw rtError("Expected ':' not '.' calling member function Wait")
+    // RenderStepped:Wait() などフレームのイベントは、待っている間もフレームを進める
+    if (sig.onConnect) sig.onConnect()
     const r = yield { kind: 'park', counts: false, setup: wake => sig.waiting.push(wake) }
     return r || EMPTY
   })
@@ -66,7 +71,7 @@ export function installRoblox(G, ctx) {
     },
     luaNewIndex(k) { throw rtError(`${str(k)} cannot be assigned to`) },
     luaToString() { return 'Signal ' + this.name },
-    hasConnections() { return this.conns.length > 0 },
+    hasConnections() { return this.conns.length > 0 || this.waiting.length > 0 },
     fire(args) {
       for (const c of this.conns.slice()) {
         if (!c.connected || !c.enabled) continue
@@ -156,6 +161,7 @@ export function installRoblox(G, ctx) {
   // Instance
   // ============================================================
   const allInstances = new Set()
+  let gui = null // GUI エンジン (後で設定)
   let debugIdSeed = 1000
   class Instance {
     constructor(info) {
@@ -183,6 +189,7 @@ export function installRoblox(G, ctx) {
       if (!s) {
         s = makeSignal(name, this.info.frameSignals && this.info.frameSignals.has(name))
         this.signals.set(name, s)
+        if (name === 'Changed' && gui && gui.isGuiInfo(this.info)) gui.noteWatch(this, 'AbsoluteSize')
       }
       return s
     }
@@ -254,6 +261,7 @@ export function installRoblox(G, ctx) {
       if (old !== v) this.changed(k)
     }
     changed(k) {
+      if (gui && gui.isGuiInfo(this.info)) gui.touch(this, k)
       if (this.signals) {
         const s = this.signals.get('Changed')
         if (s) s.fire(this.info.isA.has('ValueBase') && k === 'Value' ? [this.props.get('Value')] : [k])
@@ -292,6 +300,7 @@ export function installRoblox(G, ctx) {
       if (this.info.tags.includes('S') && !force && this.parent) throw rtError(`The Parent property of ${this.name} is locked`)
       const old = this.parent
       if (old === v) return
+      if (gui && (gui.isGuiInfo(this.info) || this.ClassName === 'Folder' || (v && gui.isGuiInfo(v.info)) || (old && gui.isGuiInfo(old.info)))) gui.touch(this)
       if (old) {
         const descs = [this, ...this.descendants()]
         for (let a = old; a; a = a.parent) for (const d of descs) a.fire('DescendantRemoving', [d])
@@ -472,7 +481,7 @@ export function installRoblox(G, ctx) {
       if (!(m && m.kind === 'p') && A[1] !== 'Parent' && !self.info.props.has(A[1])) throw rtError(`${str(A[1])} is not a valid property name.`)
       if (!self.propSignals) self.propSignals = new Map()
       let s = self.propSignals.get(A[1])
-      if (!s) { s = makeSignal('Changed'); self.propSignals.set(A[1], s) }
+      if (!s) { s = makeSignal('Changed'); self.propSignals.set(A[1], s); if (gui) gui.noteWatch(self, A[1]) }
       return s
     }),
     AddTag: M('AddTag', A => { tagAdd(chkInst(A, 'AddTag'), A[1]); return EMPTY }),
@@ -563,19 +572,19 @@ export function installRoblox(G, ctx) {
     MoveDirection: () => V3(0, 0, 0), FloorMaterial: () => enums.item('Material', 'Plastic'), BreakJointsOnDeath: () => true, RequiresNeck: () => true,
   })
   D('GuiObject', {
-    Visible: () => true, Size: () => UD2(0, 100, 0, 100), Position: () => UD2(0, 0, 0, 0), AnchorPoint: () => V2(0, 0),
-    BackgroundColor3: () => rgb(255, 255, 255), BackgroundTransparency: () => 0, BorderColor3: () => rgb(27, 42, 53), BorderSizePixel: () => 1,
+    // Instance.new で作ったときの既定値 (Studio で挿入したときとは違い、大きさは 0)
+    Visible: () => true, Size: () => UD2(0, 0, 0, 0), Position: () => UD2(0, 0, 0, 0), AnchorPoint: () => V2(0, 0),
+    BackgroundColor3: () => rgb(163, 162, 165), BackgroundTransparency: () => 0, BorderColor3: () => rgb(27, 42, 53), BorderSizePixel: () => 1,
     ZIndex: () => 1, LayoutOrder: () => 0, Rotation: () => 0, Active: () => false, ClipsDescendants: () => false,
-    AbsoluteSize: () => V2(100, 100), AbsolutePosition: () => V2(0, 0),
   })
   const textDefaults = {
-    Text: i => i.ClassName === 'TextLabel' ? 'Label' : i.ClassName === 'TextButton' ? 'Button' : '', TextColor3: () => rgb(0, 0, 0), TextSize: () => 14, TextScaled: () => false,
+    Text: i => i.ClassName === 'TextLabel' ? 'Label' : i.ClassName === 'TextButton' ? 'Button' : '', TextColor3: () => rgb(27, 42, 53), TextSize: () => 14, TextScaled: () => false,
     TextWrapped: () => false, TextTransparency: () => 0, RichText: () => false, Font: () => enums.item('Font', 'Legacy'),
     TextXAlignment: () => enums.item('TextXAlignment', 'Center'), TextYAlignment: () => enums.item('TextYAlignment', 'Center'),
   }
-  D('TextLabel', { ...textDefaults, Size: () => UD2(0, 200, 0, 50) })
-  D('TextButton', { ...textDefaults, Size: () => UD2(0, 200, 0, 50), AutoButtonColor: () => true })
-  D('TextBox', { ...textDefaults, Size: () => UD2(0, 200, 0, 50), PlaceholderText: () => '', ClearTextOnFocus: () => true })
+  D('TextLabel', { ...textDefaults })
+  D('TextButton', { ...textDefaults, AutoButtonColor: () => true })
+  D('TextBox', { ...textDefaults, PlaceholderText: () => '', ClearTextOnFocus: () => true })
   D('LayerCollector', { Enabled: () => true, ResetOnSpawn: () => true })
   D('ScreenGui', { DisplayOrder: () => 0, IgnoreGuiInset: () => false })
   D('Sound', { Volume: () => 0.5, PlaybackSpeed: () => 1, Looped: () => false, Playing: () => false, TimeLength: () => 0, SoundId: () => '' })
@@ -849,7 +858,8 @@ export function installRoblox(G, ctx) {
   // RunService
   IMPL.RunService = {
     methods: {
-      IsStudio: M('IsStudio', () => true),
+      // エグゼキューターは本物のゲーム内で動くので false
+      IsStudio: M('IsStudio', () => ctx.runContext !== 'executor'),
       // スクリプトの種類に合わせる (ModuleScript はどちらからも呼ばれうるので両方 true)
       IsClient: M('IsClient', () => ctx.runContext !== 'server'),
       IsServer: M('IsServer', () => ctx.runContext !== 'client' && ctx.runContext !== 'executor'),
@@ -934,12 +944,21 @@ export function installRoblox(G, ctx) {
         const tw = A[0]
         if (tw.running) return EMPTY
         const inst = tw.props.get('Instance'), info = tw.props.get('TweenInfo')
+        // 一時停止していた場合は続きから
+        if (tw.resume) { tw.running = true; tw.props.set('PlaybackState', enums.item('PlaybackState', 'Playing')); sched.addFrameSignal(tw.resume); return EMPTY }
         const time = info ? info.Time : 1
         const style = info ? info.EasingStyle.name : 'Quad', dir = info ? info.EasingDirection.name : 'Out'
         const repeatCount = info ? info.RepeatCount : 0, reverses = info ? info.Reverses : false, delay = info ? info.DelayTime : 0
         const starts = [], ends = []
         let k
         for (;;) { const r = tw.goals.next(k); if (!r) break; k = r[0]; starts.push([r[0], inst.luaIndex(r[0])]); ends.push(r[1]) }
+        // 同じプロパティを動かしている別の Tween は取り消す (Roblox と同じ)
+        const owners = inst.tweenOwners || (inst.tweenOwners = new Map())
+        for (const [key] of starts) {
+          const o = owners.get(key)
+          if (o && o !== tw && o.running) cancelTween(o)
+          owners.set(key, tw)
+        }
         tw.props.set('PlaybackState', enums.item('PlaybackState', 'Playing'))
         let elapsed = -delay, cycle = 0
         const frame = {
@@ -956,18 +975,35 @@ export function installRoblox(G, ctx) {
             if (elapsed >= total) {
               if (repeatCount < 0 || cycle < repeatCount) { cycle++; elapsed = 0; return }
               tw.running = false
+              tw.resume = null
+              for (const [key] of starts) if (owners.get(key) === tw) owners.delete(key)
               tw.props.set('PlaybackState', enums.item('PlaybackState', 'Completed'))
               tw.fire('Completed', [enums.item('PlaybackState', 'Completed')])
             }
           },
         }
+        tw.frame = frame
         tw.running = true
         sched.addFrameSignal(frame)
         return EMPTY
       }),
-      Cancel: M('Cancel', A => { A[0].running = false; A[0].props.set('PlaybackState', enums.item('PlaybackState', 'Cancelled')); A[0].fire('Completed', [enums.item('PlaybackState', 'Cancelled')]); return EMPTY }),
-      Pause: M('Pause', A => { A[0].running = false; A[0].props.set('PlaybackState', enums.item('PlaybackState', 'Paused')); return EMPTY }),
+      Cancel: M('Cancel', A => { cancelTween(A[0]); return EMPTY }),
+      Pause: M('Pause', A => {
+        const tw = A[0]
+        if (!tw.running) return EMPTY
+        tw.running = false
+        tw.resume = tw.frame
+        tw.props.set('PlaybackState', enums.item('PlaybackState', 'Paused'))
+        return EMPTY
+      }),
     },
+  }
+  function cancelTween(tw) {
+    const was = tw.running || tw.resume
+    tw.running = false
+    tw.resume = null
+    tw.props.set('PlaybackState', enums.item('PlaybackState', 'Cancelled'))
+    if (was) tw.fire('Completed', [enums.item('PlaybackState', 'Cancelled')])
   }
 
   // HttpService
@@ -997,21 +1033,39 @@ export function installRoblox(G, ctx) {
   }
   ctx.toJson = toJson
   ctx.fromJson = fromJson
+  // 外部への通信 (取得した中身はキャッシュされ、オフラインでも使えます。remote.js を参照)
+  const netLogged = new Set()
   async function httpFetch(url, opts = {}) {
-    try {
-      const res = await fetch(fromBytes(url), opts)
-      const body = await res.text()
-      return { ok: res.ok, status: res.status, statusText: res.statusText, body: toBytes(body), headers: res.headers }
-    } catch (e) {
-      return { ok: false, status: 0, statusText: String(e && e.message || e), body: '', error: true }
-    }
+    const u = fromBytes(String(url))
+    const method = String(opts.method || 'GET').toUpperCase()
+    const plain = method === 'GET' && opts.body === undefined && !(opts.headers && Object.keys(opts.headers).length)
+    const proxy = ctx.net && ctx.net.proxy
+    const r = plain ? await fetchText(u, { proxy }) : await fetchOther(u, { method, body: opts.body, headers: opts.headers })
+    return { ok: r.ok, status: r.status, statusText: r.statusText, body: toBytes(r.text || ''), headers: r.headers, error: r.status === 0, reason: r.error, from: r.from, url: r.url }
   }
   ctx.httpFetch = httpFetch
-  const httpGet = function* (url, headers) {
+  const netError = (r, what) => {
+    const short = shortUrl(r.url)
+    if (hooks.post) hooks.post({ type: 'remoteFail', url: r.url, reason: r.reason })
+    if (r.reason === 'offline') return rtError(`${what}: オフラインのため ${short} を取得できません (一度取得した URL は、オフラインでもキャッシュから使えます)`)
+    if (r.reason === 'timeout') return rtError(`${what}: ${short} の取得が時間切れになりました`)
+    return rtError(`HttpError: ${short} を読み込めません (ブラウザの制限 CORS で、直接は取得できないサイトです)`)
+  }
+  const logNet = r => {
+    if (netLogged.has(r.url)) return
+    netLogged.add(r.url)
+    const kb = r.body.length / 1024
+    const from = r.from === 'cache' ? ' · キャッシュ' : r.from === 'manual' ? ' · 登録した中身' : r.from === 'proxy' ? ' · 中継' : ''
+    hooks.output('net', `↓ ${shortUrl(r.url)} (${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB${from})`)
+  }
+  ctx.netError = netError
+  ctx.logNet = logNet
+  const httpGet = function* (url) {
     if (typeof url !== 'string') throw rtError('Argument 1 missing or nil')
-    const [r] = yield awaitSignal(httpFetch(url, { headers }))
-    if (r.error) throw rtError(`HttpError: ${r.statusText} (ブラウザの CORS 制限で取得できない場合があります)`)
-    if (!r.ok) throw rtError(`HTTP ${r.status} (${r.statusText})`)
+    const [r] = yield awaitSignal(httpFetch(url))
+    if (r.error) throw netError(r, 'HttpGet')
+    if (!r.ok) throw rtError(`HTTP ${r.status} (${r.statusText}): ${shortUrl(r.url)}`)
+    logNet(r)
     return [r.body]
   }
   ctx.httpGet = httpGet
@@ -1184,8 +1238,10 @@ export function installRoblox(G, ctx) {
       GetMouse: M('GetMouse', A => {
         if (!A[0].mouse) {
           const m = newInstance(classInfo('PlayerMouse') ? 'PlayerMouse' : 'Mouse')
-          m.props.set('Hit', CF(0, 0, -50)); m.props.set('X', 960); m.props.set('Y', 540)
-          m.props.set('ViewSizeX', 1920); m.props.set('ViewSizeY', 1080); m.props.set('Origin', CF(0, 10, 20))
+          const sc = gui ? gui.screen : { w: 1280, h: 720 }
+          m.props.set('Hit', CF(0, 0, -50)); m.props.set('X', Math.round(sc.w / 2)); m.props.set('Y', Math.round(sc.h / 2))
+          m.props.set('ViewSizeX', sc.w); m.props.set('ViewSizeY', sc.h); m.props.set('Origin', CF(0, 10, 20))
+          m.props.set('Icon', ''); m.props.set('TargetFilter', undefined)
           A[0].mouse = m
         }
         return A[0].mouse
@@ -1251,6 +1307,8 @@ export function installRoblox(G, ctx) {
       GetGamepadConnected: M('GetGamepadConnected', () => false),
       GetConnectedGamepads: M('GetConnectedGamepads', () => new LTable()),
       GetStringForKeyCode: M('GetStringForKeyCode', A => A[1] ? A[1].name : ''),
+      GetPlatform: M('GetPlatform', () => enums.item('Platform', hooks.touch ? (hooks.device === 'tablet' ? 'IOS' : 'Android') : 'Windows') || enums.item('Platform', 'Windows')),
+      GetDeviceType: M('GetDeviceType', () => enums.item('DeviceType', hooks.device === 'phone' ? 'Phone' : hooks.device === 'tablet' ? 'Tablet' : 'Desktop') || EMPTY),
     },
   }
   D('UserInputService', {
@@ -1349,9 +1407,42 @@ export function installRoblox(G, ctx) {
   IMPL.LocalizationService = { methods: { GetCountryRegionForPlayerAsync: M('GetCountryRegionForPlayerAsync', () => 'JP') } }
   D('LocalizationService', { RobloxLocaleId: () => 'ja-jp', SystemLocaleId: () => 'ja-jp' })
   IMPL.SoundService = { methods: { PlayLocalSound: M('PlayLocalSound', () => EMPTY) } }
+  // Stats (パフォーマンス表示を作るスクリプト向け: それらしい値を返す)
+  IMPL.StatsItem = {
+    methods: {
+      GetValue: M('GetValue', A => (typeof A[0].statValue === 'function' ? A[0].statValue() : 0)),
+      GetValueString: M('GetValueString', A => { const v = typeof A[0].statValue === 'function' ? A[0].statValue() : 0; return toBytes(`${Math.round(v * 100) / 100}`) }),
+    },
+  }
+  IMPL.Stats = {
+    methods: {
+      GetTotalMemoryUsageMb: M('GetTotalMemoryUsageMb', () => 420 + Math.round(Math.random() * 20)),
+      GetMemoryUsageMbForTag: M('GetMemoryUsageMbForTag', () => 32),
+    },
+    init(st) {
+      const item = (parent, name, fn) => { const i = newInstance('StatsItem', undefined, { Name: name }); i.statValue = fn; i.setParent(parent, true); return i }
+      const net = item(st, 'Network', () => 0)
+      const ssi = item(net, 'ServerStatsItem', () => 0)
+      item(ssi, 'Data Ping', () => 45 + Math.random() * 10)
+      item(ssi, 'Data Send Kbps', () => 2 + Math.random())
+      item(ssi, 'Data Receive Kbps', () => 8 + Math.random() * 2)
+      const perf = item(st, 'PerformanceStats', () => 0)
+      item(perf, 'Ping', () => 45 + Math.random() * 10)
+      item(perf, 'CPU', () => 6 + Math.random())
+      item(perf, 'Memory', () => 420)
+      const ws = item(st, 'Workspace', () => 0)
+      item(ws, 'FPS', () => 60)
+      item(ws, 'Heartbeat', () => 60)
+    },
+  }
+  D('Stats', { FrameTime: () => 1 / 60, HeartbeatTimeMs: () => 1.2, InstanceCount: () => allInstances.size, DataReceiveKbps: () => 8, DataSendKbps: () => 2, PhysicsStepTimeMs: () => 0.5 })
   IMPL.GuiService = { methods: { GetGuiInset: M('GetGuiInset', () => [V2(0, 58), V2(0, 0)]), IsTenFootInterface: M('IsTenFootInterface', () => false) } }
   IMPL.ProximityPrompt = { methods: { InputHoldBegin: M('InputHoldBegin', () => EMPTY), InputHoldEnd: M('InputHoldEnd', A => { A[0].fire('Triggered', [localPlayer()]); return EMPTY }) } }
   IMPL.ModuleScript = {}
+
+  // GUI エンジン (レイアウト計算・入力・描画データ)
+  gui = installGui({ IMPL, D, enums, sched, hooks, ctx, newInstance, getService, localPlayer, G, camera: () => workspace && workspace.props.get('CurrentCamera') })
+  ctx.gui = gui
 
   // ============================================================
   // ゲームツリーの構築

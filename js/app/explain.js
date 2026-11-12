@@ -26,6 +26,14 @@ const RULES = [
   [/attempt to get length of a (\w+) value/, m => ({ why: `# (長さ) はテーブルか文字列にしか使えません (${m[1]} に使いました)。`, fixes: ['変数にテーブルが入っているか確認します'] })],
   [/attempt to iterate over a (\w+) value/, m => ({ why: `for ... in でくり返せるのはテーブルだけです (${m[1]} を渡しました)。`, fixes: ['GetChildren() や GetPlayers() の () を忘れていないか確認します', '変数が nil になっていないか確認します'] })],
   [/attempt to modify a readonly table/, (m, c) => ({ why: '書き換えできないテーブル (ライブラリや保護されたテーブル) を変更しようとしました。', fixes: [c.mode === 'executor' ? 'setreadonly(テーブル, false) で書き込み可能にしてから変更します' : 'string や math などのライブラリは変更できません。別のテーブルを作ります'] })],
+  [/(\S+) is not a valid member of Model "Asset"/, () => ({
+    why: 'game:GetObjects で読み込んだはずのモデルが空です。Roblox のアセットはブラウザから読み込めないため、サンドボックスでは空の Model になります。',
+    fixes: ['Rayfield のように UI をアセットから読み込むライブラリは、ここでは表示できません。Obsidian・Linoria・Orion・Kavo・WindUI などはそのまま動きます', '実際のゲームでは正しく動く可能性があります'],
+  })],
+  [/HttpError: .*CORS/, () => ({
+    why: 'このサイトはブラウザから直接スクリプトを読み込めない設定になっています (本物のエグゼキューターでは読み込めます)。',
+    fixes: ['下の「中継を使って再実行」か「中身を登録」で使えるようになります', 'GitHub のスクリプトは raw.githubusercontent.com の URL なら直接読み込めます'],
+  })],
   [/(\S+) is not a valid member of (\w+) "([^"]*)"/, m => ({
     why: `${m[2]} 「${m[3]}」の中に「${m[1]}」という名前の子オブジェクトもプロパティもありません。`,
     fixes: ['名前のスペル (大文字・小文字・空白) を確認します', 'まだ読み込まれていない可能性があるなら :WaitForChild("' + m[1] + '") を使います', 'あるか分からないなら :FindFirstChild("' + m[1] + '") で確認します'],

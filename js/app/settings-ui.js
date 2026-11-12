@@ -5,9 +5,9 @@ import { AI_MODELS } from '../editor/ai.js'
 import { h, icon, toast, modal, confirmDialog, download } from './ui.js'
 import * as vfs from './vfs.js'
 import { apiVersion } from '../editor/apidb.js'
-import { app, command, setProjectKind } from './app.js'
+import { app, command, runCommand, setProjectKind } from './app.js'
 
-export const APP_VERSION = '6.0.0'
+export const APP_VERSION = '7.0.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -76,7 +76,9 @@ const SCHEMA = [
     { key: 'groupOutput', type: 'bool', label: '同じ出力をまとめる (×3 のように表示)' },
     { key: 'outputTime', type: 'bool', label: '出力に経過時間を表示' },
     { key: 'timeLimit', type: 'range', min: 1, max: 60, label: '連続実行の上限 (無限ループ対策)', unit: '秒' },
-    { key: 'maxRunTime', type: 'range', min: 0, max: 600, step: 10, label: '最大実行時間', unit: '秒', desc: '0 で無制限。ボタンなどの操作待ちの間は数えません' },
+    { key: 'maxRunTime', type: 'range', min: 0, max: 600, step: 10, label: '最大実行時間', unit: '秒', desc: '0 で無制限。GUI やボタンの操作待ちの間は数えません' },
+    { key: 'netProxy', type: 'select', label: '外部スクリプトの中継サーバー', desc: 'game:HttpGet で読み込む URL が、ブラウザの制限 (CORS) で直接取れないときだけ使います。使うと、その URL が中継サーバーの運営者に送られます (ヘッダーや本文を付けた request は中継しません)', options: [['', '使わない'], ['corsproxy', 'corsproxy.io'], ['allorigins', 'allorigins.win']] },
+    { key: 'remoteScripts', type: 'action', label: '取得した外部スクリプト', desc: 'loadstring で読み込んだスクリプトはこの端末に保存され、オフラインでも動きます', button: '一覧を開く', run: () => runCommand('remoteScripts') },
   ] },
   { group: 'AI (Claude)', icon: 'sparkle', items: [
     { key: 'aiKey', type: 'password', label: 'Claude API キー', desc: 'console.anthropic.com で発行します。キーはこの端末のブラウザにのみ保存され、Anthropic の API にだけ送信されます。利用料金は API キーの持ち主に請求されます。' },
@@ -201,6 +203,7 @@ export class SettingsView {
           : inp
         break
       }
+      case 'action': return this.actionRow(it.label, it.desc, it.button, it.run)
       case 'theme': {
         const grid = h('div', { class: 'theme-grid' })
         for (const [id, th] of Object.entries(THEMES)) {

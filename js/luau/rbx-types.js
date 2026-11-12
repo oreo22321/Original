@@ -36,7 +36,9 @@ const num = (A, i, fname, def) => {
   if (v === undefined && def !== undefined) return def
   if (typeof v === 'number') return v
   if (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))) return Number(v)
-  throw rtError(`invalid argument #${i + 1} to '${fname}' (number expected, got ${v === undefined ? 'nil' : typeof v === 'object' ? (v.luaTypeName || 'table') : typeof v})`)
+  // Roblox のデータ型コンストラクタは nil / true / false を 0 として扱う (UI ライブラリが頼っている動作)
+  if (v === undefined || typeof v === 'boolean') return 0
+  throw rtError(`invalid argument #${i + 1} to '${fname}' (number expected, got ${typeof v === 'object' ? (v.luaTypeName || 'table') : typeof v})`)
 }
 const is = (v, t) => v !== null && typeof v === 'object' && v.luaTypeName === t
 
@@ -353,6 +355,10 @@ const makeUD2 = defineType('UDim2', {
 UD2 = (xs, xo, ys, yo) => makeUD2({ X: UD(xs, xo), Y: UD(ys, yo) })
 
 // ============ Enum ============
+const ENUM_COMPAT = [
+  ['KeyCode', 'Unknown', 0], ['Font', 'GothamSemibold', 'GothamMedium'], ['Font', 'GothamSSm', 'Gotham'],
+  ['UserInputType', 'None', 18], ['Material', 'SmoothPlastic', 272],
+]
 export function makeEnums(enumData) {
   const enumTypes = new Map()
   const itemProto = {
@@ -399,6 +405,14 @@ export function makeEnums(enumData) {
       et.items.set(iname, it)
     }
     enumTypes.set(name, et)
+  }
+  // API データから消えたが、今もスクリプトでよく使われる項目 (互換のため)
+  for (const [ename, iname, value] of ENUM_COMPAT) {
+    const et = enumTypes.get(ename)
+    if (!et || et.items.has(iname)) continue
+    const it = Object.create(itemProto)
+    it.name = iname; it.value = typeof value === 'string' ? (et.items.get(value) || { value: 0 }).value : value; it.enumType = et
+    et.items.set(iname, it)
   }
   const getEnums = native('GetEnums', () => LTable.fromArray([...enumTypes.values()]))
   const EnumRoot = {

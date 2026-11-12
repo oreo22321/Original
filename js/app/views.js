@@ -255,10 +255,19 @@ export function showHelp() {
   <h3>実行</h3>
   <ul>
     <li>ブラウザ内の Luau 互換エンジンで実行します。<code>game</code>・<code>workspace</code>・<code>Instance.new</code>・<code>task.wait</code>・<code>TweenService</code>・<code>DataStoreService</code>・<code>RemoteEvent</code> など Roblox の API を模擬的に使えます (物理演算や 3D の描画は行いません)。</li>
-    <li><b>GUI プレビュー</b>: スクリプトが作った ScreenGui を「ゲーム」タブに表示します。ボタンをタップすると、接続した関数が実行されます。</li>
+    <li><b>ゲーム画面</b>: スクリプトが作った ScreenGui を、Roblox と同じ規則で大きさ・位置を計算して「ゲーム」タブに表示します (UIListLayout・UIPadding・AutomaticSize・ScrollingFrame・UIScale など)。タップ・ドラッグ (スライダーやウィンドウの移動)・スクロール・文字入力・キー入力がそのままスクリプトに届きます。右上の ⛶ で全画面 (スマホは自動で横向き)。</li>
+    <li><b>スマホ / タブレット / PC</b>: ゲーム画面の大きさと、端末の種類 (TouchEnabled など) を切り替えられます。</li>
     <li><b>操作できるもの</b>: ClickDetector・ProximityPrompt・Touched・キー入力に関数を接続していると、「ゲーム」タブから試せます。</li>
     <li>ファイルを長押し → <b>▶ で常にこのファイルを実行</b> を選ぶと、別のファイルを編集中でもそのファイルを実行します。</li>
     <li>無限ループは自動で止まります。<b>■</b> でいつでも停止できます。</li>
+  </ul>
+  <h3>loadstring と UI ライブラリ</h3>
+  <ul>
+    <li><code>loadstring(game:HttpGet("URL"))()</code> はそのまま実行できます。Obsidian・LinoriaLib・Orion・Kavo・WindUI などの UI ライブラリも、実際に表示して操作できます。</li>
+    <li>読み込んだスクリプトはこの端末に保存され、<b>オフラインでも</b>同じように動きます (設定 → 実行 → 取得した外部スクリプト)。</li>
+    <li>エディタに loadstring の行があると、裏でライブラリの中身を読み取り、<b>補完・ゴーストテキスト・ヒント</b>に使います。<code>local Window = </code> と打つと <code>Library:CreateWindow({...})</code> を提案し、<code>Groupbox:AddToggle(</code> では設定項目 (Text・Default・Callback など) の雛形が出ます。</li>
+    <li>ブラウザの制限 (CORS) で直接読み込めないサイトは、エラーの下の「中継を使って再実行」か「中身を登録」で使えます。GitHub の URL (<code>github.com/…/blob/…</code>) は自動で読み込める形に直します。</li>
+    <li>「…」メニューの <b>UI ライブラリで GUI を作る</b> から、すぐ動くサンプルを作れます。</li>
   </ul>
   <h3>スマホでの操作</h3>
   <ul>
@@ -290,15 +299,14 @@ export function showHelp() {
 export function showWhatsNew() {
   const body = h('div', { class: 'help whats-new' })
   body.innerHTML = `
-  <p>ForgeCode 6 の新しい機能です。</p>
+  <p>ForgeCode 7 の新しい機能です。</p>
   <ul>
-    <li><b>end を自動で入れる・消す</b> — <code>if ... then</code> や <code>for ... do</code>、<code>function()</code> を書いた時点で <code>end</code> が入ります。<code>if</code> や <code>function</code> を消すと、対の <code>end</code> も一緒に消えます。</li>
-    <li><b>デバッガー</b> — 行番号の左をタップして赤い点を付けると、▶ で実行したときにその行で止まります。変数の値を見ながら 1 行ずつ進められます (条件付き・ログ出力にもできます)。</li>
-    <li><b>コンソール</b> — 出力の下の欄で、式やコードをその場で実行。実行後もスクリプトの変数を調べられます。</li>
-    <li><b>定義へ移動・参照を検索・名前の一括変更</b> — <kbd>F12</kbd> / <kbd>⇧F12</kbd> / <kbd>F2</kbd>。スマホはキーボードの上の ◎ から。</li>
-    <li><b>同じ変数をハイライト</b>・<b>スティッキースクロール</b> (いま見ている function の行を上に固定)。</li>
-    <li><b>行の移動・複製</b> — <kbd>⌥↑</kbd> / <kbd>⌥↓</kbd> / <kbd>⇧⌥↓</kbd> (スマホは ◎ のメニュー)。</li>
-    <li><b>見た目と動き</b> — ボタンやパネル、出力の表示をなめらかに。止まっているときは画面下のバーが黄色になります。</li>
+    <li><b>loadstring がそのまま動く</b> — <code>loadstring(game:HttpGet(URL))()</code> で読み込む Obsidian・LinoriaLib・Orion・Kavo・WindUI などの UI ライブラリを、実際に表示してタップ・ドラッグで操作できます。</li>
+    <li><b>本物に近いゲーム画面</b> — GUI の大きさ・位置を Roblox と同じ規則で計算します (UIListLayout・AutomaticSize・ScrollingFrame・UIScale など)。スライダーのドラッグ、文字入力、スクロール、キー入力にも対応。全画面表示もできます。</li>
+    <li><b>ライブラリの補完</b> — loadstring の行を書くと、裏でライブラリを読み取って補完に追加します。<code>local Window = </code> → <code>Library:CreateWindow({...})</code>、<code>AddToggle(</code> → 設定項目の雛形、のようにゴーストテキストでも提案します。</li>
+    <li><b>オフラインでも実行</b> — 一度読み込んだ外部スクリプトは端末に保存されます。読み込めないサイトは「中継」か「中身を登録」で使えます。</li>
+    <li><b>UI ライブラリのサンプル</b> — 「…」メニュー → UI ライブラリで GUI を作る。</li>
+    <li><b>実行エンジンの強化</b> — <code>setfenv</code> / <code>getfenv</code>、<code>string.pack</code>、古い Enum 名、TweenService の上書き、Stats、同じエラーのまとめ表示など。</li>
   </ul>`
   modal({ title: '新しくなりました', body, actions: [{ label: '使い方を見る', run: () => { setTimeout(showHelp, 200) } }, { label: 'OK', primary: true }] })
 }

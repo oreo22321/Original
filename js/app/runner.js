@@ -6,8 +6,9 @@ import { h, icon, toast, copyText, haptic, menu } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { scriptKindOf, KIND_LABELS, langOf } from '../editor/setup.js'
 import { explainError } from './explain.js'
-import { renderGui, SCREENS } from './gui-preview.js'
+import { GuiStage, SCREENS } from './gui-preview.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
+import { proxyTemplate, remoteFailBlock, remoteActions } from './remote-ui.js'
 
 const MAX_DOM_LINES = 3000
 const LINK_RE = /((?:[\w./ -]*[\w-]\.luau?)(?::| line )\d+)/
@@ -26,6 +27,10 @@ export class Runner {
     this.problems = []
     this.game = { tree: null, gui: null, interact: null, drawings: null }
     this.screen = localStorage.getItem('forgecode.screen') || (isTouch ? 'phone' : 'pc')
+    // ゲーム画面 (実行のたびに作り直さず、差分だけ反映する)
+    this.stage = new GuiStage({ onInput: m => this.sendInput(m), screen: this.screen })
+    this.stage.onFull = () => { if (this.tab === 'game') this.renderGame() }
+    this.stage.onVisible = on => { if (this.worker && this.running) this.worker.postMessage({ type: 'guiVisible', on }) }
     this.build()
     on('docchange', () => this.scheduleProblems())
     on('active', () => this.scheduleProblems(120))
@@ -231,7 +236,9 @@ export class Runner {
   runOptions(kind, extra = {}) {
     const s = getSettings()
     const mode = getMode()
-    return { timeLimit: s.timeLimit * 1000, maxRunTime: s.maxRunTime, executor: mode === 'executor', kind, touch: isTouch, ...extra }
+    const sc = SCREENS.find(x => x.id === this.screen) || SCREENS[0]
+    // 選んだ画面 (スマホ / タブレット / PC) の端末として動かす
+    return { timeLimit: s.timeLimit * 1000, maxRunTime: s.maxRunTime, executor: mode === 'executor', kind, touch: sc.id !== 'pc', device: sc.id, screen: [sc.w, sc.h], net: { proxy: proxyTemplate() }, ...extra }
   }
 
   async run({ selection = false, debug = false } = {}) {
@@ -277,11 +284,16 @@ export class Runner {
     const w = this.ensureWorker()
     if (!w) { this.line('error', '実行エンジンを起動できませんでした。ページを再読み込みしてください'); return }
     this.game = { tree: null, gui: null, interact: null, drawings: null }
+    this.stage.reset()
+    this.stage.live = true
     this.waiting = false
+    this.uiMode = false
     this.waitNoted = false
     this.sawGui = false
     this.holdScroll = false
     this.errors = 0
+    this.errorEls = new Map()
+    this.remoteShown = new Set()
     this.setRunning({ path, kind, debug: useDebug })
     this.t0 = performance.now()
     this.append([{ kind: 'meta', text: `${useDebug ? '🐞' : '▶'} ${path}${selection ? ' (選択範囲)' : ''} — ${KIND_LABELS[kind]}${useDebug ? ' (デバッグ)' : ''}` }])
@@ -290,6 +302,7 @@ export class Runner {
       type: 'run', source, path, chunkName: path, files, wsFiles, wsFolders, projectName: app.project.name,
       options: this.runOptions(kind, useDebug ? { debug: { breakpoints: bps, watches: this.debug.watches } } : {}),
     })
+    w.postMessage({ type: 'guiVisible', on: !!this.stage.visible })
   }
 
   // ============================================================
@@ -345,6 +358,8 @@ export class Runner {
     const msg = reason === 'stopped' ? `■ 停止しました (${sec} 秒)` : reason === 'error' ? `✕ エラーで終了 (${sec} 秒)` : reason === 'timeout' ? `■ 時間切れ (${sec} 秒)` : this.errors ? `✕ 終了 — エラー ${this.errors} 件 (${sec} 秒)` : `✓ 完了 (${sec} 秒)`
     this.append([{ kind: reason === 'error' || this.errors ? 'meta error' : 'meta', text: msg }])
     this.waiting = false
+    this.stage.live = false
+    this.stage.closeText(true)
     this.setRunning(null)
     this.renderTabs()
     if (this.tab === 'game') this.renderGame()
@@ -354,6 +369,34 @@ export class Runner {
     switch (m.type) {
       case 'output': this.append(m.items); break
       case 'error': this.showError(m); break
+      case 'remoteFail': {
+        // 外部スクリプトを取得できなかった: 中継・貼り付けのボタンを、続くエラー表示に入れる (URL ごとに 1 回)
+        if (!this.remoteShown) this.remoteShown = new Set()
+        if (this.remoteShown.has(m.url)) break
+        this.remoteShown.add(m.url)
+        const pending = { url: m.url, reason: m.reason }
+        this.pendingRemote = pending
+        // エラーにならなかった (pcall で包まれていた) ときは、別に案内を出す
+        setTimeout(() => {
+          if (this.pendingRemote !== pending) return
+          this.pendingRemote = null
+          if (!this.lineCount) this.outEl.textContent = ''
+          this.outEl.append(remoteFailBlock(m.url, m.reason, { rerun: () => this.run() }))
+          this.lineCount++
+          this.last = null
+        }, 600)
+        break
+      }
+      case 'errorRepeat': {
+        // 同じエラーの繰り返し: 回数だけ更新
+        const el = this.errorEls && this.errorEls.get(m.text)
+        if (el) {
+          let b = el.querySelector('.oe-count')
+          if (!b) { b = h('span', { class: 'oe-count', title: '同じエラーが繰り返し発生しています' }); el.querySelector('.oe-head').append(b) }
+          b.textContent = '×' + m.n
+        }
+        break
+      }
       case 'fs': this.onFs(m); break
       case 'clipboard':
         copyText(m.text).then(ok => {
@@ -363,11 +406,25 @@ export class Runner {
         break
       case 'clear': this.clear(); break
       case 'gui':
-        this.game.gui = m.gui
+        this.stage.apply(m.patch)
+        this.game.gui = this.stage.nodes.size > 0
         this.onGui()
         break
+      case 'guiAvail':
+        // ゲーム画面が隠れている間に GUI ができた
+        this.game.gui = true
+        this.onGui()
+        break
+      case 'guiFocus':
+        if (m.id !== null && this.tab !== 'game' && !this.stage.full) this.show('game')
+        this.stage.focusText(m)
+        break
+      case 'uiMode':
+        this.uiMode = true
+        if (!this.waitNoted) { this.waitNoted = true; this.append([{ kind: 'meta', text: '🎮 GUI を表示しています — 「ゲーム」タブで操作できます (■ で終了)' }]) }
+        break
       case 'waiting':
-        Object.assign(this.game, { tree: m.tree, gui: m.gui, interact: m.interact, drawings: m.drawings })
+        this.applySnapshot(m)
         this.waiting = true
         if (!this.waitNoted) { this.waitNoted = true; this.append([{ kind: 'meta', text: '⏸ 操作を待っています — 「ゲーム」タブでボタンなどを試せます (■ で終了)' }]) }
         emit('running', this.running)
@@ -385,10 +442,15 @@ export class Runner {
       case 'watchValues': this.debug.onWatchValues(m); break
       case 'evalDone': break
       case 'done':
-        Object.assign(this.game, { tree: m.tree, gui: m.gui, interact: m.interact, drawings: m.drawings })
+        this.applySnapshot(m)
         if (this.running) this.finished(m.reason === 'idle' ? 'done' : m.reason)
         break
     }
+  }
+
+  applySnapshot(m) {
+    if (m.gui) this.stage.apply(m.gui)
+    Object.assign(this.game, { tree: m.tree, gui: this.stage.nodes.size > 0, interact: m.interact, drawings: m.drawings })
   }
 
   onGui(force) {
@@ -399,7 +461,7 @@ export class Runner {
       // GUI ができたら、エラーがなければプレビューへ切り替える
       if (this.game.gui && !this.errors && this.tab === 'output') { this.show('game'); return }
     }
-    if (this.tab === 'game') this.renderGame(force)
+    if (this.tab === 'game' && force) this.renderGame(true)
   }
 
   showError(m) {
@@ -408,11 +470,18 @@ export class Runner {
     const kind = this.running ? this.running.kind : null
     const el = h('div', { class: 'out-error' })
     el.dataset.text = m.text
+    if (!this.errorEls) this.errorEls = new Map()
+    this.errorEls.set(m.text, el)
     const head = h('div', { class: 'oe-head' }, icon('close', 15))
     const msg = h('span', { class: 'oe-msg' })
     this.linkify(msg, m.text)
     head.append(msg)
     el.append(head)
+    // 外部スクリプトを読み込めなかったエラー: 解決ボタンをすぐ下に
+    if (this.pendingRemote && /HttpError|HttpGet|オフライン|時間切れ/.test(m.text)) {
+      el.append(h('div', { class: 'oe-actions oe-remote' }, remoteActions(this.pendingRemote.url, this.pendingRemote.reason, { rerun: () => this.run() })))
+      this.pendingRemote = null
+    }
     const ex = s.explainErrors && !m.syntax ? explainError(m.message || m.text, { kind, mode: getMode() }) : null
     if (ex) {
       el.append(h('div', { class: 'oe-why' }, icon('info', 14), h('span', null, ex.why)))
@@ -468,9 +537,21 @@ export class Runner {
   }
 
   sendInput(msg) {
-    if (!this.running || !this.worker) { toast('実行が終了しています。▶ でもう一度実行すると操作できます'); return }
-    haptic(6)
+    if (!this.running || !this.worker) {
+      if (msg.phase !== 'move') toast('実行が終了しています。▶ でもう一度実行すると操作できます')
+      return
+    }
+    if (msg.phase === 'down' || (!msg.phase && msg.kind !== 'text' && msg.kind !== 'wheel')) haptic(6)
     this.worker.postMessage({ type: 'input', ...msg })
+  }
+
+  setScreen(id) {
+    this.screen = id
+    try { localStorage.setItem('forgecode.screen', id) } catch {}
+    this.stage.setScreen(id)
+    const sc = SCREENS.find(x => x.id === id) || SCREENS[0]
+    if (this.worker) this.worker.postMessage({ type: 'screen', w: sc.w, h: sc.h })
+    this.renderGame()
   }
 
   // ============================================================
@@ -527,19 +608,30 @@ export class Runner {
     // 入力欄に入力中は作り直さない
     if (soft && el.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return
     const scroll = el.scrollTop
+    // ゲーム画面は使い回す (外してから中身を作り直す)
+    if (this.stage.frame.parentElement === el) this.stage.frame.remove()
     el.textContent = ''
     if (!g.tree && !g.gui && !this.running) {
-      el.append(h('div', { class: 'out-hint' }, 'スクリプトを実行すると、作った GUI のプレビューや、ゲーム内のオブジェクト (Workspace・Players など) がここに表示されます'))
+      el.append(h('div', { class: 'game-empty' },
+        h('div', { class: 'ge-art' }, icon('gamepad', 30)),
+        h('div', { class: 'ge-title' }, 'ゲーム画面'),
+        h('div', { class: 'out-hint' }, 'スクリプトを実行すると、作った GUI がここに表示され、タップやドラッグで操作できます。ゲーム内のオブジェクト (Workspace・Players など) も確認できます'),
+        getMode() === 'executor' ? h('button', { class: 'btn primary small', onclick: () => runCommand('uiGallery') }, icon('layers', 15), 'UI ライブラリで試す') : null))
       return
     }
     const live = !!this.running
-    if (g.gui) {
+    if (g.gui || live) {
       el.append(h('div', { class: 'game-head' },
-        h('span', { class: 'game-title' }, 'GUI プレビュー'),
-        h('span', { class: 'game-state' + (live ? ' live' : '') }, live ? '● 実行中 — タップで操作できます' : '終了 (表示のみ)'),
+        h('span', { class: 'game-title' }, 'ゲーム画面'),
+        h('span', { class: 'game-state' + (live ? ' live' : '') }, live ? (isTouch ? 'タップ・ドラッグで操作できます' : 'クリック・ドラッグ・キー入力で操作できます') : '終了 (表示のみ)'),
         h('span', { class: 'sb-spacer' }),
-        h('div', { class: 'seg' }, SCREENS.map(sc => h('button', { class: 'seg-btn' + (this.screen === sc.id ? ' on' : ''), title: `${sc.w} × ${sc.h}`, onclick: () => { this.screen = sc.id; localStorage.setItem('forgecode.screen', sc.id); this.renderGame() } }, sc.label)))))
-      el.append(renderGui(g.gui, m => this.sendInput(m), this.screen))
+        h('div', { class: 'seg' }, SCREENS.map(sc => h('button', { class: 'seg-btn' + (this.screen === sc.id ? ' on' : ''), title: `${sc.w} × ${sc.h}`, onclick: () => this.setScreen(sc.id) }, sc.label))),
+        h('button', { class: 'icon-btn sm', title: '全画面で表示', 'aria-label': '全画面で表示', onclick: () => this.stage.toggleFull(true) }, icon('expand', 17))))
+      if (!this.stage.full) this.stage.attach(el)
+      else el.append(h('div', { class: 'out-hint' }, '全画面で表示中です'))
+    }
+    if (!g.gui && !live && getMode() === 'executor') {
+      el.append(h('div', { class: 'game-tip' }, icon('layers', 16), h('span', null, 'GUI はありませんでした。UI ライブラリを使うと、すぐに操作できる画面を作れます'), h('button', { class: 'btn small', onclick: () => runCommand('uiGallery') }, '試す')))
     }
     if (g.interact && g.interact.length) {
       const box = h('div', { class: 'interact' }, h('div', { class: 'game-title' }, '操作できるもの'))

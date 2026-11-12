@@ -29,7 +29,9 @@
 | 🐞 デバッガー | 行番号の左をタップして**ブレークポイント**。止まった場所の変数・テーブルの中身・呼び出し履歴を確認し、**ステップ実行** (次の行へ / 関数の中へ / 外へ)。条件付きブレークポイント、ログポイント、ウォッチ式にも対応 |
 | ⌨️ コンソール | 出力の下の欄で、式やコードをその場で実行。実行後もスクリプトの変数や作ったオブジェクトを調べられます |
 | 🧭 コードの移動 | **定義へ移動** (F12)、**参照を検索** (⇧F12)、スコープを考慮した**名前の一括変更** (F2)、同じ変数のハイライト、**スティッキースクロール** |
-| 🖥 GUI プレビュー | スクリプトが作った ScreenGui を「ゲーム」タブに表示。**ボタンをタップすると、接続した関数が実行されます**。ClickDetector・ProximityPrompt・Touched・キー入力も試せます |
+| 🎮 ゲーム画面 | スクリプトが作った ScreenGui を、**Roblox と同じ規則で大きさ・位置を計算**して表示 (UIListLayout / UIGridLayout / UIPadding / UIScale / AutomaticSize / ScrollingFrame / UIFlexItem / UICorner / UIStroke / UIGradient / リッチテキスト)。**タップ・ドラッグ・スクロール・文字入力・キー入力**がそのままスクリプトに届きます (スライダーやウィンドウの移動も可)。スマホ / タブレット / PC の画面に切り替え、全画面表示 (スマホは自動で横向き) にも対応 |
+| 📦 loadstring | `loadstring(game:HttpGet(URL))()` をそのまま実行。**Obsidian・LinoriaLib・Orion・Kavo・WindUI などの UI ライブラリが実際に表示・操作できます**。取得した中身は端末に保存され、オフラインでも動きます。CORS で読めないサイトは「中継」か「中身を登録」で対応 |
+| 📚 ライブラリの補完 | loadstring の行があると、裏でライブラリのソースを読み取り、補完・ゴーストテキスト・ヒントに追加。`local Window = ` → `Library:CreateWindow({...})`、`Groupbox:AddToggle(` → `Text` / `Default` / `Callback` の雛形、`Toggles.MyToggle:` → `OnChanged` など |
 | 📑 タブ・分割 | 複数ファイルをタブで開く、並べ替え、iPad / PC では左右分割 |
 | 💾 保存 | 入力が止まるとすぐ自動保存。保存が終わる前にアプリが閉じられても、**下書きから復元**します。変更履歴、ZIP の書き出し / 読み込み、共有シートにも対応 |
 | 🔍 検索 | ファイル内の検索・置換 (正規表現対応)、全ファイル検索・一括置換、ファイル名検索 (⌘P)、関数・変数へ移動 |
@@ -91,13 +93,15 @@
 
 ForgeCode には JavaScript で書かれた Luau 互換のエンジンが入っていて、ブラウザ内でそのまま実行できます。
 
-- **Luau の文法**: 型注釈、`+=` などの複合代入、`continue`、補間文字列 `` `x = {x}` ``、if 式、汎用反復 (`for k, v in t do`) に対応。
+- **Luau の文法**: 型注釈、`+=` などの複合代入、`continue`、補間文字列 `` `x = {x}` ``、if 式、汎用反復 (`for k, v in t do`) に対応。`getfenv` / `setfenv` (関数ごとの環境)、`string.pack` / `unpack` も使えます。
 - **標準ライブラリ**: `string` (Lua パターン・`string.format` を含む) / `table` / `math` / `os` / `coroutine` / `task` / `utf8` / `bit32` / `buffer` / `debug`
 - **Roblox API (模擬)**: `game`, `workspace`, `script`, `Instance.new`, すべてのクラスのプロパティ・メソッド・イベント、`Vector3`, `CFrame`, `Color3`, `UDim2`, `TweenInfo`, `Enum` などのデータ型。
   - `Players.PlayerAdded` / `CharacterAdded` は実行後に自動で発火するので、サーバースクリプトの動作確認ができます。
   - `RunService.Heartbeat`, `TweenService` (実際に時間をかけて補間), `DataStoreService` (メモリ上に保存), `HttpService:JSONEncode/JSONDecode`, `RemoteEvent` (同じ実行内でサーバー ⇄ クライアントがつながります), `require` (プロジェクト内のモジュール) などは実際に動きます。
   - サーバースクリプト (`.server.luau`) では、本物と同じく `Players.LocalPlayer` が nil になります。
   - ボタンなどのイベントに関数を接続していると、実行は終了せず「操作待ち」になります。「ゲーム」タブで操作でき、■ で終了します。
+  - GUI は `AbsoluteSize` / `AbsolutePosition` / `TextBounds` / `AbsoluteContentSize` が実際の値になり、変化すると `GetPropertyChangedSignal` も発火します。`UserInputService.InputBegan/InputChanged/InputEnded`、`Mouse.X/Y`、`GetMouseLocation`、`IsMouseButtonPressed`、`TextBox:CaptureFocus` なども画面の操作と連動します。
+  - `game:GetObjects` (Roblox のアセット) は読み込めないため、空の Model を返します (Rayfield のように UI をアセットから読み込むライブラリは表示できません)。
   - 物理演算・3D の描画・本物のサーバー通信は行いません。実装されていないメソッドは「模擬動作です」と表示して既定値を返します。
 - **エグゼキューター API (模擬)**: 環境 (`getgenv`, `getrenv`, `getgc`, `filtergc` …)、クロージャ (`hookfunction`, `restorefunction`, `newcclosure` …)、メタテーブル (`hookmetamethod`, `getnamecallmethod`, `getrawmetatable`, `setreadonly` …)、シグナル (`getconnections`, `firesignal`, `hooksignal` …)、ファイル (`readfile` / `writefile` / `listfiles` … プロジェクトの `workspace/` フォルダに保存)、`request`, `game:HttpGet`, `crypt`, `Drawing` (実行後にプレビュー表示), `WebSocket`, `bit`, `cache`, `debug.*`, `syn.*` など。補完に出る関数はすべてサンドボックスにも存在します (`tests/executor.test.mjs` で確認)。
 - 無限ループは 10 秒 (設定で変更可) で自動停止します。■ でいつでも止められます。
@@ -122,6 +126,8 @@ iPhone / iPad では、ホーム画面に追加して使うとデータが消え
 index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュール)
   js/luau/                   Luau 互換エンジン (字句解析・構文解析・JS へのコンパイル・実行時ライブラリ・Roblox / エグゼキューター模擬)
     debug.js                 デバッガー (ブレークポイント・ステップ実行・変数の表示・式の評価)
+    gui.js                   GUI エンジン (レイアウト計算・入力の再現・画面への差分送信)
+    remote.js                外部スクリプトの取得 (URL の正規化・キャッシュ・中継)
   js/editor/                 エディタ機能
     luau-lang.js             色付けと字下げ
     blocks.js                ブロック構造の解析 (end の自動入力・過不足の診断・整形)
@@ -129,10 +135,13 @@ index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュー
     symbols.js               スコープ解析 (定義・参照・名前の変更・ハイライト・スティッキースクロール)
     breakpoints.js           ブレークポイントと停止行の表示
     luau-intel.js            型の推論と補完
+    extlib.js                loadstring で読み込むライブラリのソース解析 (補完・ゴーストテキスト用)
     inline.js                インライン候補 (ゴーストテキスト)
     lint.js / typo.js        エラーチェック・誤字検出・自動修正
     errorlens.js             行の右に出るエラー表示
-  js/app/                    画面 (ファイル一覧・タブ・実行パネル・GUI プレビュー・設定・初回案内など)
+  js/app/                    画面 (ファイル一覧・タブ・実行パネル・ゲーム画面・設定・初回案内など)
+    gui-preview.js           ゲーム画面 (差分の描画・タップ / ドラッグ / キー入力・全画面)
+    extlibs.js / remote-ui.js  ライブラリの裏読み込み、外部スクリプトの管理・UI ライブラリのギャラリー
   js/workers/                実行用の Web Worker
   js/data/                   補完用の API データ (Luau・エグゼキューター・スニペット)
 data/roblox-api.json         Roblox API ダンプ (変換済み)
@@ -143,7 +152,7 @@ tools/                       ライブラリと API データを作り直すス�
 ```
 
 - テスト: `for f in tests/*.test.mjs; do node "$f" || break; done`
-  - `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `intel` (型推論) / `indent` (字下げ・end・整形) / `lint` (エラーチェック・誤字) / `inline` (インライン候補)
+  - `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論) / `indent` (字下げ・end・整形) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
 - Roblox API データの更新: `node tools/build-roblox-api.mjs` (最新の API ダンプを取得して `data/roblox-api.json` を作り直します)
 - ライブラリの作り直し: `cd tools && npm install && npm run vendor`
 - ファイルを変更したら `node tools/build-sw.mjs` で Service Worker のキャッシュ一覧を更新してください (更新しないと古いキャッシュが使われることがあります)。
