@@ -2,19 +2,22 @@
 // テキストから変数の型を推論し (例: local Players = game:GetService("Players") → Players クラス)、
 // Roblox API のメンバーを候補に出します。
 import * as db from './apidb.js'
-import { LUAU_GLOBALS, LUAU_LIBS, ROBLOX_DATATYPES, SERVICE_DOCS, LUAU_KEYWORDS, LUAU_TYPES } from '../data/luau-api.js'
+import { LUAU_GLOBALS, LUAU_LIBS, ROBLOX_DATATYPES, RESULT_TYPES, SERVICE_DOCS, LUAU_KEYWORDS, LUAU_TYPES } from '../data/luau-api.js'
 import { parseEntries } from '../data/luau-api.js'
 import { EXECUTOR_GLOBALS, EXECUTOR_LIBS, DRAWING_PROPS, DRAWING_KINDS, EXECUTOR_GAME_METHODS, EXECUTOR_OBJECTS, EXECUTOR_POPULAR, REQUEST_OPTIONS, METAMETHODS, HASH_ALGORITHMS } from '../data/executor-api.js'
 import { LUAU_SNIPPETS } from '../data/snippets.js'
 import { snippet, snippetCompletion, syntaxTree } from '../../vendor/codemirror.js'
 import { scanBlocks } from './blocks.js'
 import { membersOfRef, indexRef, sigOf } from './extlib.js'
+import { textIndex } from './luau-index.js'
 
 // executor: エグゼキューター API を補完に含めるか (プロジェクトのモードで切り替え)
 // moduleSource: require したモジュールのソースを返す関数 (アプリ側が設定。名前 → テキスト)
 // extLib: loadstring で読み込むライブラリの API を返す関数 (URL → 解析結果。未取得なら null を返して取得を始める)
 export const intel = { executor: true, roblox: true, snippets: true, moduleSource: null, extLib: null }
 
+// データ型の定義 (戻り値だけの型も含む)
+const DT = n => ROBLOX_DATATYPES[n] || RESULT_TYPES[n]
 const DRAWING_ENTRIES = {}
 for (const k of DRAWING_KINDS) DRAWING_ENTRIES[k] = parseEntries([...DRAWING_PROPS[k], ...DRAWING_PROPS.common])
 
@@ -159,10 +162,12 @@ const strArg = a => { const m = a && /^["'](.*)["']$/.exec(a.trim()); return m ?
 // ============================================================
 // 型
 // ============================================================
-export function fromTypeName(t) {
+export function fromTypeName(t, text) {
   if (!t) return null
-  t = t.trim().replace(/\?$/, '')
+  t = t.trim().replace(/\?$/, '').replace(/^\((.*)\)$/, '$1').trim()
   if (t.startsWith('Enum.')) return { k: 'enumItem', enum: t.slice(5) }
+  // A | B → A (nil との組み合わせ T | nil もここで)
+  if (/\|/.test(t) && !/[({]/.test(t)) { const first = t.split('|').map(s => s.trim()).find(s => s && s !== 'nil'); return first ? fromTypeName(first, text) : null }
   switch (t) {
     case 'string': case 'Content': case 'ContentId': return { k: 'string' }
     case 'number': case 'int': case 'int64': case 'float': case 'double': return { k: 'number' }
@@ -172,14 +177,55 @@ export function fromTypeName(t) {
     case 'RBXScriptConnection': return { k: 'conn' }
     case 'buffer': return { k: 'lib', name: 'buffer' }
   }
-  const arr = /^\{(\w+)\}$/.exec(t)
+  // {Player} / { Player } / {[string]: Player} (反復したときの値の型)
+  const arr = /^\{\s*(?:\[\s*\w+\s*\]\s*:\s*)?(\w+)\s*\}$/.exec(t)
   if (arr && db.isClass(arr[1])) return { k: 'classArray', name: arr[1] }
   if (db.isClass(t)) return { k: 'class', name: t }
-  if (ROBLOX_DATATYPES[t]) return { k: 'dt', name: t }
+  if (ROBLOX_DATATYPES[t] || RESULT_TYPES[t]) return { k: 'dt', name: t }
   if (t === 'Drawing') return { k: 'drawing', name: 'Line' }
   if (t === 'Vector2' || t === 'Color3') return { k: 'dt', name: t }
+  if (/^\{/.test(t)) return typedTable(t, text, null)
+  // type Name = { ... } で定義した型
+  if (text && /^[A-Za-z_]\w*$/.test(t)) return aliasType(t, text)
   return null
 }
+
+// ---- type 定義 (type Foo = { name: string, part: BasePart }) ----
+const aliasCache = { text: null, map: new Map() }
+function aliasType(name, text, depth = 0) {
+  if (aliasCache.text !== text) { aliasCache.text = text; aliasCache.map = new Map() }
+  if (aliasCache.map.has(name)) return aliasCache.map.get(name)
+  aliasCache.map.set(name, null)
+  let ty = null
+  const s = textIndex(text).typeBody(name)
+  if (s !== null && depth < 4) {
+    const body = text.slice(s, s + 4000).trimStart()
+    if (body.startsWith('{')) ty = typedTable(body.slice(0, matchClose(body, 0) + 1), text, name)
+    else {
+      const m = /^([A-Za-z_][\w.]*)/.exec(body)
+      if (m) ty = fromTypeName(m[1], m[1] === name ? null : text)
+    }
+  }
+  aliasCache.map.set(name, ty)
+  return ty
+}
+function typedTable(src, text, name) {
+  const inner = src.trim().slice(1, -1)
+  const fields = new Map()
+  for (const part of db.splitTop(inner.replace(/;/g, ','))) {
+    const m = /^\s*([A-Za-z_]\w*)\s*:\s*([\s\S]+?)\s*$/.exec(part)
+    if (m) fields.set(m[1], m[2])
+  }
+  if (!fields.size) {
+    const el = /^\s*(?:\[\s*\w+\s*\]\s*:\s*)?([A-Za-z_]\w*)\s*$/.exec(inner)
+    if (el && db.isClass(el[1])) return { k: 'classArray', name: el[1] }
+    return null
+  }
+  return { k: 'typed', name: name || 'table', fields, text }
+}
+// 関数型 "(a: number) -> Player" の戻り値
+const fnTypeRet = t => { const i = t.lastIndexOf('->'); return i >= 0 ? t.slice(i + 2).trim() : null }
+const typedEntry = (name, t) => (/->/.test(t) ? { kind: 'function', sig: t.replace(/\s*->\s*([^)]*)$/, ': $1').replace(/\(\s*self\s*(?::\s*[^,)]*)?\s*,?\s*/, '('), doc: '型定義のメソッド' } : { kind: 'value', type: t, doc: '型定義のフィールド' })
 
 export function typeLabel(ty) {
   if (!ty) return 'any'
@@ -199,6 +245,7 @@ export function typeLabel(ty) {
     case 'execArray': return `{${ty.name}}`
     case 'usertable': return ty.module || ty.name
     case 'ext': return ty.lib
+    case 'typed': return ty.name
     case 'shared': return ty.name === 'genv' ? 'getgenv()' : ty.name
     case 'bool': return 'boolean'
     default: return ty.k
@@ -206,78 +253,77 @@ export function typeLabel(ty) {
 }
 
 // ============================================================
-// 宣言の検索 (正規表現ベース: 書きかけのコードでも動作)
+// 宣言の検索 (索引から。スコープを考慮し、書きかけのコードでも動作)
 // ============================================================
-// name のすべての宣言を集める (テキストごと・名前ごとにキャッシュ)
-let declCache = { text: '', byName: new Map() }
-function declsOf(text, name) {
-  if (declCache.text !== text) declCache = { text, byName: new Map() }
-  let list = declCache.byName.get(name)
-  if (!list) declCache.byName.set(name, list = computeDecls(text, name))
-  return list
-}
-function computeDecls(src, name) {
-  const out = []
-  const consider = d => out.push(d)
-  const esc = name.replace(/[$]/g, '\\$')
-  let re = new RegExp(`\\blocal\\s+((?:[A-Za-z_]\\w*\\s*(?::\\s*[^,=\\n]+?)?\\s*,\\s*)*?)\\b${esc}\\b\\s*(?::\\s*([^=\\n]+?))?\\s*(?:,[^=\\n]*)?(?:=\\s*([^\\n]*))?$`, 'gm')
-  let m
-  while ((m = re.exec(src))) {
-    const idx = m[1] ? m[1].split(',').filter(x => x.trim()).length : 0
-    consider({ pos: m.index, kind: 'local', anno: m[2], expr: m[3], index: idx })
-  }
-  re = new RegExp(`\\blocal\\s+function\\s+${esc}\\s*(?:<[^>]*>)?\\s*(\\([^)]*\\))`, 'g')
-  while ((m = re.exec(src))) consider({ pos: m.index, kind: 'func', params: m[1] })
-  re = new RegExp(`^[ \\t]*function\\s+${esc}\\s*(\\([^)]*\\))`, 'gm')
-  while ((m = re.exec(src))) consider({ pos: m.index, kind: 'func', params: m[1] })
-  re = new RegExp(`\\bfor\\s+([\\w\\s,:]*?\\b${esc}\\b[\\w\\s,:]*?)\\s+in\\s+([^\\n]*?)\\s+do\\b`, 'g')
-  while ((m = re.exec(src))) {
-    const vars = m[1].split(',').map(v => v.split(':')[0].trim())
-    if (vars.includes(name)) consider({ pos: m.index, kind: 'forin', index: vars.indexOf(name), expr: m[2] })
-  }
-  re = new RegExp(`\\bfor\\s+${esc}\\s*=`, 'g')
-  while ((m = re.exec(src))) consider({ pos: m.index, kind: 'fornum' })
-  re = /\bfunction\b\s*([\w.:]*)\s*(?:<[^>]*>)?\s*\(([^)]*)\)/g
-  while ((m = re.exec(src))) {
-    if (!m[2].includes(name) && !(name === 'self' && m[1].includes(':'))) continue
-    const params = m[2].split(',').map(p => p.trim())
-    const idx = params.findIndex(p => p.split(':')[0].trim() === name)
-    if (idx < 0) {
-      if (name === 'self' && m[1].includes(':')) consider({ pos: m.index, kind: 'param', index: -1, self: m[1].slice(0, m[1].indexOf(':')) })
-      continue
-    }
-    const p = params[idx]
-    const anno = p.includes(':') ? p.slice(p.indexOf(':') + 1).trim() : null
-    let signalExpr = null, hookArg = -1
-    if (!m[1]) {
-      const pre = src.slice(Math.max(0, m.index - 300), m.index)
-      const cm = /([\w.:"'()[\]]+?)\s*:\s*(?:Connect|Once|ConnectParallel|connect)\s*\(\s*$/.exec(pre)
-      if (cm) signalExpr = cm[1]
-      // hookmetamethod(game, "__namecall", function(self, ...) の self は Instance
-      else if (/hookmetamethod\s*\([^()]*,\s*["']__(?:namecall|index|newindex)["']\s*,\s*(?:newcclosure\s*\(\s*)?$/.test(pre)) hookArg = idx
-    }
-    consider({ pos: m.index, kind: 'param', index: idx, anno, signalExpr, hookArg })
-  }
-  re = new RegExp(`^[ \\t]*${esc}\\s*=\\s*([^=\\n][^\\n]*)$`, 'gm')
-  while ((m = re.exec(src))) consider({ pos: m.index, kind: 'assign', expr: m[1] })
-  return out
-}
 function findDecl(text, name, before) {
-  let best = null
-  for (const d of declsOf(text, name)) if (d.pos < before && (!best || d.pos >= best.pos)) best = d
-  return best
+  return textIndex(text).find(name, before)
 }
 // lint 用: pos から見える name の宣言位置 (なければ -1)
 export function declPos(text, name, before) {
   const d = findDecl(text, name, before)
   return d ? d.pos : -1
 }
+const lineEndAt = (text, p) => { const i = text.indexOf('\n', p); return i < 0 ? text.length : i }
+
+// ---- 自分で書いた関数の戻り値の型 (戻り値の型注釈、なければ return の式から) ----
+const retCache = { text: null, map: new Map() }
+export function fnReturnType(text, fnPos, depth = 0) {
+  if (fnPos === undefined || fnPos === null || depth > 7 || !text) return null
+  if (retCache.text !== text) { retCache.text = text; retCache.map = new Map() }
+  if (retCache.map.has(fnPos)) return retCache.map.get(fnPos)
+  retCache.map.set(fnPos, null) // 再帰の防止
+  const ix = textIndex(text)
+  let ty = null
+  const b = ix.blockAt(fnPos)
+  if (b && b.headerEnd !== undefined) {
+    const m = /^\s*:\s*(\{[^}\n]*\}|[A-Za-z_][\w.]*(?:<[^>\n]*>)?\??)/.exec(text.slice(b.headerEnd, b.headerEnd + 200))
+    if (m) ty = fromTypeName(m[1], text)
+  }
+  if (!ty) {
+    for (const rp of ix.returnsOf(fnPos)) {
+      let e = text.slice(rp, lineEndAt(text, rp)).replace(/--.*$/, '').trim()
+      e = e.replace(/;?\s*\b(?:end|else|elseif)\b[\s\S]*$/, '').replace(/;\s*$/, '').trim()
+      if (!e) continue
+      ty = exprType(e, { text, pos: rp, index: 0 }, depth + 1)
+      if (ty) break
+    }
+  }
+  retCache.map.set(fnPos, ty)
+  return ty
+}
+
+// ---- if x:IsA("BasePart") then ... の中では x は BasePart ----
+function narrowed(text, name, pos) {
+  const ix = textIndex(text)
+  if (!ix.hasIsA || !/^[A-Za-z_]\w*$/.test(name)) return null
+  const isA = new RegExp(`(?:^|[^\\w.:])(not\\s+)?${name}\\s*:\\s*IsA\\s*\\(\\s*["'](\\w+)["']\\s*\\)|(?:^|[^\\w.:])${name}\\s*\\.\\s*ClassName\\s*==\\s*["'](\\w+)["']`)
+  for (const b of ix.enclosing(pos, 12, 400)) {
+    if (b.kind !== 'if' || b.headerEnd === undefined || pos < b.headerEnd) continue
+    if (b.mids && b.mids.some(m => m > b.headerEnd && m < pos)) continue
+    const cond = text.slice(b.s, b.headerEnd)
+    if (/\bor\b/.test(cond)) continue
+    const m = isA.exec(cond)
+    const cls = m && !m[1] ? m[2] || m[3] : null
+    if (cls && db.isClass(cls)) return { k: 'class', name: cls }
+  }
+  // ガード節: if not x:IsA("Part") then return end の後ろ
+  const scope = ix.enclosing(pos, 1, 400)[0]
+  const from = Math.max(scope ? scope.s : 0, pos - 20000)
+  const seg = text.slice(from, pos)
+  if (!seg.includes('IsA')) return null
+  const gre = new RegExp(`\\bif\\s+not\\s+${name}\\s*:\\s*IsA\\s*\\(\\s*["'](\\w+)["']\\s*\\)\\s*then\\s+(?:return|continue|break)\\b`, 'g')
+  let g, last = null
+  while ((g = gre.exec(seg))) last = g
+  return last && db.isClass(last[1]) ? { k: 'class', name: last[1] } : null
+}
 
 // ============================================================
 // テーブルの中身 (local M = { a = 1 } / function M.foo() / M.bar = ...)
 // ============================================================
 const fieldCache = { text: '', byName: new Map() }
-function keysOfTableLiteral(body) {
+const DEF_DOC = 'このファイルで定義'
+// テーブルリテラルの中身: Map(キー → 項目)。base はテキスト内での body の開始位置
+function keysOfTableLiteral(body, base = 0) {
   // 関数の本体や入れ子のテーブルの中は数えない
   const out = new Map()
   const { tokens } = scanBlocks(body)
@@ -292,7 +338,22 @@ function keysOfTableLiteral(body) {
       const nx = tokens[i + 2]
       let sig = null
       if (nx && nx.t === 'function') { const m = /^function\s*(\([^)]*\))/.exec(body.slice(nx.s)); sig = m ? m[1] : '()' }
-      out.set(body.slice(t.s, t.e), sig ? { kind: 'function', sig, doc: 'このファイルで定義' } : { kind: 'value', type: valueKind(body, nx), doc: 'このファイルで定義' })
+      if (sig) out.set(body.slice(t.s, t.e), { kind: 'function', sig, doc: DEF_DOC, fnPos: base + nx.s })
+      else {
+        // 値の式 (次の , まで)
+        let d = 0, b2 = 0, j = i + 2
+        for (; j < tokens.length; j++) {
+          const u = tokens[j]
+          if (u.t === '(' || u.t === '{' || u.t === '[') d++
+          else if (u.t === ')' || u.t === '}' || u.t === ']') { if (d === 0) break; d-- }
+          if (u.role === 'open') b2++
+          else if (u.role === 'close') b2--
+          else if (d === 0 && b2 === 0 && (u.t === ',' || u.t === ';')) break
+        }
+        const exprEnd = j < tokens.length ? tokens[j].s : body.length
+        const expr = nx ? body.slice(nx.s, Math.min(exprEnd, nx.s + 600)).trim() : ''
+        out.set(body.slice(t.s, t.e), { kind: 'value', type: valueKind(body, nx), doc: DEF_DOC, expr, pos: base + (nx ? nx.s : t.s) })
+      }
     }
     prev = t
   }
@@ -306,24 +367,35 @@ function valueKind(text, tok) {
   if (tok.t === '{') return 'table'
   return 'any'
 }
-// 返り値: Map(フィールド名 → { kind, sig?, type?, doc, colon? })
+const exprKind = e => (/^["'`]|^\[=*\[/.test(e) ? 'string' : /^-?\.?\d/.test(e) ? 'number' : /^(true|false)\b/.test(e) ? 'boolean' : /^\{/.test(e) ? 'table' : 'any')
+// 返り値: Map(フィールド名 → { kind, sig?, type?, doc, colon?, fnPos?, expr?, pos? })
 export function tableFields(text, name) {
   if (fieldCache.text !== text) { fieldCache.text = text; fieldCache.byName = new Map() }
   let fields = fieldCache.byName.get(name)
   if (fields) return fields
   fields = new Map()
-  const esc = name.replace(/[$]/g, '\\$')
+  const esc = name.replace(/[$.]/g, '\\$&')
   let re = new RegExp(`(?:^|[^.\\w])${esc}\\s*=\\s*(?:setmetatable\\s*\\(\\s*)?\\{`, 'g')
   let m
   while ((m = re.exec(text))) {
     const start = text.indexOf('{', m.index + m[0].length - 1)
     const end = matchClose(text, start)
-    for (const [k, v] of keysOfTableLiteral(text.slice(start + 1, end))) fields.set(k, v)
+    for (const [k, v] of keysOfTableLiteral(text.slice(start + 1, end), start + 1)) fields.set(k, v)
   }
   re = new RegExp(`\\bfunction\\s+${esc}\\s*([.:])\\s*([A-Za-z_]\\w*)\\s*(?:<[^>]*>)?\\s*(\\([^)]*\\))`, 'g')
-  while ((m = re.exec(text))) fields.set(m[2], { kind: 'function', sig: m[3], doc: 'このファイルで定義', colon: m[1] === ':' })
+  while ((m = re.exec(text))) fields.set(m[2], { kind: 'function', sig: m[3], doc: DEF_DOC, colon: m[1] === ':', fnPos: m.index })
   re = new RegExp(`(?:^|[^.\\w])${esc}\\s*\\.\\s*([A-Za-z_]\\w*)\\s*=(?!=)\\s*(function\\s*(\\([^)]*\\)))?`, 'g')
-  while ((m = re.exec(text))) if (!fields.has(m[1]) || m[2]) fields.set(m[1], m[2] ? { kind: 'function', sig: m[3], doc: 'このファイルで定義' } : { kind: 'value', type: 'any', doc: 'このファイルで定義' })
+  while ((m = re.exec(text))) {
+    if (fields.has(m[1]) && !m[2]) continue
+    if (m[2]) fields.set(m[1], { kind: 'function', sig: m[3], doc: DEF_DOC, fnPos: m.index + m[0].lastIndexOf('function') })
+    else { const vs = m.index + m[0].length; const expr = text.slice(vs, lineEndAt(text, vs)).trim(); fields.set(m[1], { kind: 'value', type: exprKind(expr), doc: DEF_DOC, expr, pos: vs }) }
+  }
+  // クラスのメソッドの中の self.X = ... (インスタンスのフィールド)
+  for (const sa of textIndex(text).selfAssigns(name)) {
+    if (fields.has(sa.field)) continue
+    if (/^function\b/.test(sa.expr)) { const fm = /^function\s*(\([^)]*\))/.exec(sa.expr); fields.set(sa.field, { kind: 'function', sig: fm ? fm[1] : '()', doc: 'self のフィールド', fnPos: text.indexOf('function', sa.pos) }) }
+    else fields.set(sa.field, { kind: 'value', type: exprKind(sa.expr), doc: 'self のフィールド', expr: sa.expr, pos: sa.pos })
+  }
   fieldCache.byName.set(name, fields)
   return fields
 }
@@ -453,28 +525,68 @@ function exprType(expr, ctx, depth) {
   // 複数代入の index 番目
   if (ctx.index > 0) {
     const parts = db.splitTop(e)
+    if (parts.length === 1) {
+      // local a, b = f() → f が返す 2 番目の値
+      const chain = parseChain(parts[0].trim())
+      const ty = chain && resolveChain(chain, { ...ctx, index: 0, tuple: true }, depth + 1)
+      return ty && ty.k === 'tuple' ? ty.items[ctx.index] || null : null
+    }
     e = (parts[ctx.index] || '').trim()
     ctx = { ...ctx, index: 0 }
   } else {
     e = db.splitTop(e)[0] || e
   }
-  // a or b → a、a and b → b
+  // a or b → a (a が nil のこともあるので、a が分からなければ b)、a and b → b
   const orParts = splitKeyword(e, 'or')
-  if (orParts.length > 1) e = orParts[0]
+  if (orParts.length > 1) {
+    for (const part of orParts) { const t = exprType(part, ctx, depth + 1); if (t) return t }
+    return null
+  }
   const andParts = splitKeyword(e, 'and')
   if (andParts.length > 1) e = andParts[andParts.length - 1]
-  e = e.trim().replace(/::.*$/, '')
-  if (/^["'`]/.test(e)) return { k: 'string' }
-  if (/^\d/.test(e)) return { k: 'number' }
-  if (/^(true|false)\b/.test(e)) return { k: 'bool' }
-  if (/^\{/.test(e) || /^setmetatable\s*\(\s*\{/.test(e)) return { k: 'table' }
+  e = e.trim()
+  // x :: Type (型のキャスト)
+  const cast = /^([\s\S]+?)\s*::\s*([\w.{}<>?\[\]: ]+)$/.exec(e)
+  if (cast) { const t = fromTypeName(cast[2], ctx.text); if (t) return t; e = cast[1] }
+  if (/^not\b/.test(e) || /^(true|false)\b/.test(e)) return { k: 'bool' }
+  if (/^["'`]/.test(e) || /^\[=*\[/.test(e)) return { k: 'string' }
+  if (/^#/.test(e) || /^-?\.?\d/.test(e)) return { k: 'number' }
+  // setmetatable({}, Class) → Class のインスタンス
+  let sm
+  if ((sm = /^setmetatable\s*\(/.exec(e))) {
+    const open = e.indexOf('(')
+    const args = db.splitTop(e.slice(open + 1, matchClose(e, open))).map(a => a.trim())
+    const cls = args[1] && /^[A-Za-z_][\w.]*$/.test(args[1]) ? args[1] : null
+    if (cls && ctx.text && tableFields(ctx.text, cls).size) return { k: 'usertable', name: cls, text: ctx.text }
+    return { k: 'table' }
+  }
+  if (/^\{/.test(e)) {
+    // 配列 { a, b } の要素の型 (Instance なら {Instance} として反復できる)
+    const close = matchClose(e, 0)
+    const inner = e.slice(1, close).trim()
+    if (inner && !/^[A-Za-z_]\w*\s*=[^=]|^\[/.test(inner)) {
+      const first = db.splitTop(inner)[0]
+      const t = first && exprType(first, ctx, depth + 1)
+      if (t && t.k === 'class') return { k: 'classArray', name: t.name }
+    }
+    return { k: 'table' }
+  }
   if (/^function\b/.test(e)) return { k: 'func' }
   if (/^require\b/.test(e)) return moduleType(e)
   if (/^loadstring\b/.test(e)) { const t = loadstringType(e, ctx, depth); if (t) return t }
+  // if a then b else c (if 式) → b の型
+  const ifm = /^if\b[\s\S]*?\bthen\b([\s\S]*?)\belse\b/.exec(e)
+  if (ifm) return exprType(ifm[1], ctx, depth + 1)
   const chain = parseChain(e)
   if (!chain) return null
   const ty = resolveChain(chain, ctx, depth + 1)
-  if (ty && chain.rest.trim() && /^[+\-*/]/.test(chain.rest.trim()) && ty.k !== 'dt' && ty.k !== 'number') return null
+  const rest = chain.rest.trim()
+  if (ty && rest) {
+    // 算術: Vector3 + Vector3 → Vector3、数値 → number、.. → string
+    if (/^\.\./.test(rest)) return { k: 'string' }
+    if (/^[+\-*/%^]/.test(rest)) return ty.k === 'dt' || ty.k === 'number' ? ty : null
+    if (/^(==|~=|<=|>=|<|>)/.test(rest)) return { k: 'bool' }
+  }
   return ty
 }
 
@@ -503,29 +615,13 @@ function nameType(name, ctx, depth) {
   if (ctx.text) {
     const d = findDecl(ctx.text, name, ctx.pos)
     if (d) {
-      if (d.anno) { const t = fromTypeName(d.anno.trim()); if (t) return t }
-      if (d.kind === 'local' || d.kind === 'assign') {
-        const t = exprType(d.expr, { ...ctx, pos: d.pos, index: d.index || 0 }, depth)
-        if (t && t.k === 'table') return { k: 'usertable', name, text: ctx.text }
-        if (t) return t
-        if (tableFields(ctx.text, name).size) return { k: 'usertable', name, text: ctx.text }
-      }
-      if (d.kind === 'forin' && d.index >= 1) {
-        const m = /^\s*i?pairs\s*\(([\s\S]*)\)\s*$/.exec(d.expr)
-        const it = exprType(m ? m[1] : d.expr, { ...ctx, pos: d.pos, index: 0 }, depth)
-        if (it && it.k === 'classArray') return { k: 'class', name: it.name }
-        if (it && it.k === 'execArray') return { k: 'execobj', name: it.name }
-      }
-      if (d.kind === 'forin' && d.index === 0) return { k: 'number' }
-      if (d.kind === 'fornum') return { k: 'number' }
-      if (d.kind === 'param' && d.signalExpr) {
-        const sig = exprType(d.signalExpr, { ...ctx, pos: d.pos, index: 0 }, depth)
-        if (sig && sig.k === 'signal' && sig.params[d.index]) return fromTypeName(sig.params[d.index])
-      }
-      if (d.kind === 'param' && d.hookArg === 0) return { k: 'class', name: 'Instance' }
-      if (d.kind === 'param' && d.self) return { k: 'usertable', name: d.self, text: ctx.text }
-      if (d.kind === 'func') return { k: 'func', entry: { src: 'data', e: { kind: 'function', sig: d.params || '()', doc: 'このファイルで定義した関数' } }, user: true }
-      if (d.kind === 'param') return null
+      const t = declType(d, name, ctx, depth)
+      // if x:IsA("Part") then の中などでは型を絞り込む
+      if ((!t || t.k === 'class') && d.kind !== 'func') { const n = narrowed(ctx.text, name, ctx.pos); if (n) return n }
+      if (t !== undefined) return t
+    } else if (/^[a-z]/i.test(name)) {
+      const n = narrowed(ctx.text, name, ctx.pos)
+      if (n) return n
     }
   }
   switch (name) {
@@ -542,6 +638,48 @@ function nameType(name, ctx, depth) {
   return null
 }
 
+const userFnEntry = (sig, doc = 'このファイルで定義した関数') => ({ src: 'data', e: { kind: 'function', sig: sig || '()', doc } })
+// 宣言から型を求める (undefined: 分からないのでグローバルとして調べ続ける)
+function declType(d, name, ctx, depth) {
+  if (d.anno) { const t = fromTypeName(d.anno.trim(), ctx.text); if (t) return t }
+  if (d.kind === 'local' || d.kind === 'assign') {
+    const part = d.index > 0 ? (db.splitTop(d.expr || '')[d.index] || '') : (d.expr || '')
+    if (/^\s*function\b/.test(part) && d.index === 0) {
+      const fnPos = ctx.text.indexOf('function', d.at)
+      const pm = /^\s*function\s*(\([^)]*\))/.exec(part)
+      return { k: 'func', entry: userFnEntry(pm ? pm[1] : '()'), user: true, fnPos: fnPos >= 0 ? fnPos : undefined, text: ctx.text }
+    }
+    const t = exprType(d.expr, { ...ctx, pos: d.pos, index: d.index || 0 }, depth)
+    if (t && t.k === 'table') return { k: 'usertable', name, text: ctx.text }
+    if (t) return t
+    if (tableFields(ctx.text, name).size) return { k: 'usertable', name, text: ctx.text }
+    return undefined
+  }
+  if (d.kind === 'forin') {
+    if (d.index === 0) {
+      // for i, v in ipairs(...) / for _, x in t → 数値 (キー)。pairs(dict) は文字列のこともある
+      return /^\s*ipairs\b/.test(d.expr) || !/^\s*pairs\b/.test(d.expr) ? { k: 'number' } : null
+    }
+    const m = /^\s*i?pairs\s*\(([\s\S]*)\)\s*$/.exec(d.expr)
+    const it = exprType(m ? m[1] : d.expr, { ...ctx, pos: d.pos, index: 0 }, depth)
+    if (it && it.k === 'classArray') return { k: 'class', name: it.name }
+    if (it && it.k === 'execArray') return { k: 'execobj', name: it.name }
+    return null
+  }
+  if (d.kind === 'fornum') return { k: 'number' }
+  if (d.kind === 'param') {
+    if (d.signalExpr) {
+      const sig = exprType(d.signalExpr, { ...ctx, pos: d.pos, index: 0 }, depth)
+      if (sig && sig.k === 'signal' && sig.params[d.index]) return fromTypeName(sig.params[d.index])
+    }
+    if (d.hookArg === 0) return { k: 'class', name: 'Instance' }
+    if (d.self) return { k: 'usertable', name: d.self, text: ctx.text }
+    return null
+  }
+  if (d.kind === 'func') return { k: 'func', entry: userFnEntry(d.params), user: true, fnPos: d.fnPos, text: ctx.text }
+  return undefined
+}
+
 function memberEntryOf(ty, name, op) {
   if (!ty) return null
   switch (ty.k) {
@@ -551,9 +689,9 @@ function memberEntryOf(ty, name, op) {
       if (ty.name === 'DataModel' && intel.executor && EXECUTOR_GAME_METHODS[name]) return { src: 'data', e: EXECUTOR_GAME_METHODS[name] }
       return null
     }
-    case 'dtlib': return ROBLOX_DATATYPES[ty.name].ctor[name] ? { src: 'data', e: ROBLOX_DATATYPES[ty.name].ctor[name] } : null
+    case 'dtlib': return DT(ty.name).ctor[name] ? { src: 'data', e: DT(ty.name).ctor[name] } : null
     case 'dt': {
-      const d = ROBLOX_DATATYPES[ty.name]
+      const d = DT(ty.name)
       const e = op === ':' ? d.methods[name] : (d.props[name] || d.methods[name])
       return e ? { src: 'data', e } : null
     }
@@ -566,7 +704,8 @@ function memberEntryOf(ty, name, op) {
     case 'conn': { const d = ROBLOX_DATATYPES.RBXScriptConnection; const e = d.methods[name] || d.props[name]; return e ? { src: 'data', e } : null }
     case 'enumItem': { const d = ROBLOX_DATATYPES.EnumItem; const e = d.props[name] || d.methods[name]; return e ? { src: 'data', e } : null }
     case 'enum': { const e = ROBLOX_DATATYPES.Enum.methods[name]; return e ? { src: 'data', e } : null }
-    case 'usertable': { const e = tableFields(ty.text, ty.name).get(name); return e ? { src: 'data', e } : null }
+    case 'usertable': { const e = userFields(ty).get(name); return e ? { src: 'data', e } : null }
+    case 'typed': { const t = ty.fields.get(name); return t ? { src: 'data', e: typedEntry(name, t) } : null }
     case 'shared': { const e = sharedFields(ty.text || '', ty.name).get(name); return e ? { src: 'data', e } : null }
     case 'execobj': { const e = EXECUTOR_OBJECTS[ty.name][name]; return e ? { src: 'data', e } : null }
     case 'drawing': { const e = (DRAWING_ENTRIES[ty.name] || DRAWING_ENTRIES.Line)[name]; return e ? { src: 'data', e } : null }
@@ -584,8 +723,8 @@ export function memberNamesOf(ty, op) {
       if (ty.name === 'DataModel') names.push(...Object.keys(EXECUTOR_GAME_METHODS), ...db.serviceNames())
       return names
     }
-    case 'dtlib': return Object.keys(ROBLOX_DATATYPES[ty.name].ctor)
-    case 'dt': { const d = ROBLOX_DATATYPES[ty.name]; return op === ':' ? Object.keys(d.methods) : [...Object.keys(d.props), ...Object.keys(d.methods)] }
+    case 'dtlib': return Object.keys(DT(ty.name).ctor)
+    case 'dt': { const d = DT(ty.name); return op === ':' ? Object.keys(d.methods) : [...Object.keys(d.props), ...Object.keys(d.methods)] }
     case 'lib': return [...Object.keys(LUAU_LIBS[ty.name] || {}), ...Object.keys(EXECUTOR_LIBS[ty.name] || {})]
     case 'string': return op === ':' ? Object.keys(LUAU_LIBS.string) : null
     case 'signal': return Object.keys(ROBLOX_DATATYPES.RBXScriptSignal.methods)
@@ -597,6 +736,35 @@ export function memberNamesOf(ty, op) {
     case 'drawing': return Object.keys(DRAWING_ENTRIES[ty.name] || DRAWING_ENTRIES.Line)
   }
   return null
+}
+
+// 自作テーブルのフィールド (クラスなら self.X のフィールド、入れ子のテーブルリテラルも)
+export function userFields(ty) {
+  const base = tableFields(ty.text, ty.name)
+  if (ty.litPos === undefined) return base
+  const key = '\u0001' + ty.litPos
+  if (fieldCache.text === ty.text && fieldCache.byName.has(key)) return fieldCache.byName.get(key)
+  const close = matchClose(ty.text, ty.litPos)
+  const merged = new Map([...keysOfTableLiteral(ty.text.slice(ty.litPos + 1, close), ty.litPos + 1), ...base])
+  if (fieldCache.text === ty.text) fieldCache.byName.set(key, merged)
+  return merged
+}
+// 値のフィールドの型 (式があれば推論)
+function fieldValueType(e, name, text, depth) {
+  if (e.expr && depth < 7) {
+    if (/^\{/.test(e.expr) && e.pos !== undefined && text[e.pos] === '{') return { k: 'usertable', name, text, litPos: e.pos }
+    const t = exprType(e.expr, { text, pos: e.pos !== undefined ? e.pos : text.length, index: 0 }, depth + 1)
+    if (t && t.k === 'table') return { k: 'usertable', name, text }
+    if (t) return t
+  }
+  return e.type === 'string' ? { k: 'string' } : e.type === 'number' ? { k: 'number' } : e.type === 'boolean' ? { k: 'bool' } : e.type === 'table' ? { k: 'usertable', name, text } : null
+}
+
+// 複数の値を返す関数 (local pos, onScreen = camera:WorldToViewportPoint(p))
+const TUPLE_RETURNS = {
+  WorldToViewportPoint: ['Vector3', 'bool'], WorldToScreenPoint: ['Vector3', 'bool'], GetBoundingBox: ['CFrame', 'Vector3'],
+  FindPartOnRay: ['BasePart', 'Vector3', 'Vector3', 'Enum.Material'], FindPartOnRayWithIgnoreList: ['BasePart', 'Vector3', 'Vector3', 'Enum.Material'], FindPartOnRayWithWhitelist: ['BasePart', 'Vector3', 'Vector3', 'Enum.Material'],
+  GetUserThumbnailAsync: ['string', 'bool'], GetAsync: ['any', 'DataStoreKeyInfo'], GetSortedAsync: ['DataStorePages'], GetMouseLocation: ['Vector2'],
 }
 
 function stepType(ty, st, ctx, depth) {
@@ -632,13 +800,13 @@ function stepType(ty, st, ctx, depth) {
         return { k: 'class', name: 'Instance' }
       }
       case 'dtlib': {
-        const e = ROBLOX_DATATYPES[ty.name].ctor[name]
+        const e = DT(ty.name).ctor[name]
         if (!e) return null
         if (e.kind === 'value') return fromTypeName(e.type)
         return { k: 'func', entry: { src: 'data', e } }
       }
       case 'dt': {
-        const e = ROBLOX_DATATYPES[ty.name].props[name]
+        const e = DT(ty.name).props[name]
         return e ? fromTypeName(e.type) : null
       }
       case 'lib': {
@@ -659,10 +827,17 @@ function stepType(ty, st, ctx, depth) {
         return fromTypeName(e.type)
       }
       case 'usertable': case 'shared': {
-        const e = (ty.k === 'shared' ? sharedFields(ty.text || ctx.text || '', ty.name) : tableFields(ty.text, ty.name)).get(name)
+        const e = (ty.k === 'shared' ? sharedFields(ty.text || ctx.text || '', ty.name) : userFields(ty)).get(name)
         if (!e) return null
-        if (e.kind === 'function') return { k: 'func', entry: { src: 'data', e }, user: true }
-        return e.type === 'string' ? { k: 'string' } : e.type === 'number' ? { k: 'number' } : e.type === 'boolean' ? { k: 'bool' } : null
+        const text = ty.text || ctx.text
+        if (e.kind === 'function') return { k: 'func', entry: { src: 'data', e }, user: true, fnPos: e.fnPos, text }
+        return fieldValueType(e, `${ty.name}.${name}`, text, depth)
+      }
+      case 'typed': {
+        const t = ty.fields.get(name)
+        if (!t) return null
+        if (/->/.test(t)) return { k: 'func', entry: { src: 'data', e: typedEntry(name, t) }, typedRet: fnTypeRet(t), text: ty.text }
+        return fromTypeName(t, ty.text)
       }
     }
     return null
@@ -692,6 +867,7 @@ function stepType(ty, st, ctx, depth) {
           case 'GetPivot': return { k: 'dt', name: 'CFrame' }
         }
         const m = db.member(ty.name, name)
+        if (m && m.kind === 'f' && TUPLE_RETURNS[name]) return { k: 'tuple', items: TUPLE_RETURNS[name].map(t => fromTypeName(t)) }
         if (m && m.kind === 'f') return fromTypeName(db.returnType(m.type))
         return null
       }
@@ -700,7 +876,7 @@ function stepType(ty, st, ctx, depth) {
         if (name === 'Wait') return ty.params[0] ? fromTypeName(ty.params[0]) : null
         return null
       case 'dt': {
-        const e = ROBLOX_DATATYPES[ty.name].methods[name]
+        const e = DT(ty.name).methods[name]
         return e ? fromTypeName(db.returnType(e.sig)) : null
       }
       case 'string': {
@@ -710,17 +886,28 @@ function stepType(ty, st, ctx, depth) {
         return r && /string/.test(r) && !/\(/.test(r) ? { k: 'string' } : r === 'number' ? { k: 'number' } : null
       }
       case 'enum': return name === 'GetEnumItems' ? null : { k: 'enumItem', enum: ty.name }
+      case 'usertable': {
+        const e = userFields(ty).get(name)
+        return e && e.kind === 'function' ? fnReturnType(ty.text || ctx.text, e.fnPos, depth + 1) : null
+      }
+      case 'typed': {
+        const t = ty.fields.get(name)
+        const r = t && fnTypeRet(t)
+        return r ? fromTypeName(r, ty.text) : null
+      }
     }
     return null
   }
   if (st.op === 'call') {
+    if (ty.k === 'func' && ty.typedRet) return fromTypeName(ty.typedRet, ty.text)
+    if (ty.k === 'func' && ty.user) return fnReturnType(ty.text || ctx.text, ty.fnPos, depth + 1)
     if (ty.k === 'func') {
       const e = ty.entry
       if (ty.lib === 'Instance' || (e.src === 'data' && ty.name === 'new' && ty.lib === undefined)) { /* below */ }
       const a0 = strArg(st.args[0])
       if (e.src === 'data' && e.e.sig && /^\(className: string/.test(e.e.sig) && a0) return { k: 'class', name: a0 }
       if (ty.lib === 'Drawing' && ty.name === 'new') return { k: 'drawing', name: DRAWING_KINDS.includes(a0) ? a0 : 'Line' }
-      if (ty.user) return null
+      if (ty.gname === 'getrawmetatable' || ty.gname === 'getmetatable') return { k: 'execobj', name: 'Metatable' }
       if (e.src === 'data' && e.e.sig) {
         const ret = db.returnType(e.e.sig)
         if (ret && /^\{Success: boolean/.test(ret)) return { k: 'execobj', name: 'Response' }
@@ -761,9 +948,12 @@ export function resolveChain(chain, ctx, depth = 0) {
   else if (r.t === 'table') ty = { k: 'table' }
   else if (r.t === 'number') ty = { k: 'number' }
   for (const st of chain.steps) {
+    if (ty && ty.k === 'tuple') ty = ty.items[0]
+    if (!ty) return null
     ty = stepType(ty, st, ctx, depth)
     if (!ty) return null
   }
+  if (ty && ty.k === 'tuple' && !ctx.tuple) return ty.items[0] || null
   return ty
 }
 
@@ -810,14 +1000,17 @@ function fnApply(name, hasParams) {
   return snippet(hasParams ? `${name}(\${})` : `${name}()\${}`)
 }
 
-function apiMemberItems(cls, op) {
+// このファイルでよく使っているメンバーほど上に (使用回数の対数)
+const useBoost = (ix, name) => { if (!ix) return 0; const n = ix.memberUse(name); return n ? Math.min(7, 1.5 + Math.log2(1 + n) * 1.6) : 0 }
+
+function apiMemberItems(cls, op, ix = null) {
   const out = []
   for (const m of db.classMembers(cls).values()) {
     if (op === ':' && m.kind !== 'f') continue
     if (op === '.' && m.kind === 'f') continue
     const dep = m.flags.includes('d')
     const hidden = m.flags.includes('s') || (m.flags.includes('h') && !POPULAR.has(m.name))
-    const boost = (POPULAR.has(m.name) ? 20 : 0) + (m.owner === cls ? 5 : 0) - (dep ? 60 : 0) - (hidden ? 30 : 0) - (m.owner === 'Instance' && !POPULAR.has(m.name) ? 3 : 0)
+    const boost = (POPULAR.has(m.name) ? 20 : 0) + (m.owner === cls ? 5 : 0) - (dep ? 60 : 0) - (hidden ? 30 : 0) - (m.owner === 'Instance' && !POPULAR.has(m.name) ? 3 : 0) + useBoost(ix, m.name)
     if (m.kind === 'f') {
       out.push({ label: m.name, type: 'method', detail: db.prettyType(m.type), info: apiInfo(m, cls), apply: fnApply(m.name, db.paramsOf(m.type).length > 0), boost, section: dep ? undefined : undefined, deprecated: dep })
     } else if (m.kind === 'e') {
@@ -839,6 +1032,11 @@ function apiMemberItems(cls, op) {
     } else if (hints) {
       for (const h of hints) if (!out.some(o => o.label === h)) out.push({ label: h, type: 'variable', detail: '子オブジェクト (よく使う名前)', boost: 2 })
     }
+    // このファイルに出てくるオブジェクトの名前 (Name = "Coins" / WaitForChild("Coins") など)
+    if (ix && (cls === 'Workspace' || (cls !== 'DataModel' && !db.isService(cls)))) {
+      const have = new Set(out.map(o => o.label))
+      for (const n of harvest(ix.text).names) if (/^[A-Za-z_]\w*$/.test(n) && !have.has(n)) out.push({ label: n, type: 'variable', detail: '子オブジェクト (このファイルで使用)', boost: 1 })
+    }
   }
   return out
 }
@@ -853,13 +1051,13 @@ function dataItems(entries, op, prefix = '') {
   return out
 }
 
-function membersFor(ty, op) {
+function membersFor(ty, op, ix = null) {
   if (!ty) return null
   switch (ty.k) {
-    case 'class': return apiMemberItems(ty.name, op)
-    case 'dtlib': return op === '.' ? dataItems(ROBLOX_DATATYPES[ty.name].ctor, op, ty.name + '.') : null
+    case 'class': return apiMemberItems(ty.name, op, ix)
+    case 'dtlib': return op === '.' ? dataItems(DT(ty.name).ctor, op, ty.name + '.') : null
     case 'dt': {
-      const d = ROBLOX_DATATYPES[ty.name]
+      const d = DT(ty.name)
       return op === ':' ? dataItems(d.methods, op) : dataItems(d.props, op)
     }
     case 'lib': {
@@ -880,11 +1078,16 @@ function membersFor(ty, op) {
     case 'drawing': return dataItems(DRAWING_ENTRIES[ty.name] || DRAWING_ENTRIES.Line, op === ':' ? ':' : '.', `Drawing.${ty.name}.`)
     case 'execobj': return dataItems(EXECUTOR_OBJECTS[ty.name], op, ty.name + '.')
     case 'usertable': {
-      const fields = tableFields(ty.text, ty.name)
+      const fields = userFields(ty)
       if (!fields.size) return null
       const obj = {}
-      for (const [k, e] of fields) if (op === '.' || e.kind === 'function') obj[k] = e
-      return dataItems(obj, op, (ty.module || ty.name) + op).map(i => ({ ...i, boost: 3 }))
+      for (const [k, e] of fields) if ((op === '.' || e.kind === 'function') && k !== '__index') obj[k] = e
+      return dataItems(obj, op, (ty.module || ty.name) + op).map(i => ({ ...i, boost: 3 + (/^_/.test(i.label) ? -6 : 0) }))
+    }
+    case 'typed': {
+      const obj = {}
+      for (const [k, t] of ty.fields) { const e = typedEntry(k, t); if (op === '.' || e.kind === 'function') obj[k] = e }
+      return dataItems(obj, op, ty.name + op).map(i => ({ ...i, boost: 3 }))
     }
     case 'ext': {
       const out = []
@@ -948,7 +1151,7 @@ function globalItems() {
 }
 
 let wordsDoc = null, wordsList = []
-function docWords(state, exclude) {
+function docWords(state, exclude, skip) {
   if (state.doc !== wordsDoc) {
     // 入力のたびに全文を走査しないよう、文書が同じ間は使い回す (入力中の単語は exclude で除外)
     const text = docText(state).slice(0, 300000)
@@ -961,7 +1164,7 @@ function docWords(state, exclude) {
     wordsList = [...words]
   }
   const out = []
-  for (const w of wordsList) if (w !== exclude) out.push({ label: w, type: 'text', boost: -5 })
+  for (const w of wordsList) if (w !== exclude && !(skip && skip.has(w))) out.push({ label: w, type: 'text', boost: -5 })
   return out
 }
 
@@ -972,9 +1175,197 @@ function inCommentOrString(state, pos) {
   return /comment/i.test(name) ? 'comment' : /string/i.test(name) ? 'string' : null
 }
 
+// ---- このファイルから集める名前 (文字列の引数の候補) ----
+const harvestCache = { text: null, v: null }
+function harvest(text) {
+  if (harvestCache.text === text) return harvestCache.v
+  const src = text.length > 400000 ? text.slice(0, 400000) : text
+  const v = { names: new Set(), attrs: new Set(), tags: new Set(), steps: new Set(), actions: new Set() }
+  const scan = (re, set) => { let m; re.lastIndex = 0; while ((m = re.exec(src)) && set.size < 300) set.add(m[1] || m[2] || m[3]) }
+  scan(/\.Name\s*=\s*["']([^"'\n]{1,60})["']|[{,]\s*Name\s*=\s*["']([^"'\n]{1,60})["']|(?:WaitForChild|FindFirstChild|FindFirstAncestor|FindFirstDescendant)\s*\(\s*["']([^"'\n]{1,60})["']/g, v.names)
+  scan(/(?:Get|Set)Attribute(?:ChangedSignal)?\s*\(\s*["']([^"'\n]{1,60})["']/g, v.attrs)
+  scan(/(?:GetTagged|AddTag|HasTag|RemoveTag|GetInstanceAddedSignal|GetInstanceRemovedSignal)\s*\(\s*["']([^"'\n]{1,60})["']/g, v.tags)
+  scan(/(?:BindToRenderStep|UnbindFromRenderStep)\s*\(\s*["']([^"'\n]{1,60})["']/g, v.steps)
+  scan(/(?:BindAction|UnbindAction|BindActionAtPriority)\s*\(\s*["']([^"'\n]{1,60})["']/g, v.actions)
+  harvestCache.text = text
+  harvestCache.v = v
+  return v
+}
+
 const STRING_ARG_FNS = {
   GetService: 'service', FindService: 'service', new: 'creatable', IsA: 'class', FindFirstChildOfClass: 'class', FindFirstChildWhichIsA: 'class',
   FindFirstAncestorOfClass: 'class', FindFirstAncestorWhichIsA: 'class', GetPropertyChangedSignal: 'prop', WaitForChild: 'child', FindFirstChild: 'child',
+  FindFirstAncestor: 'child', FindFirstDescendant: 'child', GetAttribute: 'attr', SetAttribute: 'attr', GetAttributeChangedSignal: 'attr',
+  SetCore: 'core', GetCore: 'core', GetTagged: 'tag', AddTag: 'tag', HasTag: 'tag', RemoveTag: 'tag', GetInstanceAddedSignal: 'tag', GetInstanceRemovedSignal: 'tag',
+  BindToRenderStep: 'step', UnbindFromRenderStep: 'step', BindAction: 'action', UnbindAction: 'action', BindActionAtPriority: 'action',
+}
+const CORE_NAMES = [['SendNotification', '通知を表示 (Title, Text, Duration)'], ['ChatMakeSystemMessage', 'チャットにシステムメッセージ'], ['ResetButtonCallback', 'リセットボタンの動作 (false で無効)'], ['TopbarEnabled', '上部バーの表示'], ['DevConsoleVisible', '開発者コンソールの表示'], ['PromptSendFriendRequest', 'フレンド申請の画面'], ['PromptBlockPlayer', 'ブロックの画面'], ['ChatActive', 'チャットの表示'], ['PointsNotificationsActive', 'ポイント通知'], ['BadgesNotificationsActive', 'バッジ通知'], ['AvatarContextMenuEnabled', 'アバターメニュー']]
+
+// ---- 期待される型 (代入・比較・引数・テーブルのキー) ----
+// 返り値: { type: API の型名 (例 "Enum.Material" / "Vector3" / "Instance"), prop?, cls?, src }
+export function expectedTypeAt(state, pos, ctx) {
+  const line = state.doc.lineAt(pos)
+  const before = line.text.slice(0, pos - line.from)
+  let m
+  // obj.Prop = | / obj.Prop == |
+  if ((m = /\.\s*([A-Za-z_]\w*)\s*(==|~=|=)\s*$/.exec(before))) {
+    const objText = chainBefore(before, m.index)
+    if (objText) {
+      const parent = resolveChain(parseChain(objText), ctx)
+      if (parent && parent.k === 'class') {
+        const mem = db.member(parent.name, m[1])
+        if (mem && mem.kind === 'p') return { type: mem.type, prop: m[1], cls: parent.name, src: m[2] === '=' ? 'assign' : 'compare', obj: objText }
+      } else if (parent && parent.k === 'drawing') {
+        const e = (DRAWING_ENTRIES[parent.name] || DRAWING_ENTRIES.Line)[m[1]]
+        if (e && e.kind === 'value') return { type: e.type, prop: m[1], src: 'assign', obj: objText }
+      } else if (parent && parent.k === 'typed') {
+        const t = parent.fields.get(m[1])
+        if (t) return { type: t, prop: m[1], src: 'assign', obj: objText }
+      }
+    }
+    return null
+  }
+  // local x: T = |
+  if ((m = /^\s*local\s+[A-Za-z_]\w*\s*:\s*([\w.<>{}?]+)\s*=\s*$/.exec(before))) return { type: m[1], src: 'assign' }
+  // TweenService:Create(obj, info, { Key = | })
+  if ((m = /(?:^|[{,;])\s*([A-Za-z_]\w*)\s*=\s*$/.exec(before))) {
+    const keyPos = line.from + m.index + m[0].indexOf(m[1])
+    const goal = tweenTarget(ctx.text, keyPos, ctx)
+    if (goal) { const mem = db.member(goal, m[1]); if (mem && mem.kind === 'p') return { type: mem.type, prop: m[1], cls: goal, src: 'assign' } }
+    return null
+  }
+  // 関数の引数
+  if (/[(,]\s*$/.test(before)) {
+    const sig = signatureAt(state, pos)
+    const p = sig && sig.params[sig.active]
+    if (p && p.type && p.type !== 'any') return { type: p.type, src: 'arg', param: p.name, callee: sig.label }
+  }
+  return null
+}
+
+// テーブルが TweenService:Create の 3 番目の引数なら、目標オブジェクトのクラス名
+function tweenTarget(text, pos, ctx) {
+  const tc = tableArgAt(text, pos)
+  if (!tc || tc.arg !== 2 || !/:\s*Create$/.test(tc.callee)) return null
+  const chain = parseChain(tc.callee)
+  const parent = chain && resolveChain({ root: chain.root, steps: chain.steps.slice(0, -1) }, ctx)
+  if (!parent || parent.k !== 'class' || parent.name !== 'TweenService') return null
+  const target = tc.args[0]
+  const ty = target && exprType(target, { ...ctx, pos: tc.open, index: 0 }, 0)
+  return ty && ty.k === 'class' ? ty.name : null
+}
+
+const ph = (i, v) => `\${${i}:${String(v).replace(/[{}\\$]/g, '')}}`
+// 型ごとの「値の作り方」
+const DT_SNIPPETS = {
+  Vector3: [['Vector3.new', `Vector3.new(${ph(1, 0)}, ${ph(2, 0)}, ${ph(3, 0)})`], ['Vector3.zero', 'Vector3.zero'], ['Vector3.one', 'Vector3.one']],
+  Vector2: [['Vector2.new', `Vector2.new(${ph(1, 0)}, ${ph(2, 0)})`], ['Vector2.zero', 'Vector2.zero']],
+  CFrame: [['CFrame.new', `CFrame.new(${ph(1, 0)}, ${ph(2, 0)}, ${ph(3, 0)})`], ['CFrame.lookAt', `CFrame.lookAt(${ph(1, 'from')}, ${ph(2, 'to')})`], ['CFrame.Angles', `CFrame.Angles(${ph(1, 0)}, ${ph(2, 'math.rad(90)')}, ${ph(3, 0)})`], ['CFrame.identity', 'CFrame.identity']],
+  Color3: [['Color3.fromRGB', `Color3.fromRGB(${ph(1, 255)}, ${ph(2, 255)}, ${ph(3, 255)})`], ['Color3.new', `Color3.new(${ph(1, 1)}, ${ph(2, 1)}, ${ph(3, 1)})`], ['Color3.fromHex', `Color3.fromHex("${ph(1, '#ffffff')}")`], ['Color3.fromHSV', `Color3.fromHSV(${ph(1, 0)}, ${ph(2, 1)}, ${ph(3, 1)})`]],
+  UDim2: [['UDim2.new', `UDim2.new(${ph(1, 0)}, ${ph(2, 100)}, ${ph(3, 0)}, ${ph(4, 50)})`], ['UDim2.fromScale', `UDim2.fromScale(${ph(1, 1)}, ${ph(2, 1)})`], ['UDim2.fromOffset', `UDim2.fromOffset(${ph(1, 100)}, ${ph(2, 50)})`]],
+  UDim: [['UDim.new', `UDim.new(${ph(1, 0)}, ${ph(2, 8)})`]],
+  BrickColor: [['BrickColor.new', `BrickColor.new("${ph(1, 'Bright red')}")`], ['BrickColor.random', 'BrickColor.random()']],
+  NumberRange: [['NumberRange.new', `NumberRange.new(${ph(1, 0)}, ${ph(2, 1)})`]],
+  NumberSequence: [['NumberSequence.new', `NumberSequence.new(${ph(1, 0)})`]],
+  ColorSequence: [['ColorSequence.new', `ColorSequence.new(${ph(1, 'Color3.fromRGB(255, 255, 255)')})`]],
+  TweenInfo: [['TweenInfo.new', `TweenInfo.new(${ph(1, 0.5)}, Enum.EasingStyle.${ph(2, 'Quad')}, Enum.EasingDirection.${ph(3, 'Out')})`]],
+  Font: [['Font.fromEnum', `Font.fromEnum(Enum.Font.${ph(1, 'Gotham')})`], ['Font.new', `Font.new("rbxasset://fonts/families/${ph(1, 'GothamSSm')}.json")`]],
+  Rect: [['Rect.new', `Rect.new(${ph(1, 0)}, ${ph(2, 0)}, ${ph(3, 0)}, ${ph(4, 0)})`]],
+  PhysicalProperties: [['PhysicalProperties.new', `PhysicalProperties.new(${ph(1, 0.7)}, ${ph(2, 0.3)}, ${ph(3, 0.5)})`]],
+  RaycastParams: [['RaycastParams.new', 'RaycastParams.new()']],
+  OverlapParams: [['OverlapParams.new', 'OverlapParams.new()']],
+  Content: [['"rbxassetid://"', `"rbxassetid://${ph(1, '')}"`]],
+  ContentId: [['"rbxassetid://"', `"rbxassetid://${ph(1, '')}"`]],
+}
+const POPULAR_ENUM = {
+  KeyCode: ['E', 'F', 'Q', 'R', 'LeftShift', 'Space', 'LeftControl', 'One', 'Two', 'W', 'A', 'S', 'D', 'Return', 'Tab'],
+  Material: ['SmoothPlastic', 'Plastic', 'Neon', 'Glass', 'Wood', 'Metal', 'ForceField', 'Concrete', 'Grass'],
+  Font: ['Gotham', 'GothamBold', 'GothamMedium', 'SourceSans', 'SourceSansBold', 'Arial', 'Ubuntu', 'Code'],
+  UserInputType: ['MouseButton1', 'MouseButton2', 'Touch', 'Keyboard', 'MouseMovement', 'Gamepad1'],
+  EasingStyle: ['Quad', 'Linear', 'Sine', 'Back', 'Quint', 'Exponential', 'Elastic', 'Bounce'],
+  EasingDirection: ['Out', 'In', 'InOut'],
+  HumanoidStateType: ['Jumping', 'Freefall', 'Running', 'Dead', 'Physics', 'GettingUp'],
+  SortOrder: ['LayoutOrder', 'Name'],
+  FillDirection: ['Vertical', 'Horizontal'],
+  HorizontalAlignment: ['Center', 'Left', 'Right'],
+  VerticalAlignment: ['Center', 'Top', 'Bottom'],
+  TextXAlignment: ['Left', 'Center', 'Right'],
+  ZIndexBehavior: ['Sibling', 'Global'],
+  RaycastFilterType: ['Exclude', 'Include'],
+  PartType: ['Block', 'Ball', 'Cylinder'],
+  CoreGuiType: ['All', 'Backpack', 'PlayerList', 'Chat', 'Health', 'EmotesMenu'],
+}
+const typeMatches = (ty, want) => {
+  if (!ty) return false
+  if (ty.k === 'class') return want === 'Instance' || db.isA(ty.name, want)
+  if (ty.k === 'dt') return ty.name === want
+  if (ty.k === 'number') return want === 'number' || want === 'float' || want === 'int' || want === 'double' || want === 'int64'
+  if (ty.k === 'string') return want === 'string'
+  if (ty.k === 'bool') return want === 'bool' || want === 'boolean'
+  if (ty.k === 'enumItem') return want === 'Enum.' + ty.enum
+  return false
+}
+// 期待される型に合う候補 (Enum の項目・値の作り方・型の合う変数)
+export function expectedItems(exp, ctx, budgetMs = 4) {
+  const T = exp.type.replace(/\?$/, '').trim()
+  const out = []
+  if (T.startsWith('Enum.')) {
+    const en = T.slice(5)
+    const pop = POPULAR_ENUM[en] || []
+    ;(db.enumItems(en) || []).forEach(([n, v], i) => {
+      const pi = pop.indexOf(n)
+      out.push({ label: `Enum.${en}.${n}`, type: 'enum', detail: `= ${v}`, boost: 40 - Math.min(i, 400) * 0.002 + (pi >= 0 ? 3 - pi * 0.1 : 0) })
+    })
+  } else if (T === 'bool' || T === 'boolean') {
+    out.push({ label: 'true', type: 'keyword', detail: 'boolean', boost: 40 }, { label: 'false', type: 'keyword', detail: 'boolean', boost: 39 })
+  } else if (DT_SNIPPETS[T]) {
+    DT_SNIPPETS[T].forEach(([label, body], i) => out.push(snippetCompletion(body, { label, type: 'function', detail: `→ ${T}`, boost: 36 - i * 0.5 })))
+  }
+  // 型の合う変数 (近くで宣言したものほど上)
+  if (ctx.text && (db.isClass(T) || ROBLOX_DATATYPES[T] || /^(number|string|bool|boolean|float|int|double)$/.test(T) || T.startsWith('Enum.'))) {
+    const t0 = performance.now()
+    const vis = textIndex(ctx.text).visible(ctx.pos, 120)
+    for (let i = 0; i < vis.length && i < 80; i++) {
+      if (performance.now() - t0 > budgetMs) break
+      const d = vis[i]
+      let ty = null
+      try { ty = nameType(d.name, ctx, 0) } catch { ty = null }
+      if (typeMatches(ty, T)) out.push({ label: d.name, type: 'variable', detail: typeLabel(ty), boost: 38 - i * 0.05 })
+    }
+    if (T === 'Instance' && exp.prop === 'Parent') {
+      out.push({ label: 'workspace', type: 'variable', detail: 'Workspace', boost: 30 }, { label: 'script', type: 'variable', detail: 'Script', boost: 25 })
+    }
+  }
+  return out
+}
+
+// ---- スコープの中で見えるローカル変数・引数・関数 (型付き) ----
+const KIND_LABEL = { local: 'ローカル変数', param: '引数', forin: 'ループ変数', fornum: 'ループ変数', func: '関数', assign: 'グローバル変数' }
+function localItems(ctx, wordFrom, argPos) {
+  const out = []
+  const vis = textIndex(ctx.text).visible(ctx.pos, 300)
+  const t0 = performance.now()
+  for (let i = 0; i < vis.length; i++) {
+    const d = vis[i]
+    if (d.at === wordFrom) continue // いま書いている宣言そのもの
+    let type = d.kind === 'func' ? 'function' : 'variable'
+    let detail = KIND_LABEL[d.kind] || 'ローカル変数'
+    let hasParams = d.kind === 'func' ? !/^\(\s*\)/.test(d.params || '()') : null
+    if (i < 30 && performance.now() - t0 < 3) {
+      let ty = null
+      try { ty = nameType(d.name, ctx, 0) } catch { ty = null }
+      if (ty && ty.k === 'func') {
+        type = 'function'
+        const sig = ty.entry && ty.entry.e ? ty.entry.e.sig : ty.entry && ty.entry.m ? ty.entry.m.type : '()'
+        const ret = ty.user && ty.fnPos !== undefined ? fnReturnType(ty.text || ctx.text, ty.fnPos) : null
+        detail = (sig || '()') + (ret ? ': ' + typeLabel(ret) : '')
+        hasParams = !/^\(\s*\)/.test(sig || '()')
+      } else if (ty) detail = typeLabel(ty) + ` (${KIND_LABEL[d.kind] || 'ローカル変数'})`
+    }
+    const boost = 7 - Math.min(5, i * 0.2) + (d.kind === 'param' || d.kind === 'forin' ? 0.5 : 0)
+    out.push({ label: d.name, type, detail, boost, apply: type === 'function' && !argPos ? fnApply(d.name, hasParams !== false) : undefined })
+  }
+  return out
 }
 
 export function luauCompletionSource(context) {
@@ -1002,41 +1393,49 @@ export function luauCompletionSource(context) {
     }
   }
 
-  // 外部ライブラリの関数に渡すテーブルのキー: Groupbox:AddToggle("x", { Te| })
-  if (!where && intel.extLib) {
+  // 関数に渡すテーブルのキー: Groupbox:AddToggle("x", { Te| }) / TweenService:Create(p, info, { Pos| })
+  if (!where) {
     const km = /(?:^\s*|[{,;]\s*)([A-Za-z_]\w*)?$/.exec(before)
     if (km) {
       const typed = km[1] || ''
-      const keys = extTableKeys(ctx.text, pos - typed.length, ctx)
+      const keys = (intel.extLib && extTableKeys(ctx.text, pos - typed.length, ctx)) || apiTableKeys(ctx.text, pos - typed.length, ctx)
       if (keys) return { from: pos - typed.length, options: keys, validFor: /^\w*$/ }
     }
   }
 
   // 文字列引数: GetService("|") など
-  const sm = /([\w.:"()[\]]*?)\b(\w+)\s*\(\s*["']([\w ]*)$/.exec(before)
+  const sm = /([\w.:"()[\]]*?)\b(\w+)\s*\(\s*["']([\w .-]*)$/.exec(before)
   if (sm && STRING_ARG_FNS[sm[2]]) {
     const kind = STRING_ARG_FNS[sm[2]]
-    const from = pos - sm[3].length
+    const typedStr = sm[3]
+    const from = pos - typedStr.length
     let options = []
+    const fromFile = (set, detail) => [...set].filter(n => n !== typedStr).map(n => ({ label: n, type: 'text', detail, boost: 5 }))
     if (kind === 'service') options = db.serviceNames().map(n => ({ label: n, type: 'class', detail: 'サービス', info: SERVICE_DOCS[n] || '', boost: SERVICE_DOCS[n] ? 10 : 0 }))
     else if (kind === 'creatable') {
       if (!/Instance\s*\.\s*new\s*\(\s*["'][\w ]*$/.test(before)) return null
       const common = ['Part', 'Model', 'Folder', 'ScreenGui', 'Frame', 'TextLabel', 'TextButton', 'ImageLabel', 'TextBox', 'RemoteEvent', 'RemoteFunction', 'BindableEvent', 'IntValue', 'StringValue', 'BoolValue', 'NumberValue', 'ObjectValue', 'Sound', 'PointLight', 'Attachment', 'Weld', 'WeldConstraint', 'Highlight', 'BillboardGui', 'SurfaceGui', 'UICorner', 'UIStroke', 'UIListLayout', 'UIGridLayout', 'UIPadding', 'Tool', 'ProximityPrompt', 'ClickDetector', 'Animation', 'ParticleEmitter', 'Beam', 'Trail', 'MeshPart', 'UnionOperation', 'Decal', 'Texture', 'SpecialMesh', 'BodyVelocity', 'LinearVelocity', 'AlignPosition', 'VectorForce', 'Humanoid']
       options = db.creatableClasses().map(n => ({ label: n, type: 'class', detail: db.isDeprecatedClass(n) ? '⚠ 非推奨' : 'クラス', boost: common.includes(n) ? 10 - common.indexOf(n) * 0.1 : db.isDeprecatedClass(n) ? -20 : 0 }))
     } else if (kind === 'class') options = db.allClasses().map(n => ({ label: n, type: 'class', boost: ['BasePart', 'Part', 'Model', 'Humanoid', 'Player', 'GuiObject', 'TextButton', 'Folder', 'Script', 'LocalScript', 'ModuleScript'].includes(n) ? 5 : 0 }))
+    else if (kind === 'attr') options = fromFile(harvest(ctx.text).attrs, '属性 (このファイルで使用)')
+    else if (kind === 'tag') options = fromFile(harvest(ctx.text).tags, 'タグ (このファイルで使用)')
+    else if (kind === 'step') options = fromFile(harvest(ctx.text).steps, '名前 (このファイルで使用)')
+    else if (kind === 'action') options = fromFile(harvest(ctx.text).actions, '名前 (このファイルで使用)')
+    else if (kind === 'core') options = CORE_NAMES.map(([n, d], i) => ({ label: n, type: 'constant', detail: d, boost: 10 - i * 0.1 }))
     else if (kind === 'prop' || kind === 'child') {
       const nameStart = before.length - sm[0].length + sm[1].length
       const objChain = chainBefore(before, nameStart - 1)
       const ty = resolveChain(parseChain(objChain), ctx)
-      if (kind === 'prop' && ty && ty.k === 'class') options = [...db.classMembers(ty.name).values()].filter(m => m.kind === 'p').map(m => ({ label: m.name, type: 'property', detail: db.prettyType(m.type) }))
-      if (kind === 'child' && ty && ty.k === 'class') {
-        const hints = ty.name === 'DataModel' ? db.serviceNames() : (CHILD_SUGGEST[ty.name] || Object.keys(CHILD_HINTS))
-        options = hints.map(h => ({ label: h, type: 'variable', detail: '子オブジェクト' }))
+      if (kind === 'prop' && ty && ty.k === 'class') options = [...db.classMembers(ty.name).values()].filter(m => m.kind === 'p').map(m => ({ label: m.name, type: 'property', detail: db.prettyType(m.type), boost: POPULAR.has(m.name) ? 5 : 0 }))
+      if (kind === 'child') {
+        const hints = ty && ty.k === 'class' ? (ty.name === 'DataModel' ? db.serviceNames() : (CHILD_SUGGEST[ty.name] || Object.keys(CHILD_HINTS))) : Object.keys(CHILD_HINTS)
+        options = [...fromFile(harvest(ctx.text).names, '子オブジェクト (このファイルで使用)'), ...hints.map(h => ({ label: h, type: 'variable', detail: '子オブジェクト' }))]
+        const seen = new Set()
+        options = options.filter(o => !seen.has(o.label) && seen.add(o.label))
       }
-      if (kind === 'child' && !options.length) options = Object.keys(CHILD_HINTS).map(h => ({ label: h, type: 'variable', detail: '子オブジェクト' }))
     }
     if (!options.length) return null
-    return { from, options, validFor: /^[\w ]*$/ }
+    return { from, options, validFor: /^[\w .-]*$/ }
   }
   if (where) return null
 
@@ -1049,15 +1448,15 @@ export function luauCompletionSource(context) {
     const chainText = chainBefore(before, chainEnd)
     if (chainText) {
       // 型注釈 "local x: " の場合は型名
-      if (op === ':' && /\blocal\s+[\w\s,]*$/.test(before.slice(0, chainEnd)) || op === ':' && /\bfunction\b[^)]*\([^)]*$/.test(before)) {
-        const types = [...LUAU_TYPES, ...(intel.roblox ? db.creatableClasses().slice(0, 0) : [])]
-        return { from: pos - typed.length, options: types.map(tn => ({ label: tn, type: 'type' })).concat(intel.roblox ? ['Player', 'Players', 'Workspace', 'Model', 'BasePart', 'Humanoid', 'Tool', 'ScreenGui', 'Frame', 'TextLabel', 'TextButton', 'RemoteEvent'].map(n => ({ label: n, type: 'class' })) : []), validFor: /^\w*$/ }
+      if (op === ':' && /\blocal\s+[\w\s,]*$/.test(before.slice(0, chainEnd)) || op === ':' && /\bfunction\b[^)]*\([^)]*$/.test(before) || op === ':' && /\)\s*$/.test(before.slice(0, chainEnd)) && /\bfunction\b/.test(before)) {
+        const userTypes = typeNames(ctx.text)
+        return { from: pos - typed.length, options: [...userTypes.map(n => ({ label: n, type: 'type', detail: 'このファイルの型', boost: 5 })), ...LUAU_TYPES.map(tn => ({ label: tn, type: 'type' })), ...(intel.roblox ? ['Players', 'Workspace', 'Tool', 'ScreenGui', 'Frame', 'TextLabel', 'TextButton', 'RemoteEvent', 'RemoteFunction', 'Sound', 'Animation', 'AnimationTrack', 'Camera', 'TweenService', 'UserInputService', 'RunService'].map(n => ({ label: n, type: 'class' })) : [])], validFor: /^\w*$/ }
       }
       const chain = parseChain(chainText)
       const ty = resolveChain(chain, ctx)
-      let options = membersFor(ty, op)
+      let options = membersFor(ty, op, textIndex(ctx.text))
       if (!options) {
-        if (!typed && !context.explicit && op === ':' ) return null
+        if (!typed && !context.explicit && op === ':') return null
         // 型不明: Instance と仮定 / 単語補完
         options = op === ':' && intel.roblox ? apiMemberItems('Instance', ':') : docWords(state, typed)
       }
@@ -1067,11 +1466,34 @@ export function luauCompletionSource(context) {
 
   // 識別子
   const word = context.matchBefore(/[A-Za-z_]\w*/)
-  if (!word && !context.explicit) return null
-  if (word && word.from === word.to && !context.explicit) return null
   const from = word ? word.from : pos
   const typed = word ? word.text : ''
-  return { from, options: [...globalItems(), ...docWords(state, typed)], validFor: /^\w*$/ }
+  const head = before.slice(0, before.length - typed.length)
+  // 期待される型 (x.Material = | / :ChangeState(| / { Position = | })
+  let exp = null
+  if (/(?:[=(,{]|==|~=)\s*$/.test(head) && !/^\s*(?:local\s+[\w\s,]*|for\s+[\w\s,]*)$/.test(head.replace(/=\s*$/, '')) && !/\bfunction\s*[\w.:]*\s*\([^)]*$/.test(head)) {
+    try { exp = expectedTypeAt(state, from, { ...ctx, pos: from }) } catch { exp = null }
+  }
+  const expOpts = exp ? expectedItems(exp, { ...ctx, pos: from }) : []
+  if (!typed && !context.explicit) {
+    // 何も入力していないときは、Enum など候補がはっきりしている場合だけ開く
+    if (exp && expOpts.length && (exp.type.startsWith('Enum.') || exp.type.replace(/\?$/, '') === 'bool')) return { from, options: expOpts, validFor: /^[\w.]*$/ }
+    return null
+  }
+  const argPos = /[(,]\s*$/.test(head)
+  const locals = localItems(ctx, from, argPos)
+  const skip = new Set([...locals.map(l => l.label), ...expOpts.map(o => o.label)])
+  const globals = globalItems().filter(g => !skip.has(g.label))
+  return { from, options: [...expOpts, ...locals, ...globals, ...docWords(state, typed, skip)], validFor: /^\w*$/ }
+}
+
+// このファイルの type 定義の名前
+function typeNames(text) {
+  const out = []
+  const re = /^[ \t]*(?:export\s+)?type\s+([A-Za-z_]\w*)/gm
+  let m
+  while ((m = re.exec(text)) && out.length < 100) out.push(m[1])
+  return out
 }
 
 // 位置 pos が「関数呼び出しに渡しているテーブル」の中なら、その呼び出しと何番目の引数か
@@ -1108,7 +1530,8 @@ export function tableArgAt(text, pos) {
   const re = /(?:^|[{,;\n])\s*([A-Za-z_]\w*)\s*=/g
   let m
   while ((m = re.exec(inner))) present.add(m[1])
-  return { callee, arg: commas, present, open }
+  const args = db.splitTop(text.slice(j + 1, open)).map(a => a.trim())
+  return { callee, arg: commas, present, open, callOpen: j, args }
 }
 // 外部ライブラリの関数の引数 (テーブル) に書けるキー
 export function extCallOptions(callee, arg, ctx) {
@@ -1132,10 +1555,37 @@ function extTableKeys(text, pos, ctx) {
   return r.opts.filter(o => !tc.present.has(o[0])).map(([k, kind, def, fnParams], i) => {
     const fn = kind === 'function' || /Callback$/.test(k)
     const apply = fn ? snippet(`${k} = function(${(fnParams && fnParams.filter(x => x !== 'self').join(', ')) || 'Value'})\n\t\${}\nend,`)
-      : kind === 'string' || (def && def.startsWith('"')) ? snippet(`${k} = "\${${(def && def !== '""' ? def.slice(1, -1) : k).replace(/[{}$\\]/g, '')}}",`)
-      : (() => { const v = def && def !== 'function' ? def : kind === 'boolean' ? 'false' : kind === 'number' ? '0' : kind === 'table' ? '{}' : 'nil'; return /[{}$\\]/.test(v) ? `${k} = ${v},` : snippet(`${k} = \${${v}},`) })()
+      : kind === 'string' || (def && def.startsWith('"')) ? snippet(`${k} = "${ph(1, def && def !== '""' ? def.slice(1, -1) : k)}",`)
+      : (() => { const v = def && def !== 'function' ? def : kind === 'boolean' ? 'false' : kind === 'number' ? '0' : kind === 'table' ? '{}' : 'nil'; return /[{}$\\]/.test(v) ? `${k} = ${v},` : snippet(`${k} = ${ph(1, v)},`) })()
     return { label: k, type: fn ? 'function' : 'property', detail: def ? `= ${def === 'function' ? 'function' : def}` : kind, info: `${r.parent.lib} の ${r.name} に渡す設定`, apply, boost: 20 - i * 0.1 }
   })
+}
+
+// Roblox API の関数に渡すテーブルのキー
+const TWEENABLE = new Set(['float', 'double', 'int', 'int64', 'number', 'Vector3', 'Vector2', 'CFrame', 'Color3', 'UDim2', 'UDim', 'Rect', 'NumberRange'])
+const TWEEN_POPULAR = ['Position', 'Size', 'CFrame', 'Transparency', 'BackgroundTransparency', 'BackgroundColor3', 'Color', 'TextTransparency', 'TextColor3', 'ImageTransparency', 'Rotation', 'AnchorPoint']
+const NOTIFY_KEYS = [['Title', 'string', '"タイトル"'], ['Text', 'string', '"本文"'], ['Duration', 'number', '5'], ['Icon', 'string', '"rbxassetid://"'], ['Button1', 'string', '"OK"'], ['Button2', 'string', '"キャンセル"'], ['Callback', 'BindableFunction', null]]
+const REQUEST_ASYNC_KEYS = [['Url', 'string', '"https://"'], ['Method', 'string', '"GET"'], ['Headers', 'table', '{}'], ['Body', 'string', '""'], ['Compress', 'Enum', 'Enum.HttpCompression.None']]
+function apiTableKeys(text, pos, ctx) {
+  const tc = tableArgAt(text, pos)
+  if (!tc) return null
+  const fill = (rows, info) => rows.filter(r => !tc.present.has(r[0])).map(([k, kind, def], i) => ({ label: k, type: 'property', detail: kind, info, apply: def ? snippet(`${k} = ${/^"/.test(def) ? `"${ph(1, def.slice(1, -1))}"` : ph(1, def)},`) : `${k} = `, boost: 20 - i * 0.1 }))
+  // TweenService:Create(obj, info, { ... }) → obj のアニメーションできるプロパティ
+  if (tc.arg === 2 && /:\s*Create$/.test(tc.callee)) {
+    const cls = tweenTarget(text, pos, ctx)
+    if (!cls) return null
+    const out = []
+    for (const m of db.classMembers(cls).values()) {
+      if (m.kind !== 'p' || m.flags.includes('r') || m.flags.includes('d') || m.flags.includes('h') || !TWEENABLE.has(m.type) || tc.present.has(m.name)) continue
+      const pi = TWEEN_POPULAR.indexOf(m.name)
+      out.push({ label: m.name, type: 'property', detail: db.prettyType(m.type), info: `${cls} のプロパティ (Tween で変化させる目標値)`, apply: `${m.name} = `, boost: pi >= 0 ? 20 - pi * 0.1 : 0 })
+    }
+    return out.length ? out : null
+  }
+  // StarterGui:SetCore("SendNotification", { ... })
+  if (tc.arg === 1 && /:\s*SetCore$/.test(tc.callee) && /^["']SendNotification["']$/.test(tc.args[0] || '')) return fill(NOTIFY_KEYS, 'SendNotification の設定')
+  if (tc.arg === 0 && /:\s*RequestAsync$/.test(tc.callee)) return fill(REQUEST_ASYNC_KEYS, 'HttpService:RequestAsync の設定')
+  return null
 }
 
 // ============================================================
@@ -1166,7 +1616,12 @@ export function describeAt(state, pos) {
       doc = SERVICE_DOCS[m.name] || ''
     } else if (ent && ent.src === 'data') {
       const e = ent.e
-      title = `${typeLabel(ty)}${opm[1]}${name}${e.kind === 'function' ? e.sig : ': ' + e.type}`
+      let tail = e.kind === 'function' ? e.sig : ': ' + e.type
+      if (ty && ty.k === 'usertable') {
+        if (e.kind === 'function' && e.fnPos !== undefined) { const r = fnReturnType(ty.text || ctx.text, e.fnPos); if (r) tail += ': ' + typeLabel(r) }
+        else if (e.kind === 'value') { const vt = stepType(ty, { op: '.', name }, ctx, 0); if (vt) tail = ': ' + typeLabel(vt) }
+      }
+      title = `${typeLabel(ty)}${opm[1]}${name}${tail}`
       doc = e.doc
     } else if (ty && ty.k === 'enum') {
       const items = db.enumItems(ty.name) || []
@@ -1183,7 +1638,10 @@ export function describeAt(state, pos) {
     const g = LUAU_GLOBALS[name] || (intel.executor && EXECUTOR_GLOBALS[name])
     if (d && d.pos <= w.from) {
       const ty = nameType(name, ctx, 0)
-      title = d.kind === 'func' ? `(関数) ${name}${d.params || '()'}` : `(${d.kind === 'param' ? '引数' : d.kind === 'assign' ? 'グローバル' : d.kind === 'forin' || d.kind === 'fornum' ? 'ループ変数' : 'ローカル'}) ${name}${ty && ty.k !== 'func' ? ': ' + typeLabel(ty) : ''}`
+      const ret = ty && ty.k === 'func' && ty.user ? fnReturnType(ty.text || ctx.text, ty.fnPos) : null
+      const sigText = ty && ty.k === 'func' && ty.entry && ty.entry.e ? ty.entry.e.sig : d.params || '()'
+      title = d.kind === 'func' || (ty && ty.k === 'func') ? `(関数) ${name}${sigText}${ret ? ': ' + typeLabel(ret) : ''}` : `(${d.kind === 'param' ? '引数' : d.kind === 'assign' ? 'グローバル' : d.kind === 'forin' || d.kind === 'fornum' ? 'ループ変数' : 'ローカル'}) ${name}${ty ? ': ' + typeLabel(ty) : ''}`
+      if (ty && ty.k === 'usertable') { const n = userFields(ty).size; if (n) meta = `フィールド ${n} 個`; }
       if (ty && ty.k === 'class') doc = SERVICE_DOCS[ty.name] || ''
     } else if (g) {
       title = name + (g.kind === 'function' ? g.sig : ': ' + g.type)

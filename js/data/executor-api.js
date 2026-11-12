@@ -259,6 +259,12 @@ export const EXECUTOR_OBJECTS = {
     'Send(message: string) — メッセージを送信', 'Close() — 接続を閉じる',
     'OnMessage: RBXScriptSignal — メッセージを受け取ったとき (message: string)', 'OnClose: RBXScriptSignal — 接続が閉じたとき',
   ]),
+  Metatable: E('Metatable', [
+    '__index: any — 存在しないキーを読んだとき (関数またはテーブル)', '__newindex: function — 存在しないキーに書き込んだとき', '__namecall: function — obj:Method() の呼び出し (getnamecallmethod でメソッド名)',
+    '__call: function — 関数のように呼んだとき', '__tostring: function — tostring したとき', '__len: function — # 演算子', '__eq: function — ==', '__lt: function — <', '__le: function — <=',
+    '__concat: function — ..', '__unm: function — 単項 -', '__add: function — +', '__sub: function — -', '__mul: function — *', '__div: function — /', '__mod: function — %', '__pow: function — ^',
+    '__iter: function — for ... in obj の反復', '__metatable: any — getmetatable の結果を固定 (保護)', '__mode: string — 弱参照 ("k" / "v" / "kv")',
+  ]),
   Response: E('Response', [
     'Success: boolean — 成功したか (ステータスコードが 200 番台)', 'StatusCode: number — HTTP ステータスコード', 'StatusMessage: string — ステータスの説明',
     'Headers: table — 応答ヘッダー', 'Body: string — 応答の本文',

@@ -333,6 +333,12 @@ export const ROBLOX_DATATYPES = {
   Enum: T([], [], ['GetEnumItems(): {EnumItem}', 'FromName(name: string): EnumItem?', 'FromValue(value: number): EnumItem?']),
 }
 
+// 関数の戻り値としてだけ現れる型 (グローバルの名前ではありません)
+export const RESULT_TYPES = {
+  RaycastResult: T([], ['Instance: BasePart — 当たったパーツ', 'Position: Vector3 — 当たった位置', 'Normal: Vector3 — 当たった面の向き (長さ 1)', 'Material: Enum.Material — 当たった場所の素材', 'Distance: number — 始点からの距離'], []),
+  DataStoreKeyInfo: T([], ['CreatedTime: number', 'UpdatedTime: number', 'Version: string'], ['GetUserIds(): {number}', 'GetMetadata(): table']),
+}
+
 // よく使うサービスの日本語説明
 export const SERVICE_DOCS = {
   Players: 'プレイヤーの管理 (LocalPlayer, PlayerAdded など)',
