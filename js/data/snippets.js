@@ -47,3 +47,35 @@ export const LUAU_SNIPPETS = [
   { label: 'draggable', detail: 'GUI をドラッグで動かせるようにする', body: 'local UserInputService = game:GetService("UserInputService")\nlocal dragging, dragStart, startPos\n${1:frame}.InputBegan:Connect(function(input)\n\tif input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then\n\t\tdragging = true\n\t\tdragStart = input.Position\n\t\tstartPos = ${1:frame}.Position\n\tend\nend)\nUserInputService.InputChanged:Connect(function(input)\n\tif dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then\n\t\tlocal delta = input.Position - dragStart\n\t\t${1:frame}.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)\n\tend\nend)\nUserInputService.InputEnded:Connect(function(input)\n\tif input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then\n\t\tdragging = false\n\tend\nend)' },
   { label: 'notify', detail: '通知を表示', body: 'game:GetService("StarterGui"):SetCore("SendNotification", {\n\tTitle = "${1:タイトル}",\n\tText = "${2:メッセージ}",\n\tDuration = ${3:5},\n})' },
 ]
+
+// ============================================================
+// UI ライブラリのひな形 (エグゼキューター)。URL は公式の配布元
+// 実行すると、ライブラリの中身を自動で取得して補完にも使います
+// ============================================================
+export const UI_LIBRARIES = [
+  {
+    id: 'obsidian', name: 'Obsidian', desc: 'Linoria 系のモダンな UI。タブ・グループ・トグル・スライダーなど',
+    body: 'local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"\nlocal Library = loadstring(game:HttpGet(repo .. "Library.lua"))()\n\nlocal Window = Library:CreateWindow({\n\tTitle = "${1:My Script}",\n\tFooter = "v1.0",\n\tCenter = true,\n\tAutoShow = true,\n})\nlocal Tab = Window:AddTab("Main", "user")\nlocal Group = Tab:AddLeftGroupbox("${2:Main}")\n\nGroup:AddToggle("MyToggle", {\n\tText = "Toggle",\n\tDefault = false,\n\tCallback = function(Value)\n\t\tprint("Toggle:", Value)\n\tend,\n})\nGroup:AddSlider("MySlider", {\n\tText = "Speed",\n\tDefault = 16,\n\tMin = 0,\n\tMax = 100,\n\tRounding = 0,\n\tCallback = function(Value)\n\t\tprint("Speed:", Value)\n\tend,\n})\nGroup:AddButton("Button", function()\n\tprint("Clicked")\nend)\n${0}',
+  },
+  {
+    id: 'linoria', name: 'LinoriaLib', desc: '定番のシンプルな UI',
+    body: 'local repo = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/"\nlocal Library = loadstring(game:HttpGet(repo .. "Library.lua"))()\n\nlocal Window = Library:CreateWindow({\n\tTitle = "${1:My Script}",\n\tCenter = true,\n\tAutoShow = true,\n})\nlocal Tab = Window:AddTab("Main")\nlocal Group = Tab:AddLeftGroupbox("${2:Main}")\n\nGroup:AddToggle("MyToggle", {\n\tText = "Toggle",\n\tDefault = false,\n})\nToggles.MyToggle:OnChanged(function()\n\tprint("Toggle:", Toggles.MyToggle.Value)\nend)\nGroup:AddButton("Button", function()\n\tprint("Clicked")\nend)\n${0}',
+  },
+  {
+    id: 'orion', name: 'Orion', desc: '丸みのあるダークな UI',
+    body: 'local OrionLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/jensonhirst/Orion/main/source"))()\n\nlocal Window = OrionLib:MakeWindow({ Name = "${1:My Script}", SaveConfig = false, IntroEnabled = false })\nlocal Tab = Window:MakeTab({ Name = "Main", PremiumOnly = false })\n\nTab:AddToggle({\n\tName = "Toggle",\n\tDefault = false,\n\tCallback = function(Value)\n\t\tprint("Toggle:", Value)\n\tend,\n})\nTab:AddButton({\n\tName = "Button",\n\tCallback = function()\n\t\tprint("Clicked")\n\tend,\n})\n${0}\nOrionLib:Init()',
+  },
+  {
+    id: 'kavo', name: 'Kavo', desc: 'テーマを選べる古典的な UI',
+    body: 'local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()\n\nlocal Window = Library.CreateLib("${1:My Script}", "DarkTheme")\nlocal Tab = Window:NewTab("Main")\nlocal Section = Tab:NewSection("${2:Main}")\n\nSection:NewToggle("Toggle", "説明", function(state)\n\tprint("Toggle:", state)\nend)\nSection:NewButton("Button", "説明", function()\n\tprint("Clicked")\nend)\n${0}',
+  },
+  {
+    id: 'windui', name: 'WindUI', desc: 'アイコン付きのモダンな UI',
+    body: 'local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()\n\nlocal Window = WindUI:CreateWindow({\n\tTitle = "${1:My Script}",\n\tIcon = "door-open",\n\tAuthor = "me",\n\tFolder = "MyScript",\n})\nlocal Tab = Window:Tab({ Title = "Main", Icon = "bird" })\nWindow:SelectTab(1)\n\nTab:Toggle({\n\tTitle = "Toggle",\n\tDefault = false,\n\tCallback = function(state)\n\t\tprint("Toggle:", state)\n\tend,\n})\nTab:Button({\n\tTitle = "Button",\n\tCallback = function()\n\t\tprint("Clicked")\n\tend,\n})\n${0}',
+  },
+  {
+    id: 'rayfield', name: 'Rayfield', desc: '人気の UI (外観は Roblox のアセットから読み込むため、ここでは表示されません)',
+    body: 'local Rayfield = loadstring(game:HttpGet("https://raw.githubusercontent.com/SiriusSoftwareLtd/Rayfield/main/source.lua"))()\n\nlocal Window = Rayfield:CreateWindow({\n\tName = "${1:My Script}",\n\tLoadingTitle = "Loading",\n\tConfigurationSaving = { Enabled = false },\n})\nlocal Tab = Window:CreateTab("Main", 4483362458)\n\nTab:CreateToggle({\n\tName = "Toggle",\n\tCurrentValue = false,\n\tFlag = "Toggle1",\n\tCallback = function(Value)\n\t\tprint("Toggle:", Value)\n\tend,\n})\nTab:CreateButton({\n\tName = "Button",\n\tCallback = function()\n\t\tprint("Clicked")\n\tend,\n})\n${0}',
+  },
+]
+for (const l of UI_LIBRARIES) LUAU_SNIPPETS.push({ label: 'ui-' + l.id, detail: `${l.name} の UI (エグゼキューター)`, body: l.body })

@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = 'e08b2152ce'
+const VERSION = '555653e483'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -15,12 +15,14 @@ const PRECACHE = [
   "js/app/editors.js",
   "js/app/explain.js",
   "js/app/explorer.js",
+  "js/app/extlibs.js",
   "js/app/gui-preview.js",
   "js/app/keybar.js",
   "js/app/main.js",
   "js/app/markdown.js",
   "js/app/onboarding.js",
   "js/app/palette.js",
+  "js/app/remote-ui.js",
   "js/app/runner.js",
   "js/app/settings-ui.js",
   "js/app/store.js",
@@ -38,6 +40,7 @@ const PRECACHE = [
   "js/editor/blocks.js",
   "js/editor/breakpoints.js",
   "js/editor/errorlens.js",
+  "js/editor/extlib.js",
   "js/editor/extras.js",
   "js/editor/format.js",
   "js/editor/inline.js",
@@ -51,10 +54,12 @@ const PRECACHE = [
   "js/luau/compiler.js",
   "js/luau/debug.js",
   "js/luau/executor.js",
+  "js/luau/gui.js",
   "js/luau/lexer.js",
   "js/luau/lstrings.js",
   "js/luau/parser.js",
   "js/luau/rbx-types.js",
+  "js/luau/remote.js",
   "js/luau/roblox.js",
   "js/luau/runtime.js",
   "js/luau/stdlib.js",
@@ -77,7 +82,7 @@ self.addEventListener('install', e => {
 })
 
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('forgecode-') && k !== CACHE && k !== RUNTIME).map(k => caches.delete(k)))).then(() => self.clients.claim()))
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('forgecode-') && k !== CACHE && k !== RUNTIME && !k.startsWith('forgecode-remote')).map(k => caches.delete(k)))).then(() => self.clients.claim()))
 })
 
 self.addEventListener('fetch', e => {

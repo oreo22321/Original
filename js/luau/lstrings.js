@@ -564,9 +564,93 @@ export function makeStringLib() {
     const parts = sep === '' ? s.split('') : s.split(sep)
     return LTable.fromArray(parts)
   })
-  def('pack', () => { throw rtError('string.pack はこのサンドボックスでは未対応です') })
-  def('unpack', () => { throw rtError('string.unpack はこのサンドボックスでは未対応です') })
-  def('packsize', () => { throw rtError('string.packsize はこのサンドボックスでは未対応です') })
+  // ---- string.pack / unpack / packsize (Lua 5.3 と同じ書式の主なもの) ----
+  const packItems = fmt => {
+    const items = []
+    let little = true, i = 0
+    const num = () => { let n = ''; while (i < fmt.length && /\d/.test(fmt[i])) n += fmt[i++]; return n ? Number(n) : null }
+    while (i < fmt.length) {
+      const c = fmt[i++]
+      switch (c) {
+        case '<': case '=': little = true; break
+        case '>': little = false; break
+        case '!': num(); break
+        case ' ': break
+        case 'b': case 'B': items.push({ k: 'int', size: 1, signed: c === 'b', little }); break
+        case 'h': case 'H': items.push({ k: 'int', size: 2, signed: c === 'h', little }); break
+        case 'i': case 'I': { const n = num() || 4; if (n < 1 || n > 8) throw rtError(`integral size (${n}) out of limits [1,8]`); items.push({ k: 'int', size: n, signed: c === 'i', little }); break }
+        case 'l': case 'L': case 'j': case 'J': case 'T': items.push({ k: 'int', size: 8, signed: c === 'l' || c === 'j', little }); break
+        case 'f': items.push({ k: 'float', size: 4, little }); break
+        case 'd': case 'n': items.push({ k: 'float', size: 8, little }); break
+        case 's': items.push({ k: 'str', size: num() || 8, little }); break
+        case 'z': items.push({ k: 'zstr' }); break
+        case 'x': items.push({ k: 'pad' }); break
+        case 'c': { const n = num(); if (n === null) throw rtError("missing size for format option 'c'"); items.push({ k: 'fixed', size: n }); break }
+        default: throw rtError(`invalid format option '${c}'`)
+      }
+    }
+    return items
+  }
+  const intBytes = (v, size, little) => {
+    if (!Number.isFinite(v)) throw rtError('number has no integer representation')
+    let x = BigInt.asUintN(size * 8, BigInt(Math.trunc(v)))
+    const out = []
+    for (let k = 0; k < size; k++) { out.push(Number(x & 0xffn)); x >>= 8n }
+    if (!little) out.reverse()
+    return String.fromCharCode(...out)
+  }
+  const readInt = (str, pos, size, signed, little) => {
+    if (pos + size > str.length) throw rtError('data string too short')
+    let x = 0n
+    for (let k = 0; k < size; k++) { const b = BigInt(str.charCodeAt(pos + (little ? size - 1 - k : k))); x = (x << 8n) | b }
+    if (signed) x = BigInt.asIntN(size * 8, x)
+    return Number(x)
+  }
+  def('pack', A => {
+    const items = packItems(checkStr(A, 0, 'pack'))
+    let out = '', ai = 1
+    for (const it of items) {
+      if (it.k === 'pad') { out += '\0'; continue }
+      const v = A[ai++]
+      if (it.k === 'int') out += intBytes(typeof v === 'number' ? v : Number(v) || 0, it.size, it.little)
+      else if (it.k === 'float') {
+        const dv = new DataView(new ArrayBuffer(it.size))
+        if (it.size === 4) dv.setFloat32(0, Number(v) || 0, it.little); else dv.setFloat64(0, Number(v) || 0, it.little)
+        out += String.fromCharCode(...new Uint8Array(dv.buffer))
+      } else if (it.k === 'str') { const sv = String(v ?? ''); out += intBytes(sv.length, it.size, it.little) + sv }
+      else if (it.k === 'zstr') out += String(v ?? '') + '\0'
+      else if (it.k === 'fixed') out += String(v ?? '').padEnd(it.size, '\0').slice(0, it.size)
+    }
+    return out
+  })
+  def('unpack', A => {
+    const items = packItems(checkStr(A, 0, 'unpack'))
+    const data = checkStr(A, 1, 'unpack')
+    let pos = (A[2] === undefined ? 1 : Number(A[2])) - 1
+    const out = []
+    for (const it of items) {
+      if (it.k === 'pad') { pos++; continue }
+      if (it.k === 'int') { out.push(readInt(data, pos, it.size, it.signed, it.little)); pos += it.size }
+      else if (it.k === 'float') {
+        if (pos + it.size > data.length) throw rtError('data string too short')
+        const dv = new DataView(new ArrayBuffer(it.size))
+        for (let k = 0; k < it.size; k++) dv.setUint8(k, data.charCodeAt(pos + k))
+        out.push(it.size === 4 ? dv.getFloat32(0, it.little) : dv.getFloat64(0, it.little)); pos += it.size
+      } else if (it.k === 'str') { const n = readInt(data, pos, it.size, false, it.little); pos += it.size; out.push(data.slice(pos, pos + n)); pos += n }
+      else if (it.k === 'zstr') { const e = data.indexOf('\0', pos); const end = e < 0 ? data.length : e; out.push(data.slice(pos, end)); pos = end + 1 }
+      else if (it.k === 'fixed') { out.push(data.slice(pos, pos + it.size)); pos += it.size }
+    }
+    out.push(pos + 1)
+    return out
+  })
+  def('packsize', A => {
+    let n = 0
+    for (const it of packItems(checkStr(A, 0, 'packsize'))) {
+      if (it.k === 'str' || it.k === 'zstr') throw rtError('variable-size format in packsize')
+      n += it.k === 'pad' ? 1 : it.size
+    }
+    return n
+  })
   return S
 }
 

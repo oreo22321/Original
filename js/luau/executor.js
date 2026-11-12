@@ -573,7 +573,8 @@ export function installExecutor(G, ctx, rbx) {
   def('getcallstack', () => new LTable())
   def('saveinstance', () => { hooks.output('info', '[サンドボックス] saveinstance: 実際のエグゼキューターでは workspace フォルダに .rbxl が保存されます'); return EMPTY })
   defg('getobjects', function* (A) {
-    mock('getobjects', 'GetObjects / getobjects (空の Model を返します)')
+    const id = A[1] !== undefined ? fromBytes(String(A[1])) : fromBytes(String(A[0] || ''))
+    note('getobjects:' + id, `[サンドボックス] GetObjects("${id}"): Roblox のアセット (モデル・UI) はブラウザから読み込めないため、空の Model を返します。Rayfield のように UI をアセットから読み込むライブラリは、プレビューでは表示できません`)
     return LTable.fromArray([rbx.newInstance('Model', undefined, { Name: 'Asset' })])
   })
   dm.methods.set('GetObjects', G.get('getobjects'))

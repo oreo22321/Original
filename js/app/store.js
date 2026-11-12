@@ -53,6 +53,7 @@ export const DEFAULTS = {
   groupOutput: true,   // 同じ出力をまとめる (×3)
   outputTime: false,   // 出力に経過時間を表示
   explainErrors: true, // 実行エラーに日本語の解説を付ける
+  netProxy: '',        // 外部 URL を直接取得できないときの中継サーバー ('' / corsproxy / allorigins / 独自 URL)
   // AI
   aiKey: '',
   aiModel: 'claude-opus-5-5',

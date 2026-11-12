@@ -4,7 +4,8 @@
 import { StateField, StateEffect, EditorView, Decoration, WidgetType, ViewPlugin, Prec, keymap, completionStatus, EditorSelection, indentUnit, Annotation } from '../../vendor/codemirror.js'
 import * as db from './apidb.js'
 import { headerAt } from './blocks.js'
-import { resolveChain, parseChain, docText } from './luau-intel.js'
+import { resolveChain, parseChain, docText, chainBefore, intel } from './luau-intel.js'
+import { membersOfRef, argTemplate } from './extlib.js'
 import { inStringOrComment } from './typo.js'
 import { addAutoEnd } from './autoend.js'
 
@@ -134,6 +135,56 @@ function serviceFor(varName) {
 
 function indentOf(text) { return /^[ \t]*/.exec(text)[0] }
 
+// ---- 外部ライブラリ (loadstring で読み込んだ UI ライブラリなど) ----
+// Groupbox:AddToggle( → 引数の雛形
+function extCallTemplate(src, pos, ind, unit) {
+  if (!intel.extLib) return null
+  const callee = chainBefore(src, pos - 1)
+  const chain = callee && parseChain(callee)
+  if (!chain || !chain.steps.length) return null
+  const last = chain.steps[chain.steps.length - 1]
+  if (last.op !== '.' && last.op !== ':') return null
+  const parent = resolveChain({ root: chain.root, steps: chain.steps.slice(0, -1) }, { text: src, pos, index: 0 })
+  if (!parent || parent.k !== 'ext') return null
+  const m = membersOfRef(parent.api, parent.ref).get(last.name)
+  if (!m || m.k !== 'fn') return null
+  const shifted = last.op === ':' && !m.method ? { ...m, params: m.params.slice(1), method: true } : m
+  const t = argTemplate(shifted, ind, unit)
+  return t && t.text ? t : null
+}
+// local Window = → Library:CreateWindow({...}) のように、名前から作り方を推測
+function extFactory(src, lineFrom, varName, ind, unit) {
+  if (!intel.extLib) return null
+  const text = src.slice(0, lineFrom)
+  const names = []
+  const re = /^[ \t]*local\s+([A-Za-z_]\w*)\s*=/gm
+  let m
+  while ((m = re.exec(text))) { const i = names.indexOf(m[1]); if (i >= 0) names.splice(i, 1); names.push(m[1]) }
+  const stem = varName.replace(/\d+$/, '').replace(/^(main|my|new|the|cur|current)(?=[A-Z_])/i, '').toLowerCase()
+  if (stem.length < 3) return null
+  let best = null
+  names.slice(-40).forEach((obj, order) => {
+    if (obj === varName) return
+    const ty = resolveChain(parseChain(obj), { text: src, pos: lineFrom, index: 0 })
+    if (!ty || ty.k !== 'ext') return
+    for (const [name, mem] of membersOfRef(ty.api, ty.ref)) {
+      if (mem.k !== 'fn' || mem.ret === undefined) continue
+      const low = name.toLowerCase()
+      const core = stem.replace(/^(left|right)/, '')
+      if (!low.includes(core)) continue
+      let score = order * 0.1 + (low.includes(stem) ? 3 : 0) + (/^(add|create|make|new)/.test(low) ? 2 : 0) + (low === stem ? 1 : 0)
+      if (/^(left|right)/.test(stem) && !low.includes(stem.slice(0, stem.startsWith('left') ? 4 : 5))) score -= 2
+      if (!best || score > best.score) best = { score, obj, name, mem }
+    }
+  })
+  if (!best) return null
+  const sep = best.mem.method ? ':' : (best.mem.params[0] === 'self' ? ':' : '.')
+  const callM = sep === ':' && !best.mem.method ? { ...best.mem, params: best.mem.params.slice(1), method: true } : best.mem
+  const t = argTemplate(callM, ind, unit) || { text: '' }
+  const head = `${best.obj}${sep}${best.name}(`
+  return { text: head + t.text + ')', cursor: t.cursor !== undefined ? head.length + t.cursor : undefined }
+}
+
 function balanced(s) {
   let d = 0
   for (const c of s.replace(/(["'])(?:\\.|(?!\1).)*\1/g, '')) {
@@ -253,6 +304,8 @@ export function luauLocalSuggest(state, pos, mode = 'studio') {
 
     // ---- local 名前 = → 初期値 ----
     if ((m = /^\s*local\s+([A-Za-z_]\w*)\s*=\s*$/.exec(before))) {
+      const ef = extFactory(src, line.from, m[1], ind, unit)
+      if (ef) return { text: sp + ef.text, cursor: ef.cursor !== undefined ? sp.length + ef.cursor : undefined }
       const svc = serviceFor(m[1])
       if (svc) return { text: sp + `game:GetService("${svc}")` }
       for (const [re, value, alt] of VALUE_HINTS) if (re.test(m[1])) return { text: sp + ((alt && alt(src)) || adaptNames(value, src.slice(0, line.from))) }
@@ -264,6 +317,11 @@ export function luauLocalSuggest(state, pos, mode = 'studio') {
       const head = `function(${eventParams(src, before, pos)})\n`
       const body = ind + unit
       return { text: head + body + '\n' + ind + 'end' + (after.startsWith(')') ? '' : ')'), cursor: head.length + body.length }
+    }
+    // ---- 外部ライブラリの関数: 引数の雛形 ----
+    if (/[\w)\]"']\s*[.:]\s*[A-Za-z_]\w*\($/.test(before) && !/\b(?:Connect|Once|ConnectParallel)\($/.test(before)) {
+      const t = extCallTemplate(src, pos, ind, unit)
+      if (t) return { text: t.text + (after.startsWith(')') ? '' : ')'), cursor: t.cursor }
     }
     // ---- 関数を渡す呼び出し: task.spawn( / pcall( / table.sort(t, ----
     if ((m = /(?:^|[^\w.])((?:task|coroutine)\.\w+|pcall|xpcall|spawn|delay)\(\s*((?:[\d.]+)\s*,\s*)?$/.exec(before)) && m[1] in CALLBACK_CALLS && (CALLBACK_CALLS[m[1]] !== null || m[2])) {

@@ -46,8 +46,9 @@ let lastVM = null       // 終了した実行 (コンソールで続きの式を
 let finishTimer = null
 let deadline = 0        // 実行時間の上限 (デバッガーで止まっている間は延長)
 let remainOnPause = 0
-let guiTimer = null
-let lastGui = ''
+let uiTimer = null
+let uiMode = false        // 操作できる GUI を表示中 (実行時間の上限を数えない)
+let guiShown = true       // 画面側でゲーム画面が見えているか
 let waiting = false
 let ids = new Map(), byId = new Map(), idSeed = 0
 const idOf = inst => {
@@ -64,8 +65,9 @@ function finish(reason) {
   currentVM = null
   lastVM = vm
   waiting = false
+  uiMode = false
   clearTimeout(finishTimer)
-  clearInterval(guiTimer)
+  clearInterval(uiTimer)
   if (vm.debugger && rt.debugger === vm.debugger) vm.debugger.mode = null
   self.postMessage({ type: 'done', reason, ...snapshot(vm) })
 }
@@ -83,7 +85,9 @@ function armDeadline(ms) {
 function snapshot(vm) {
   if (!vm.rbx) return { tree: null, gui: null, interact: null, drawings: null }
   let gui = null, interact = null
-  try { gui = snapshotGui(vm.rbx); interact = snapshotInteract(vm.rbx) } catch { /* 表示用なので失敗しても実行結果には影響させない */ }
+  // 表示用なので失敗しても実行結果には影響させない
+  try { gui = vm.gui ? vm.gui.snapshot() : null } catch {}
+  try { interact = snapshotInteract(vm.rbx) } catch {}
   return { tree: snapshotTree(vm.rbx.game), gui, interact, drawings: vm.exec ? snapshotDrawings(vm.exec.drawings) : null }
 }
 
@@ -116,85 +120,8 @@ function snapshotDrawings(set) {
   return out
 }
 
-// ============================================================
-// GUI のスナップショット (画面側で HTML として描画)
-// ============================================================
-const CLICK_EVENTS = ['Activated', 'MouseButton1Click', 'MouseButton1Down', 'MouseButton1Up']
 const hasConn = (inst, names) => !!inst.signals && names.some(n => { const s = inst.signals.get(n); return s && s.conns.length > 0 })
 const str = v => (typeof v === 'string' ? fromBytes(v) : v === undefined || v === null ? '' : String(v))
-const col = c => (c && c.luaTypeName === 'Color3' ? [Math.round(c.r * 255), Math.round(c.g * 255), Math.round(c.b * 255)] : null)
-const ud2 = u => (u && u.X ? [u.X.s, u.X.o, u.Y.s, u.Y.o] : null)
-const ud = u => (u && typeof u.s === 'number' ? [u.s, u.o] : null)
-const en = e => (e && e.luaTypeName === 'EnumItem' ? e.name : undefined)
-
-function snapshotGui(rbx) {
-  const roots = []
-  let budget = 700
-  const node = inst => {
-    if (budget-- <= 0) return null
-    const g = k => inst.getProp(k)
-    const isObj = inst.info.isA.has('GuiObject')
-    const n = { id: idOf(inst), c: inst.ClassName, n: str(inst.name) }
-    if (isObj) {
-      if (g('Visible') === false) n.v = 0
-      n.p = ud2(g('Position')); n.s = ud2(g('Size'))
-      const a = g('AnchorPoint'); if (a && (a.x || a.y)) n.a = [a.x, a.y]
-      n.bg = col(g('BackgroundColor3')); n.bt = g('BackgroundTransparency') || 0
-      const bs = g('BorderSizePixel'); if (bs) { n.bs = bs; n.bc = col(g('BorderColor3')) }
-      const z = g('ZIndex'); if (z && z !== 1) n.z = z
-      const lo = g('LayoutOrder'); if (lo) n.lo = lo
-      const rot = g('Rotation'); if (rot) n.rot = rot
-      if (g('ClipsDescendants')) n.clip = 1
-      if (inst.info.isA.has('TextLabel') || inst.info.isA.has('TextButton') || inst.info.isA.has('TextBox')) {
-        n.t = str(g('Text')); n.tc = col(g('TextColor3')); n.ts = g('TextSize') || 14
-        if (g('TextScaled')) n.tsc = 1
-        if (g('TextWrapped')) n.tw = 1
-        const tt = g('TextTransparency'); if (tt) n.tt = tt
-        n.tx = en(g('TextXAlignment')); n.ty = en(g('TextYAlignment'))
-        const f = g('Font'); const fn = en(f); if (fn && /Bold|Black/.test(fn)) n.b = 1
-        if (fn && /Code|Mono/.test(fn)) n.mono = 1
-        if (inst.ClassName === 'TextBox') n.ph = str(g('PlaceholderText'))
-      }
-      if (inst.info.isA.has('ImageLabel') || inst.info.isA.has('ImageButton')) {
-        n.img = str(g('Image')); const it = g('ImageTransparency'); if (it) n.it = it
-        n.ic = col(g('ImageColor3'))
-      }
-      if (inst.ClassName === 'ScrollingFrame') { n.scroll = 1; n.canvas = ud2(g('CanvasSize')) }
-      if (inst.info.isA.has('GuiButton') || inst.ClassName === 'TextBox') n.btn = hasConn(inst, CLICK_EVENTS) || inst.ClassName === 'TextBox' ? 1 : 2
-    }
-    const kids = []
-    for (const ch of inst.children) {
-      const cg = k => ch.getProp(k)
-      switch (ch.ClassName) {
-        case 'UICorner': n.cr = ud(cg('CornerRadius')) || [0, 8]; break
-        case 'UIStroke': n.st = { c: col(cg('Color')) || [0, 0, 0], th: cg('Thickness') ?? 1, tr: cg('Transparency') || 0, border: en(cg('ApplyStrokeMode')) === 'Border' }; break
-        case 'UIPadding': n.pad = [ud(cg('PaddingTop')), ud(cg('PaddingRight')), ud(cg('PaddingBottom')), ud(cg('PaddingLeft'))].map(x => x || [0, 0]); break
-        case 'UIListLayout': n.list = { dir: en(cg('FillDirection')) || 'Vertical', pad: ud(cg('Padding')) || [0, 0], ha: en(cg('HorizontalAlignment')) || 'Left', va: en(cg('VerticalAlignment')) || 'Top' }; break
-        case 'UIGridLayout': n.grid = { cell: ud2(cg('CellSize')) || [0, 100, 0, 100], pad: ud2(cg('CellPadding')) || [0, 5, 0, 5] }; break
-        case 'UIScale': n.scale = cg('Scale') ?? 1; break
-        case 'UIGradient': {
-          const seq = cg('Color')
-          const kp = seq && seq.keypoints
-          if (kp && kp.length) n.grad = { a: col(kp[0].value || kp[0].Value), b: col(kp[kp.length - 1].value || kp[kp.length - 1].Value), rot: cg('Rotation') || 0 }
-          break
-        }
-        default:
-          if (ch.info.isA.has('GuiObject') || ch.info.isA.has('LayerCollector') || ch.ClassName === 'Folder') { const k = node(ch); if (k) kids.push(k) }
-      }
-    }
-    if (kids.length) n.k = kids
-    return n
-  }
-  for (const inst of rbx.allInstances) {
-    if (inst.ClassName !== 'ScreenGui' || inst.destroyed) continue
-    let p = inst.parent, ok = false
-    while (p) { if (p.ClassName === 'PlayerGui' || p.ClassName === 'CoreGui' || p.ClassName === 'StarterGui') { ok = true; break } p = p.parent }
-    if (!ok || inst.getProp('Enabled') === false) continue
-    const r = node(inst)
-    if (r) { r.order = inst.getProp('DisplayOrder') || 0; roots.push(r) }
-  }
-  return roots.length ? roots : null
-}
 
 // ============================================================
 // 操作できるもの (クリック・接触・キー入力などに関数が接続されているオブジェクト)
@@ -222,25 +149,25 @@ function fullPath(inst) {
 }
 function hasInteractive(vm) {
   if (!vm.rbx) return false
-  for (const inst of vm.rbx.allInstances) {
-    if (inst.destroyed || !inst.signals) continue
-    if ((inst.info.isA.has('GuiButton') && hasConn(inst, CLICK_EVENTS)) || (inst.ClassName === 'TextBox' && hasConn(inst, ['FocusLost']))) {
-      // 表示中の ScreenGui の中にあるものだけ
-      for (let p = inst.parent; p; p = p.parent) if (p.ClassName === 'PlayerGui' || p.ClassName === 'CoreGui') return true
-    }
-  }
+  try { if (vm.gui && vm.gui.interactive()) return true } catch {}
   return !!snapshotInteract(vm.rbx)
 }
 
-function postGui(force) {
+// 操作できる GUI が表示されている間は、実行時間の上限を数えない (GUI が消えたら数え直す)
+let maxRunMs = 0
+function checkUi() {
   const vm = currentVM
-  if (!vm || !vm.rbx) return
-  let gui = null
-  try { gui = snapshotGui(vm.rbx) } catch { return }
-  const json = gui ? JSON.stringify(gui) : ''
-  if (!force && json === lastGui) return
-  lastGui = json
-  self.postMessage({ type: 'gui', gui })
+  if (!vm || !vm.gui || vm.sched.paused) return
+  let on = false
+  try { on = vm.gui.interactive() } catch {}
+  if (on && !uiMode) {
+    uiMode = true
+    clearTimeout(finishTimer)
+    self.postMessage({ type: 'uiMode' })
+  } else if (!on && uiMode) {
+    uiMode = false
+    if (maxRunMs > 0 && !waiting) armDeadline(maxRunMs)
+  }
 }
 
 // ---- 画面からの操作 ----
@@ -250,29 +177,17 @@ function handleInput(m) {
   const rbx = vm.rbx
   const inst = m.id ? byId.get(m.id) : null
   const player = rbx.player
-  const keyInput = (key, state) => {
-    const io = rbx.newInstance('InputObject')
-    const item = rbx.enums.item('KeyCode', key) || rbx.enums.item('KeyCode', 'Unknown')
-    io.props.set('KeyCode', item)
-    io.props.set('UserInputType', rbx.enums.item('UserInputType', 'Keyboard'))
-    io.props.set('UserInputState', rbx.enums.item('UserInputState', state))
-    return io
-  }
   try {
     switch (m.kind) {
-      case 'gui': {
-        if (!inst || inst.destroyed) break
-        const io = rbx.newInstance('InputObject')
-        io.props.set('UserInputType', rbx.enums.item('UserInputType', 'MouseButton1'))
-        inst.fire('MouseButton1Down', [0, 0]); inst.fire('MouseButton1Up', [0, 0]); inst.fire('MouseButton1Click', []); inst.fire('Activated', [io, 1])
+      // ゲーム画面の操作 (GUI エンジンが InputObject として再現)
+      case 'pointer': case 'wheel': case 'text': vm.gui.input(m); break
+      case 'key':
+        if (m.down === undefined) {
+          // 「操作できるもの」のキーボタン: 押して離す
+          vm.gui.input({ kind: 'key', key: m.key, down: true })
+          vm.sched.setTimer(0.08, () => { try { vm.gui.input({ kind: 'key', key: m.key, down: false }) } catch (e) { reportError(e) } vm.sched.checkIdle() })
+        } else vm.gui.input(m)
         break
-      }
-      case 'text': {
-        if (!inst || inst.destroyed) break
-        inst.luaNewIndex('Text', toBytes(String(m.text ?? '')))
-        inst.fire('FocusLost', [true])
-        break
-      }
       case 'click': if (inst) inst.fire('MouseClick', [player]); break
       case 'prompt': if (inst) { inst.fire('PromptButtonHoldBegan', [player]); inst.fire('Triggered', [player]); inst.fire('TriggerEnded', [player]) } break
       case 'tool': if (inst) { inst.fire('Equipped', [player.getProp('Character')]); inst.fire('Activated', []) } break
@@ -284,21 +199,32 @@ function handleInput(m) {
       }
       case 'kill': if (inst) inst.luaNewIndex('Health', 0); break
       case 'mouse': if (inst) { inst.fire('Button1Down', []); inst.fire('Button1Up', []) } break
-      case 'key': {
-        const uis = rbx.getService('UserInputService')
-        if (m.key === 'Space') uis.fire('JumpRequest', [])
-        uis.fire('InputBegan', [keyInput(m.key, 'Begin'), false])
-        vm.sched.setTimer(0.08, () => { uis.fire('InputEnded', [keyInput(m.key, 'End'), false]); vm.sched.checkIdle() })
-        break
-      }
     }
   } catch (e) {
-    flush()
-    self.postMessage({ type: 'error', ...errorPayload(e) })
+    reportError(e)
   }
-  if (waiting) { waiting = false; self.postMessage({ type: 'resumed' }) }
+  if (waiting && m.phase !== 'move') { waiting = false; self.postMessage({ type: 'resumed' }) }
   vm.sched.checkIdle()
-  setTimeout(() => postGui(false), 30)
+}
+function reportError(e) {
+  flush()
+  postError(errorPayload(e))
+}
+
+// 同じエラーが繰り返されたとき (毎フレームのイベントなど) は 1 つにまとめて回数だけ送る
+let errSeen = new Map()
+function postError(payload) {
+  const key = payload.text
+  const seen = errSeen.get(key)
+  if (!seen) {
+    // 種類が多すぎるときは、まとめずにそのまま送る (捨てない)
+    if (errSeen.size > 200) { self.postMessage({ type: 'error', ...payload }); return }
+    errSeen.set(key, { n: 1, t: null })
+    self.postMessage({ type: 'error', ...payload })
+    return
+  }
+  seen.n++
+  if (!seen.t) seen.t = setTimeout(() => { seen.t = null; self.postMessage({ type: 'errorRepeat', text: key, n: seen.n }) }, 400)
 }
 
 function errorPayload(e, chunk) {
@@ -313,14 +239,16 @@ async function run(msg) {
   if (currentVM) finish('stopped')
   lineCount = 0
   buf = []
-  lastGui = ''
   waiting = false
+  uiMode = false
+  for (const v of errSeen.values()) clearTimeout(v.t)
+  errSeen = new Map()
   ids = new Map(); byId = new Map(); idSeed = 0
   let vm = null
   const hooks = {
     // 終了後に遅れて届いた出力 (通信の応答など) は捨てる
     output: (kind, text) => { if (currentVM === vm) emit(kind, text) },
-    onError: e => { if (currentVM !== vm) return; flush(); self.postMessage({ type: 'error', ...errorPayload(e) }) },
+    onError: e => { if (currentVM !== vm) return; flush(); postError(errorPayload(e)) },
     onIdle: () => {
       if (currentVM !== vm) return
       // ボタンなどに関数が接続されていれば、操作を待ち続ける (■ 停止で終了)
@@ -338,6 +266,7 @@ async function run(msg) {
     post: m => { if (currentVM !== vm) return; flush(); self.postMessage(m) },
     printSep: ' ',
     touch: !!opts.touch,
+    device: opts.device || (opts.touch ? 'phone' : 'pc'),
     chunkName: msg.chunkName,
   }
   vm = createVM(hooks, { timeLimit: opts.timeLimit ?? 10000 })
@@ -359,13 +288,16 @@ async function run(msg) {
     vm.debugger = dbg
     rt.debugger = dbg
   }
-  const ctx = { sched: vm.sched, hooks, fs: new Map(), fsFolders: new Set(), currentFile: msg.path, runContext: opts.kind || 'module' }
+  const ctx = { sched: vm.sched, hooks, fs: new Map(), fsFolders: new Set(), currentFile: msg.path, runContext: opts.kind || 'module', net: opts.net || {} }
   for (const [p, c] of Object.entries(msg.wsFiles || {})) ctx.fs.set(p, toBytes(c))
   for (const f of msg.wsFolders || []) ctx.fsFolders.add(f)
   try {
     ctx.api = await loadApi()
     if (currentVM !== vm) return
     vm.rbx = installRoblox(vm.env, ctx)
+    vm.gui = ctx.gui
+    if (opts.screen) vm.gui.setScreen(opts.screen[0], opts.screen[1])
+    vm.gui.setVisible(guiShown)
     vm.rbx.mountFiles(msg.files || {}, msg.projectName)
     vm.rbx.setScript(msg.path)
     if (opts.executor) vm.exec = installExecutor(vm.env, ctx, vm.rbx)
@@ -376,8 +308,9 @@ async function run(msg) {
     return
   }
   deadline = 0
-  if (opts.maxRunTime > 0) armDeadline(opts.maxRunTime * 1000)
-  guiTimer = setInterval(() => postGui(false), 250)
+  maxRunMs = opts.maxRunTime > 0 ? opts.maxRunTime * 1000 : 0
+  if (maxRunMs) armDeadline(maxRunMs)
+  uiTimer = setInterval(checkUi, 400)
   self.postMessage({ type: 'started', debug: !!vm.debugger })
   try {
     if (msg.repl) startRepl(vm, msg.source)
@@ -470,7 +403,8 @@ function evaluate(m) {
       rt.scheduler = old.sched
       rt.debugger = null
       rt.halted = null
-      guiTimer = setInterval(() => postGui(false), 250)
+      uiTimer = setInterval(checkUi, 400)
+      if (old.gui) old.gui.full()
       self.postMessage({ type: 'started', repl: true })
       startRepl(old, m.code)
       old.sched.checkIdle()
@@ -493,6 +427,16 @@ self.onmessage = e => {
   if (msg.type === 'run') run(msg)
   else if (msg.type === 'stop') finish('stopped')
   else if (msg.type === 'input') handleInput(msg)
+  else if (msg.type === 'guiVisible') { guiShown = !!msg.on; const vm = currentVM; if (vm && vm.gui) vm.gui.setVisible(guiShown) }
+  else if (msg.type === 'screen') {
+    const vm = currentVM || lastVM
+    if (vm && vm.gui) {
+      vm.gui.setScreen(msg.w, msg.h)
+      // 終了後も、最後の画面を新しい大きさで描き直す
+      if (currentVM) vm.gui.full()
+      else { try { self.postMessage({ type: 'gui', patch: vm.gui.snapshot() }) } catch {} }
+    }
+  }
   else if (msg.type === 'warm') loadApi().then(() => self.postMessage({ type: 'warm' }), () => {})
   else if (msg.type === 'debug') debugCommand(msg)
   else if (msg.type === 'breakpoints') { const d = currentVM && currentVM.debugger; if (d) d.setBreakpoints(msg.list) }

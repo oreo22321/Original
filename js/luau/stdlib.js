@@ -413,8 +413,24 @@ export function createStdlib(env, hooks, sched) {
     if (T(A[0])) u.mt = new LTable()
     return u
   })
-  def(G, 'getfenv', () => env)
-  def(G, 'setfenv', A => A[0])
+  // getfenv / setfenv: 関数の環境 (グローバル変数の置き場)。関数は作られたときの環境を引き継ぎます
+  const fenvTarget = A => {
+    const f = A[0]
+    if (f instanceof LFunc) return f
+    const lvl = f === undefined ? 1 : Number(f)
+    if (lvl === 0) return null
+    // レベル 1 以上: 実行中のスレッドの関数で近似
+    const co = rt.current
+    return co && co.fn instanceof LFunc ? co.fn : null
+  }
+  const envOf = f => (f && (f.env || f.envD)) || env
+  def(G, 'getfenv', A => envOf(fenvTarget(A)))
+  def(G, 'setfenv', A => {
+    if (!(A[1] instanceof LTable)) throw argError(2, 'setfenv', 'table expected')
+    const f = fenvTarget(A)
+    if (f && f.g) f.env = A[1]
+    return f || EMPTY
+  })
   G.set('_G', G)
   G.set('_VERSION', 'Luau')
 

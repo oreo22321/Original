@@ -8,10 +8,12 @@ import { EXECUTOR_GLOBALS, EXECUTOR_LIBS, DRAWING_PROPS, DRAWING_KINDS, EXECUTOR
 import { LUAU_SNIPPETS } from '../data/snippets.js'
 import { snippet, snippetCompletion, syntaxTree } from '../../vendor/codemirror.js'
 import { scanBlocks } from './blocks.js'
+import { membersOfRef, indexRef, sigOf } from './extlib.js'
 
 // executor: エグゼキューター API を補完に含めるか (プロジェクトのモードで切り替え)
 // moduleSource: require したモジュールのソースを返す関数 (アプリ側が設定。名前 → テキスト)
-export const intel = { executor: true, roblox: true, snippets: true, moduleSource: null }
+// extLib: loadstring で読み込むライブラリの API を返す関数 (URL → 解析結果。未取得なら null を返して取得を始める)
+export const intel = { executor: true, roblox: true, snippets: true, moduleSource: null, extLib: null }
 
 const DRAWING_ENTRIES = {}
 for (const k of DRAWING_KINDS) DRAWING_ENTRIES[k] = parseEntries([...DRAWING_PROPS[k], ...DRAWING_PROPS.common])
@@ -196,6 +198,7 @@ export function typeLabel(ty) {
     case 'execobj': return ty.name
     case 'execArray': return `{${ty.name}}`
     case 'usertable': return ty.module || ty.name
+    case 'ext': return ty.lib
     case 'shared': return ty.name === 'genv' ? 'getgenv()' : ty.name
     case 'bool': return 'boolean'
     default: return ty.k
@@ -354,6 +357,95 @@ function moduleType(expr) {
   return null
 }
 
+// ============================================================
+// 外部ライブラリ: loadstring(game:HttpGet(URL))()
+// ============================================================
+const LOADSTRING_RE = /^loadstring\s*\(\s*game\s*[:.]\s*HttpGet(?:Async)?\s*\(\s*(?:game\s*,\s*)?([\s\S]+?)\s*(?:,\s*(?:true|false)\s*)?\)\s*(?:,\s*[^()]*)?\)\s*\(\s*\)\s*$/
+// 文字列の式 ("a" .. b .. "c") を、ローカル変数の値もたどって 1 つの文字列にする
+export function resolveStringExpr(expr, ctx, depth = 0) {
+  if (!expr || depth > 6) return null
+  const parts = []
+  let cur = '', q = null, d = 0
+  const e = expr.trim()
+  for (let i = 0; i < e.length; i++) {
+    const c = e[i]
+    if (q) { cur += c; if (c === '\\') { cur += e[++i] || ''; continue } if (c === q) q = null; continue }
+    if (c === '"' || c === "'") { q = c; cur += c; continue }
+    if (c === '(') d++
+    else if (c === ')') d--
+    if (d === 0 && c === '.' && e[i + 1] === '.') { parts.push(cur); cur = ''; i++; continue }
+    cur += c
+  }
+  parts.push(cur)
+  let out = ''
+  for (let p of parts) {
+    p = p.trim()
+    while (/^\(([\s\S]*)\)$/.test(p)) p = p.slice(1, -1).trim()
+    let m
+    if ((m = /^"((?:[^"\\]|\\.)*)"$/.exec(p)) || (m = /^'((?:[^'\\]|\\.)*)'$/.exec(p))) out += m[1].replace(/\\(.)/g, '$1')
+    else if ((m = /^\[(=*)\[([\s\S]*)\]\1\]$/.exec(p))) out += m[2]
+    else if (/^[A-Za-z_]\w*$/.test(p) && ctx.text) {
+      const decl = findDecl(ctx.text, p, ctx.pos)
+      if (!decl || !decl.expr) return null
+      const v = resolveStringExpr(decl.expr, { ...ctx, pos: decl.pos }, depth + 1)
+      if (v === null) return null
+      out += v
+    } else return null
+  }
+  return out
+}
+export function loadstringUrl(expr, ctx) {
+  const m = LOADSTRING_RE.exec(expr.trim())
+  if (!m) return null
+  const url = resolveStringExpr(m[1], ctx)
+  return url && /^https?:\/\//.test(url) ? url : null
+}
+function loadstringType(e, ctx, depth) {
+  if (!intel.extLib) return null
+  const url = loadstringUrl(e, ctx)
+  if (!url) return null
+  const api = intel.extLib(url)
+  if (!api || api.root === null || api.root === undefined) return null
+  void depth
+  return { k: 'ext', api, ref: api.root, lib: api.lib || 'ライブラリ' }
+}
+// このテキストの中の loadstring の URL (補完用に先に取得しておく)
+export function scanLoadstringUrls(text) {
+  const out = new Set()
+  const re = /loadstring\s*\(\s*game\s*[:.]\s*HttpGet(?:Async)?\s*\(/g
+  let m
+  while ((m = re.exec(text)) && out.size < 12) {
+    const open = text.indexOf('(', m.index)
+    const close = matchClose(text, open)
+    let end = close + 1
+    const tail = /^\s*\(\s*\)/.exec(text.slice(end))
+    if (!tail) continue
+    end += tail[0].length
+    const url = loadstringUrl(text.slice(m.index, end), { text, pos: m.index })
+    if (url) out.add(url)
+  }
+  return [...out]
+}
+const baseOfKind = k => (k === 'string' ? { k: 'string' } : k === 'number' ? { k: 'number' } : k === 'boolean' ? { k: 'bool' } : null)
+function extEntry(m, ty) {
+  const doc = [m.doc, `📚 ${ty.lib}`].filter(Boolean).join('\n')
+  return m.k === 'fn' ? { kind: 'function', sig: sigOf(m), doc } : { kind: 'value', type: m.ty === 'table' ? 'table' : m.ty, doc }
+}
+function extStep(ty, st) {
+  const m = membersOfRef(ty.api, ty.ref).get(st.name)
+  if (!m) {
+    if (st.op !== '.') return null
+    const ir = indexRef(ty.api, ty.ref)
+    return ir ? { ...ty, ref: ir } : null
+  }
+  if (m.k === 'fn') {
+    if (st.op === ':') return m.ret !== undefined ? { ...ty, ref: m.ret } : baseOfKind(m.rt)
+    return { k: 'func', entry: { src: 'data', e: extEntry(m, ty) }, ext: { ty, m } }
+  }
+  if (m.ref !== undefined) return { ...ty, ref: m.ref }
+  return baseOfKind(m.ty)
+}
+
 // 式テキストの型
 function exprType(expr, ctx, depth) {
   if (!expr || depth > 8) return null
@@ -378,6 +470,7 @@ function exprType(expr, ctx, depth) {
   if (/^\{/.test(e) || /^setmetatable\s*\(\s*\{/.test(e)) return { k: 'table' }
   if (/^function\b/.test(e)) return { k: 'func' }
   if (/^require\b/.test(e)) return moduleType(e)
+  if (/^loadstring\b/.test(e)) { const t = loadstringType(e, ctx, depth); if (t) return t }
   const chain = parseChain(e)
   if (!chain) return null
   const ty = resolveChain(chain, ctx, depth + 1)
@@ -477,6 +570,7 @@ function memberEntryOf(ty, name, op) {
     case 'shared': { const e = sharedFields(ty.text || '', ty.name).get(name); return e ? { src: 'data', e } : null }
     case 'execobj': { const e = EXECUTOR_OBJECTS[ty.name][name]; return e ? { src: 'data', e } : null }
     case 'drawing': { const e = (DRAWING_ENTRIES[ty.name] || DRAWING_ENTRIES.Line)[name]; return e ? { src: 'data', e } : null }
+    case 'ext': { const m = membersOfRef(ty.api, ty.ref).get(name); return m ? { src: 'data', e: extEntry(m, ty), ext: m } : null }
   }
   return null
 }
@@ -507,6 +601,15 @@ export function memberNamesOf(ty, op) {
 
 function stepType(ty, st, ctx, depth) {
   if (!ty) return null
+  if (ty.k === 'ext') {
+    if (st.op === '.' || st.op === ':') return extStep(ty, st)
+    if (st.op === '[]') { const ir = indexRef(ty.api, ty.ref); return ir ? { ...ty, ref: ir } : null }
+    return null
+  }
+  if (st.op === 'call' && ty.k === 'func' && ty.ext) {
+    const m = ty.ext.m
+    return m.ret !== undefined ? { ...ty.ext.ty, ref: m.ret } : baseOfKind(m.rt)
+  }
   if (st.op === '.') {
     const name = st.name
     switch (ty.k) {
@@ -783,6 +886,17 @@ function membersFor(ty, op) {
       for (const [k, e] of fields) if (op === '.' || e.kind === 'function') obj[k] = e
       return dataItems(obj, op, (ty.module || ty.name) + op).map(i => ({ ...i, boost: 3 }))
     }
+    case 'ext': {
+      const out = []
+      for (const [name, m] of membersOfRef(ty.api, ty.ref)) {
+        if (op === ':' && m.k !== 'fn') continue
+        const e = extEntry(m, ty)
+        const boost = 6 + (/^(Add|Create|Make|New|Set|On|Get|Toggle|Notify)/.test(name) ? 3 : 0) - (/^_/.test(name) ? 8 : 0)
+        if (m.k === 'fn') out.push({ label: name, type: op === ':' ? 'method' : 'function', detail: e.sig, info: dataInfo(name, e, ty.lib + op), apply: fnApply(name, m.params.length > (op === ':' && !m.method ? 1 : 0) || !!m.va), boost })
+        else out.push({ label: name, type: m.ty === 'table' ? 'namespace' : 'property', detail: m.ty, info: dataInfo(name, e, ty.lib + op), boost: boost - 1 })
+      }
+      return out.length ? out : null
+    }
     case 'shared': {
       const fields = sharedFields(ty.text || '', ty.name)
       const obj = {}
@@ -888,6 +1002,16 @@ export function luauCompletionSource(context) {
     }
   }
 
+  // 外部ライブラリの関数に渡すテーブルのキー: Groupbox:AddToggle("x", { Te| })
+  if (!where && intel.extLib) {
+    const km = /(?:^\s*|[{,;]\s*)([A-Za-z_]\w*)?$/.exec(before)
+    if (km) {
+      const typed = km[1] || ''
+      const keys = extTableKeys(ctx.text, pos - typed.length, ctx)
+      if (keys) return { from: pos - typed.length, options: keys, validFor: /^\w*$/ }
+    }
+  }
+
   // 文字列引数: GetService("|") など
   const sm = /([\w.:"()[\]]*?)\b(\w+)\s*\(\s*["']([\w ]*)$/.exec(before)
   if (sm && STRING_ARG_FNS[sm[2]]) {
@@ -948,6 +1072,70 @@ export function luauCompletionSource(context) {
   const from = word ? word.from : pos
   const typed = word ? word.text : ''
   return { from, options: [...globalItems(), ...docWords(state, typed)], validFor: /^\w*$/ }
+}
+
+// 位置 pos が「関数呼び出しに渡しているテーブル」の中なら、その呼び出しと何番目の引数か
+export function tableArgAt(text, pos) {
+  const start = Math.max(0, pos - 4000)
+  let d = 0, i
+  for (i = pos - 1; i >= start; i--) {
+    const c = text[i]
+    if (c === '"' || c === "'") { const q = c; i--; while (i >= start && text[i] !== q) i--; continue }
+    if (c === '}' || c === ')' || c === ']') d++
+    else if (c === '{' || c === '(' || c === '[') { if (d === 0) break; d-- }
+  }
+  if (i < start || text[i] !== '{') return null
+  const open = i
+  let j = open - 1
+  while (j >= start && /\s/.test(text[j])) j--
+  if (text[j] !== '(' && text[j] !== ',') return null
+  // 呼び出しの ( を探し、その前までの引数の数を数える
+  let commas = 0
+  d = 0
+  for (j = open - 1; j >= start; j--) {
+    const c = text[j]
+    if (c === '"' || c === "'") { const q = c; j--; while (j >= start && text[j] !== q) j--; continue }
+    if (c === '}' || c === ')' || c === ']') d++
+    else if (c === '{' || c === '[') { if (d === 0) return null; d-- }
+    else if (c === '(') { if (d === 0) break; d-- }
+    else if (c === ',' && d === 0) commas++
+  }
+  if (j < start) return null
+  const callee = chainBefore(text, j)
+  if (!callee) return null
+  const present = new Set()
+  const inner = text.slice(open + 1, pos)
+  const re = /(?:^|[{,;\n])\s*([A-Za-z_]\w*)\s*=/g
+  let m
+  while ((m = re.exec(inner))) present.add(m[1])
+  return { callee, arg: commas, present, open }
+}
+// 外部ライブラリの関数の引数 (テーブル) に書けるキー
+export function extCallOptions(callee, arg, ctx) {
+  const chain = parseChain(callee)
+  if (!chain || !chain.steps.length) return null
+  const last = chain.steps[chain.steps.length - 1]
+  if (last.op !== '.' && last.op !== ':') return null
+  const parent = resolveChain({ root: chain.root, steps: chain.steps.slice(0, -1) }, ctx)
+  if (!parent || parent.k !== 'ext') return null
+  const m = membersOfRef(parent.api, parent.ref).get(last.name)
+  if (!m || m.k !== 'fn') return null
+  const idx = arg + (last.op === ':' && !m.method ? 1 : 0) - (last.op === '.' && m.method ? 1 : 0)
+  const o = (m.opts || []).find(x => x[0] === idx)
+  return { m, opts: o ? o[1] : null, parent, name: last.name }
+}
+function extTableKeys(text, pos, ctx) {
+  const tc = tableArgAt(text, pos)
+  if (!tc) return null
+  const r = extCallOptions(tc.callee, tc.arg, { ...ctx, pos: tc.open })
+  if (!r || !r.opts) return null
+  return r.opts.filter(o => !tc.present.has(o[0])).map(([k, kind, def, fnParams], i) => {
+    const fn = kind === 'function' || /Callback$/.test(k)
+    const apply = fn ? snippet(`${k} = function(${(fnParams && fnParams.filter(x => x !== 'self').join(', ')) || 'Value'})\n\t\${}\nend,`)
+      : kind === 'string' || (def && def.startsWith('"')) ? snippet(`${k} = "\${${(def && def !== '""' ? def.slice(1, -1) : k).replace(/[{}$\\]/g, '')}}",`)
+      : (() => { const v = def && def !== 'function' ? def : kind === 'boolean' ? 'false' : kind === 'number' ? '0' : kind === 'table' ? '{}' : 'nil'; return /[{}$\\]/.test(v) ? `${k} = ${v},` : snippet(`${k} = \${${v}},`) })()
+    return { label: k, type: fn ? 'function' : 'property', detail: def ? `= ${def === 'function' ? 'function' : def}` : kind, info: `${r.parent.lib} の ${r.name} に渡す設定`, apply, boost: 20 - i * 0.1 }
+  })
 }
 
 // ============================================================
