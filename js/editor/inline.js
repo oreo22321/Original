@@ -6,6 +6,7 @@ import * as db from './apidb.js'
 import { headerAt } from './blocks.js'
 import { resolveChain, parseChain, docText } from './luau-intel.js'
 import { inStringOrComment } from './typo.js'
+import { addAutoEnd } from './autoend.js'
 
 export const setGhost = StateEffect.define()
 const ghostDismiss = Annotation.define()
@@ -416,7 +417,7 @@ export function autoEndCommand(view) {
   const line = state.doc.lineAt(pos)
   const before = line.text.slice(0, pos - line.from)
   // ほとんどの Enter はここで抜ける (見出しの直後でなければ通常の改行)
-  if (!/\b(then|do|repeat)\s*(--.*)?$/.test(before) && !/\bfunction\b/.test(before)) return false
+  if (!/\b(then|do|repeat|else)\s*(--.*)?$/.test(before) && !/\bfunction\b/.test(before)) return false
   if (state.doc.length > 400000) return false
   const hd = headerAt(state.doc.toString(), pos, state.tabSize)
   if (!hd) return false
@@ -436,15 +437,18 @@ export function autoEndCommand(view) {
     return false
   }
   const closer = hd.closer
-  let changes
+  let changes, endPos
   if (/^[)\]},;\s]*$/.test(trailing)) {
     // 後ろが閉じ括弧だけ ( :Connect(function()|) ) → end の後ろへ移す
     changes = { from: pos, to: line.to, insert: body + '\n' + ind + (trailing ? closer.trimEnd() + trailing : closer) }
+    endPos = pos + body.length + 1 + ind.length
   } else {
     // 後ろにコードが続く → それを本体にして、その下に end
     changes = [{ from: pos, to: pos + lead, insert: body }, { from: line.to, insert: '\n' + ind + closer.trimEnd() }]
+    endPos = line.to + body.length - lead + 1 + ind.length
   }
-  view.dispatch({ changes, selection: cursor, userEvent: 'input', scrollIntoView: true })
+  const effects = closer === 'end' ? addAutoEnd.of({ pos: endPos, from: line.from }) : []
+  view.dispatch({ changes, selection: cursor, effects, userEvent: 'input', scrollIntoView: true })
   return true
 }
 

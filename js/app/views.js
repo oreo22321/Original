@@ -218,7 +218,8 @@ export function showHelp() {
   <ul>
     <li><b>補完</b>: <code>game:GetService("</code> でサービス名、<code>part.</code> でプロパティ、<code>:</code> でメソッド。自分で作ったテーブルや、<code>require</code> したモジュールの中身も候補に出ます。</li>
     <li><b>インライン候補</b>: 薄い文字の続きは <b>Tab</b> (スマホはキーボードの上の <b>✓</b>) で確定。<code>PlayerAdded:Connect(</code> では引数名 (player) まで入り、同じような行をくり返すと次の行を予測します。</li>
-    <li><b>end の自動入力</b>: <code>then</code> / <code>do</code> / <code>function()</code> の後で改行すると <code>end</code> が入ります。</li>
+    <li><b>end の自動入力・自動削除</b>: <code>if ... then</code> / <code>for ... do</code> / <code>function()</code> を書いた時点で、次の行に <code>end</code> が入ります。自分で <code>end</code> を書いても二重になりません。<code>if</code> や <code>function</code> を消すと、対になっていた <code>end</code> も一緒に消えます (<kbd>⌘Z</kbd> 1 回で元に戻せます)。</li>
+    <li><b>スティッキースクロール</b>: 長いコードをスクロールすると、いま見ている <code>function</code> / <code>if</code> の行が画面の上に固定されます (タップでその行へ)。</li>
     <li><b>引数ヒント</b>: 関数の <code>(</code> の中で、引数の名前と型が表示されます (自分で作った関数も対象)。</li>
     <li><b>色の選択</b>: <code>Color3.fromRGB(...)</code> の左の四角をタップすると色を選べます。</li>
   </ul>
@@ -229,6 +230,27 @@ export function showHelp() {
     <li><b>自動修正</b>: <code>fucntion</code> → <code>function</code> などの打ち間違い、全角の <code>（）＝”</code> や全角スペース、iPhone が勝手に変える <code>“ ”</code> を自動で直します (文字列とコメントの中はそのまま)。</li>
     <li><b>end の過不足</b>: どの <code>if</code> / <code>function</code> の <code>end</code> が足りないかを指摘し、正しい位置に追加できます。</li>
     <li><b>実行エラーの解説</b>: <code>attempt to index nil</code> などのエラーに、日本語で原因と直し方を表示します。</li>
+  </ul>
+  <h3>コードの移動・名前の変更</h3>
+  <ul>
+    <li><b>定義へ移動</b> (<kbd>F12</kbd>): 変数・関数の宣言へジャンプします。モジュールの関数 (<code>Util.format</code>) は他のファイルからも探します。</li>
+    <li><b>参照を検索</b> (<kbd>⇧F12</kbd>): その変数・関数を使っている場所を一覧表示します。</li>
+    <li><b>名前を変更</b> (<kbd>F2</kbd>): 変数の名前をすべての場所で一度に変えます。同じ名前の別の変数 (内側の local など) は変わりません。</li>
+    <li>カーソルを置いた変数は、使われている場所がすべてハイライトされます (代入している場所は黄色)。</li>
+    <li>スマホでは、キーボードの上のバーの ◎ (コード操作) から使えます。</li>
+  </ul>
+  <h3>デバッガー (止めて調べる)</h3>
+  <ul>
+    <li>行番号の左をタップすると赤い点 (<b>ブレークポイント</b>) が付きます (<kbd>F9</kbd>)。▶ で実行すると、その行の手前で止まります。</li>
+    <li>止まっている間は「デバッグ」タブで<b>変数の値</b>・<b>呼び出し履歴</b>を確認できます。テーブルや Instance はタップで中身を開けます。エディタで変数にカーソルを合わせても値が見えます。</li>
+    <li><b>ステップ</b> (<kbd>F10</kbd>) で 1 行ずつ、<b>中へ</b> (<kbd>F11</kbd>) で関数の中へ、<b>外へ</b> (<kbd>⇧F11</kbd>) で呼び出し元へ進みます。<b>続行</b> (<kbd>F5</kbd>) で次のブレークポイントまで。</li>
+    <li>赤い点を長押しすると、<b>条件付き</b> (例: <code>i == 10</code> のときだけ止まる) や<b>ログポイント</b> (止めずに <code>{変数}</code> の値を出力) にできます。</li>
+    <li><b>ウォッチ</b>: 式を登録すると、止まるたびにその値を表示します。</li>
+  </ul>
+  <h3>コンソール</h3>
+  <ul>
+    <li>「出力」の一番下の欄に式やコードを入力して Enter で、その場で実行できます (例: <code>1 + 2</code>、<code>workspace:GetChildren()</code>)。</li>
+    <li>実行が終わった後も同じ環境が残るので、スクリプトの変数や作ったオブジェクトを調べられます。デバッガーで止まっている間は、その場所の変数を使えます。</li>
   </ul>
   <h3>実行</h3>
   <ul>
@@ -268,17 +290,15 @@ export function showHelp() {
 export function showWhatsNew() {
   const body = h('div', { class: 'help whats-new' })
   body.innerHTML = `
-  <p>ForgeCode 5 は、<b>Roblox の Luau 専用</b>に作り直しました。</p>
+  <p>ForgeCode 6 の新しい機能です。</p>
   <ul>
-    <li><b>Studio / Executor の 2 モード</b> — プロジェクトごとに切り替え (画面下の左端)。Python などの対応は終了しました。</li>
-    <li><b>字下げと end の位置を修正</b> — for / while や <code>Connect(function()</code> の中で、改行位置がずれる問題を直しました。</li>
-    <li><b>誤字対策</b> — スペルミスに「もしかして」を提案。全角記号や打ち間違いは自動で修正します。</li>
-    <li><b>エラーの直し方</b> — 行の右の説明をタップして修正。実行エラーには日本語の解説が付きます。</li>
-    <li><b>GUI プレビュー</b> — 作った画面を「ゲーム」タブに表示し、ボタンをタップして試せます。</li>
-    <li><b>賢くなった候補</b> — イベントの引数名、自作テーブルやモジュールの中身、次に書く行の予測。</li>
-    <li><b>エグゼキューター API を拡充</b> — 180 以上の関数を補完・模擬実行。</li>
-    <li><b>より安全な自動保存</b> — 保存前にアプリが閉じても、下書きから復元します。</li>
-    <li><b>速くなりました</b> — 読み込むデータを 3 割減らし、▶ を押してすぐ実行が始まります。</li>
+    <li><b>end を自動で入れる・消す</b> — <code>if ... then</code> や <code>for ... do</code>、<code>function()</code> を書いた時点で <code>end</code> が入ります。<code>if</code> や <code>function</code> を消すと、対の <code>end</code> も一緒に消えます。</li>
+    <li><b>デバッガー</b> — 行番号の左をタップして赤い点を付けると、▶ で実行したときにその行で止まります。変数の値を見ながら 1 行ずつ進められます (条件付き・ログ出力にもできます)。</li>
+    <li><b>コンソール</b> — 出力の下の欄で、式やコードをその場で実行。実行後もスクリプトの変数を調べられます。</li>
+    <li><b>定義へ移動・参照を検索・名前の一括変更</b> — <kbd>F12</kbd> / <kbd>⇧F12</kbd> / <kbd>F2</kbd>。スマホはキーボードの上の ◎ から。</li>
+    <li><b>同じ変数をハイライト</b>・<b>スティッキースクロール</b> (いま見ている function の行を上に固定)。</li>
+    <li><b>行の移動・複製</b> — <kbd>⌥↑</kbd> / <kbd>⌥↓</kbd> / <kbd>⇧⌥↓</kbd> (スマホは ◎ のメニュー)。</li>
+    <li><b>見た目と動き</b> — ボタンやパネル、出力の表示をなめらかに。止まっているときは画面下のバーが黄色になります。</li>
   </ul>`
   modal({ title: '新しくなりました', body, actions: [{ label: '使い方を見る', run: () => { setTimeout(showHelp, 200) } }, { label: 'OK', primary: true }] })
 }

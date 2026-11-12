@@ -2,11 +2,12 @@
 import * as vfs from './vfs.js'
 import { app, command, refreshFiles, runCommand } from './app.js'
 import { getSettings, getMode, on, emit, isTouch } from './store.js'
-import { h, icon, toast, copyText, haptic } from './ui.js'
+import { h, icon, toast, copyText, haptic, menu } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { scriptKindOf, KIND_LABELS, langOf } from '../editor/setup.js'
 import { explainError } from './explain.js'
 import { renderGui, SCREENS } from './gui-preview.js'
+import { DebugPanel, bpStore } from './debug-panel.js'
 
 const MAX_DOM_LINES = 3000
 const LINK_RE = /((?:[\w./ -]*[\w-]\.luau?)(?::| line )\d+)/
@@ -40,10 +41,13 @@ export class Runner {
     this.outEl = h('div', { class: 'output', role: 'log', 'aria-live': 'polite' })
     this.searchEl = h('input', { class: 'input out-search hidden', placeholder: '出力を絞り込み', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' })
     this.searchEl.addEventListener('input', () => { this.query = this.searchEl.value.toLowerCase(); this.applyQuery() })
-    this.outWrap = h('div', { class: 'panel-view out-view' }, this.searchEl, this.outEl)
+    this.consoleEl = this.buildConsole()
+    this.outWrap = h('div', { class: 'panel-view out-view' }, this.searchEl, this.outEl, this.consoleEl)
     this.probEl = h('div', { class: 'panel-view problems hidden' })
     this.gameEl = h('div', { class: 'panel-view game-view hidden' })
-    this.root.append(this.head, this.outWrap, this.probEl, this.gameEl)
+    this.debugEl = h('div', { class: 'panel-view debug-view hidden' })
+    this.debug = new DebugPanel(this, this.debugEl)
+    this.root.append(this.head, this.outWrap, this.probEl, this.debugEl, this.gameEl)
     this.renderTabs()
     this.placeholder()
   }
@@ -56,11 +60,21 @@ export class Runner {
     this.tabs.append(
       t('output', '出力'),
       t('problems', '問題', pc.error + pc.warning ? { n: pc.error + pc.warning, kind: pc.error ? 'error' : 'warn' } : null),
+      t('debug', 'デバッグ', this.debug.paused ? { n: '⏸', kind: 'paused' } : bpStore.count() ? { n: bpStore.count(), kind: 'bp' } : null),
       t('game', 'ゲーム', g.gui || g.interact ? { n: '●', kind: this.waiting ? 'live' : 'dot' } : null),
     )
     this.actions.textContent = ''
     const btn = (ic, title, fn, on) => h('button', { class: 'icon-btn' + (on ? ' on' : ''), title, 'aria-label': title, onclick: fn }, icon(ic, 18))
-    if (this.tab === 'output') {
+    const narrow = document.body.dataset.layout === 'mobile'
+    if (this.tab === 'output' && narrow) {
+      // スマホ: 出力の操作は 1 つのメニューにまとめて、タブを広く使う
+      this.actions.append(btn('more', '出力の操作', e => menu([
+        { label: this.filter === 'all' ? 'エラーと警告だけ表示' : 'すべて表示', icon: 'filter', run: () => { this.filter = this.filter === 'all' ? 'issues' : 'all'; this.outEl.classList.toggle('only-issues', this.filter !== 'all'); this.renderTabs() } },
+        { label: '出力を絞り込み', icon: 'search', run: () => { this.searchEl.classList.remove('hidden'); this.searchEl.focus() } },
+        { label: '出力をコピー', icon: 'copy', run: () => copyText(this.outputText()).then(() => toast('出力をコピーしました', { icon: 'copy' })) },
+        { label: 'クリア', icon: 'trash', run: () => this.clear() },
+      ], e.currentTarget, { title: '出力' }), this.filter !== 'all'))
+    } else if (this.tab === 'output') {
       this.actions.append(
         btn('filter', this.filter === 'all' ? 'エラーと警告だけ表示' : 'すべて表示', () => { this.filter = this.filter === 'all' ? 'issues' : 'all'; this.outEl.classList.toggle('only-issues', this.filter !== 'all'); this.renderTabs() }, this.filter !== 'all'),
         btn('search', '出力を絞り込み', () => { this.searchEl.classList.toggle('hidden'); if (this.searchEl.classList.contains('hidden')) { this.searchEl.value = ''; this.query = ''; this.applyQuery() } else this.searchEl.focus(); this.renderTabs() }, !this.searchEl.classList.contains('hidden')),
@@ -75,6 +89,8 @@ export class Runner {
     this.outWrap.classList.toggle('hidden', tab !== 'output')
     this.probEl.classList.toggle('hidden', tab !== 'problems')
     this.gameEl.classList.toggle('hidden', tab !== 'game')
+    this.debugEl.classList.toggle('hidden', tab !== 'debug')
+    if (tab === 'debug') this.debug.render()
     if (tab === 'problems') this.renderProblems()
     if (tab === 'game') this.renderGame()
     this.renderTabs()
@@ -142,6 +158,8 @@ export class Runner {
         continue
       }
       const el = this.makeLine(it.kind, it.text, it.t)
+      // 大量の出力はアニメーションしない (速さ優先)
+      if (items.length > 20) el.classList.add('no-anim')
       frag.append(el)
       this.lineCount++
       this.last = { kind: it.kind, text: it.text, el, n: 1, badge: null }
@@ -195,7 +213,28 @@ export class Runner {
     return p && p.runTarget && app.files.some(f => f.path === p.runTarget && !f.dir) ? p.runTarget : null
   }
 
-  async run({ selection = false } = {}) {
+  // 実行に渡すファイル一覧 (開いているファイルは編集中の内容)
+  filesPayload() {
+    const files = {}, wsFiles = {}, wsFolders = []
+    for (const f of app.files) {
+      const content = app.editors.docs.has(f.path) ? app.editors.docs.get(f.path).state.doc.toString() : app.contents.get(f.path)
+      if (f.path.startsWith('workspace/')) {
+        const rel = f.path.slice('workspace/'.length)
+        if (f.dir) wsFolders.push(rel)
+        else wsFiles[rel] = content || ''
+      }
+      if (!f.dir && /\.(luau?|txt|json|csv|md)$/i.test(f.path)) files[f.path] = content || ''
+    }
+    return { files, wsFiles, wsFolders }
+  }
+
+  runOptions(kind, extra = {}) {
+    const s = getSettings()
+    const mode = getMode()
+    return { timeLimit: s.timeLimit * 1000, maxRunTime: s.maxRunTime, executor: mode === 'executor', kind, touch: isTouch, ...extra }
+  }
+
+  async run({ selection = false, debug = false } = {}) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
     let path = null, source = null
@@ -230,17 +269,11 @@ export class Runner {
     app.editors.clearRunErrors()
     const mode = getMode()
     const kind = scriptKindOf(path, mode)
-    const files = {}, wsFiles = {}, wsFolders = []
-    for (const f of app.files) {
-      const content = app.editors.docs.has(f.path) ? app.editors.docs.get(f.path).state.doc.toString() : app.contents.get(f.path)
-      if (f.path.startsWith('workspace/')) {
-        const rel = f.path.slice('workspace/'.length)
-        if (f.dir) wsFolders.push(rel)
-        else wsFiles[rel] = content || ''
-      }
-      if (!f.dir && /\.(luau?|txt|json|csv|md)$/i.test(f.path)) files[f.path] = content || ''
-    }
+    const { files, wsFiles, wsFolders } = this.filesPayload()
     if (!selection) files[path] = source
+    // ブレークポイントがあれば自動でデバッグ実行
+    const bps = bpStore.forRun()
+    const useDebug = debug || (!selection && Object.keys(bps).length > 0)
     const w = this.ensureWorker()
     if (!w) { this.line('error', '実行エンジンを起動できませんでした。ページを再読み込みしてください'); return }
     this.game = { tree: null, gui: null, interact: null, drawings: null }
@@ -249,15 +282,56 @@ export class Runner {
     this.sawGui = false
     this.holdScroll = false
     this.errors = 0
-    this.setRunning({ path, kind })
+    this.setRunning({ path, kind, debug: useDebug })
     this.t0 = performance.now()
-    this.append([{ kind: 'meta', text: `▶ ${path}${selection ? ' (選択範囲)' : ''} — ${KIND_LABELS[kind]}` }])
+    this.append([{ kind: 'meta', text: `${useDebug ? '🐞' : '▶'} ${path}${selection ? ' (選択範囲)' : ''} — ${KIND_LABELS[kind]}${useDebug ? ' (デバッグ)' : ''}` }])
     this.renderTabs()
     w.postMessage({
       type: 'run', source, path, chunkName: path, files, wsFiles, wsFolders, projectName: app.project.name,
-      options: { timeLimit: s.timeLimit * 1000, maxRunTime: s.maxRunTime, executor: mode === 'executor', kind, touch: isTouch },
+      options: this.runOptions(kind, useDebug ? { debug: { breakpoints: bps, watches: this.debug.watches } } : {}),
     })
   }
+
+  // ============================================================
+  // コンソール: 式やコードをその場で実行 (実行後も同じ環境で続けられる)
+  // ============================================================
+  buildConsole() {
+    const input = h('input', { class: 'console-input', placeholder: document.body.dataset.layout === 'mobile' ? '式やコードを入力 (例: 1 + 2)' : '式やコードを入力して Enter (例: 1 + 2, workspace:GetChildren())', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'go', 'aria-label': 'コンソール' })
+    this.history = (() => { try { return JSON.parse(localStorage.getItem('forgecode.consoleHistory') || '[]') } catch { return [] } })()
+    let hi = -1
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault()
+        const code = input.value.trim()
+        if (!code) return
+        input.value = ''
+        hi = -1
+        this.history = [code, ...this.history.filter(x => x !== code)].slice(0, 50)
+        try { localStorage.setItem('forgecode.consoleHistory', JSON.stringify(this.history)) } catch {}
+        this.evalConsole(code)
+      } else if (e.key === 'ArrowUp' && this.history.length) {
+        e.preventDefault(); hi = Math.min(this.history.length - 1, hi + 1); input.value = this.history[hi]
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault(); hi = Math.max(-1, hi - 1); input.value = hi < 0 ? '' : this.history[hi]
+      }
+    })
+    this.consoleInput = input
+    return h('div', { class: 'console-row' }, h('span', { class: 'console-prompt' }, '›'), input,
+      h('button', { class: 'icon-btn sm', title: '実行', 'aria-label': '実行', onclick: () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) }, icon('send', 16)))
+  }
+
+  evalConsole(code) {
+    const w = this.ensureWorker()
+    if (!w) return
+    this.append([{ kind: 'input', text: code }])
+    this.outEl.scrollTop = this.outEl.scrollHeight
+    const kind = getMode() === 'executor' ? 'executor' : 'client'
+    const init = app.project ? { path: 'コンソール', chunkName: 'コンソール', ...this.filesPayload(), projectName: app.project.name, options: this.runOptions(kind) } : null
+    if (!this.running && init) { this.t0 = performance.now(); this.setRunning({ path: 'コンソール', kind, repl: true }) }
+    w.postMessage({ type: 'eval', code, init })
+  }
+
+  debugValue(expr) { return this.debug.valueFor(expr) }
 
   setRunning(info) {
     this.running = info
@@ -265,6 +339,8 @@ export class Runner {
   }
 
   finished(reason) {
+    this.debug.onFinished()
+    if (this.running && this.running.repl) { this.waiting = false; this.setRunning(null); this.renderTabs(); return }
     const sec = ((performance.now() - this.t0) / 1000).toFixed(2)
     const msg = reason === 'stopped' ? `■ 停止しました (${sec} 秒)` : reason === 'error' ? `✕ エラーで終了 (${sec} 秒)` : reason === 'timeout' ? `■ 時間切れ (${sec} 秒)` : this.errors ? `✕ 終了 — エラー ${this.errors} 件 (${sec} 秒)` : `✓ 完了 (${sec} 秒)`
     this.append([{ kind: reason === 'error' || this.errors ? 'meta error' : 'meta', text: msg }])
@@ -299,6 +375,15 @@ export class Runner {
         this.renderTabs()
         break
       case 'resumed': this.waiting = false; emit('running', this.running); break
+      case 'started':
+        // コンソールから、終了した実行の環境を動かし直したとき
+        if (m.repl && !this.running) { this.t0 = performance.now(); this.setRunning({ path: 'コンソール', kind: getMode() === 'executor' ? 'executor' : 'client', repl: true }) }
+        break
+      case 'paused': this.debug.onPaused(m); break
+      case 'debugResumed': this.debug.onResumed(); break
+      case 'expanded': this.debug.onExpanded(m); break
+      case 'watchValues': this.debug.onWatchValues(m); break
+      case 'evalDone': break
       case 'done':
         Object.assign(this.game, { tree: m.tree, gui: m.gui, interact: m.interact, drawings: m.drawings })
         if (this.running) this.finished(m.reason === 'idle' ? 'done' : m.reason)
@@ -376,6 +461,7 @@ export class Runner {
 
   stop(silent) {
     if (!this.running) return
+    this.debug.onFinished()
     this.resetWorker()
     if (!silent) this.finished('stopped')
     else { this.waiting = false; this.setRunning(null) }

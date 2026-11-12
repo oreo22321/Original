@@ -13,6 +13,9 @@ import { makeLinter } from './lint.js'
 import { colorSwatches, indentGuides, rainbowBrackets, makeHover, signatureHelp, pinchZoom } from './extras.js'
 import { inputFixer, keywordAutoCorrect } from './typo.js'
 import { errorLens, runErrorMarks } from './errorlens.js'
+import { autoEndPairs } from './autoend.js'
+import { breakpointGutter, debugHover } from './breakpoints.js'
+import { symbolHighlight, stickyScroll } from './symbols.js'
 
 export function langOf(path) {
   const ext = (path.split('.').pop() || '').toLowerCase()
@@ -90,6 +93,8 @@ function extrasExt(s, lang, ctx) {
     if (s.hover) out.push(makeHover(describeAt))
     if (s.signatureHelp) out.push(signatureHelp(signatureAt, () => true))
     if (s.errorLens) out.push(errorLens(ctx.onLensTap))
+    if (s.highlightSymbols !== false) out.push(symbolHighlight)
+    if (s.stickyScroll !== false) out.push(stickyScroll(3))
   }
   if (s.pinchZoom && ctx.onScale) out.push(pinchZoom(ctx.onScale))
   return out
@@ -103,7 +108,16 @@ export function buildExtensions(ctx) {
   const appKeys = keymap.of([
     { key: 'Mod-s', run: () => { cmd.save(); return true }, preventDefault: true },
     { key: 'Mod-Enter', run: () => { cmd.run(); return true }, preventDefault: true },
-    { key: 'F5', run: () => { cmd.run(); return true }, preventDefault: true },
+    // F5: デバッガーで止まっていれば続行、そうでなければ実行
+    { key: 'F5', run: () => { if (ctx.isPaused && ctx.isPaused()) cmd.command('debugContinue'); else cmd.run(); return true }, preventDefault: true },
+    { key: 'Shift-F5', run: () => { cmd.command('stop'); return true }, preventDefault: true },
+    { key: 'F9', run: () => { cmd.command('toggleBreakpoint'); return true }, preventDefault: true },
+    { key: 'F10', run: () => { cmd.command('debugStepOver'); return true }, preventDefault: true },
+    { key: 'F11', run: () => { cmd.command('debugStepInto'); return true }, preventDefault: true },
+    { key: 'Shift-F11', run: () => { cmd.command('debugStepOut'); return true }, preventDefault: true },
+    { key: 'F12', run: () => { cmd.command('gotoDefinition'); return true }, preventDefault: true },
+    { key: 'Shift-F12', run: () => { cmd.command('findReferences'); return true }, preventDefault: true },
+    { key: 'F2', run: () => { cmd.command('renameSymbol'); return true }, preventDefault: true },
     { key: 'Shift-Alt-f', run: () => { cmd.format(); return true } },
     { key: 'Mod-p', run: () => { cmd.quickOpen(); return true }, preventDefault: true },
     { key: 'Mod-Shift-p', run: () => { cmd.palette(); return true }, preventDefault: true },
@@ -120,6 +134,7 @@ export function buildExtensions(ctx) {
   const luau = lang === 'luau'
   return [
     Prec.highest(appKeys),
+    luau && ctx.onBreakpoints ? breakpointGutter(ctx.onBreakpoints, ctx.getBreakpoints ? ctx.getBreakpoints() : [], ctx.onBreakpointEdit) : [],
     comps.gutter.of(gutterExt(s)),
     highlightActiveLineGutter(),
     highlightSpecialChars(),
@@ -149,6 +164,7 @@ export function buildExtensions(ctx) {
       return { enabled: c.inlineSuggest, mode: ctx.getMode(), ai: c.aiInline && !!c.aiKey, aiProvider: ctx.aiProvider, aiDelay: c.aiDelay, onError: ctx.onAiError }
     }) : [],
     luau ? luauAutoEnd(() => st().autoEnd) : [],
+    luau ? autoEndPairs(() => { const c = st(); return { insert: c.autoEnd, remove: c.autoEndDelete !== false } }) : [],
     luau ? makeLinter(() => {
       const c = st()
       const mode = ctx.getMode()
@@ -156,6 +172,7 @@ export function buildExtensions(ctx) {
     }) : [],
     comps.extras.of(extrasExt(s, lang, ctx)),
     luau ? runErrorMarks : [],
+    luau && ctx.debugValue ? debugHover(ctx.debugValue) : [],
     comps.readOnly.of(EditorState.readOnly.of(!!ctx.readOnly)),
     keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap, ...lintKeymap, indentWithTab]),
     EditorView.contentAttributes.of({ autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', autocomplete: 'off', 'data-gramm': 'false', enterkeyhint: 'enter' }),

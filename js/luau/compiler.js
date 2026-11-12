@@ -4,7 +4,7 @@
 import { parse } from './parser.js'
 import { LuauSyntaxError, toBytes } from './lexer.js'
 
-const HELPERS = 'call:$call,callMethod:$callm,index:$idx,setindex:$set,T:$T,add:$add,sub:$sub,mul:$mul,div:$div,mod:$mod,pow:$pow,idiv:$idiv,unm:$unm,eq:$eq,lt:$lt,le:$le,gt:$gt,ge:$ge,concat:$cat,len:$len,chk:$chk,annot:$annot,fn:$fn,tbl:$tbl,iter:$iter,interp:$interp,forNum:$forNum,EMPTY:$EMPTY,rtError:$err'
+const HELPERS = 'topLocals:$topl,call:$call,callMethod:$callm,index:$idx,setindex:$set,T:$T,add:$add,sub:$sub,mul:$mul,div:$div,mod:$mod,pow:$pow,idiv:$idiv,unm:$unm,eq:$eq,lt:$lt,le:$le,gt:$gt,ge:$ge,concat:$cat,len:$len,chk:$chk,annot:$annot,fn:$fn,tbl:$tbl,iter:$iter,interp:$interp,forNum:$forNum,EMPTY:$EMPTY,rtError:$err'
 
 const ARITH = { '+': '$add', '-': '$sub', '*': '$mul', '/': '$div', '%': '$mod', '^': '$pow', '//': '$idiv', '..': '$cat' }
 const CMP = { '==': '$eq', '<': '$lt', '<=': '$le', '>': '$gt', '>=': '$ge' }
@@ -16,12 +16,20 @@ function mangle(name, id) {
 }
 
 class Scope {
-  constructor(parent) { this.parent = parent; this.vars = new Map() }
+  constructor(parent) {
+    this.parent = parent
+    this.vars = new Map()
+    // デバッグ用: 宣言した順の一覧と、変数を返す関数 (getter) の名前
+    this.list = []
+    this.covered = 0
+    this.getter = parent ? parent.getter : null
+  }
 }
 
 class Compiler {
-  constructor(chunk) {
+  constructor(chunk, debug = false) {
     this.chunk = chunk
+    this.debug = debug
     this.uid = 0
     this.fs = null
     this.scope = null
@@ -34,7 +42,22 @@ class Compiler {
   declare(name) {
     const js = mangle(name, ++this.uid)
     this.scope.vars.set(name, js)
+    this.scope.list.push([name, js])
     return js
+  }
+
+  // デバッグ用: 前回から増えたローカル変数を返す関数を作り、外側の関数につなげる
+  // (文ごとに全変数を並べるとコードが大きくなるので、宣言のたびに 1 つだけ作る)
+  syncGetter() {
+    const sc = this.scope
+    if (sc.covered >= sc.list.length) return ''
+    const fresh = sc.list.slice(sc.covered).reverse()
+    sc.covered = sc.list.length
+    const name = '$g' + (++this.uid)
+    const prev = sc.getter
+    const vars = fresh.map(([n, js]) => `[${S(n)},${js}]`).join(',')
+    sc.getter = name
+    return `const ${name}=()=>[${vars}${prev ? `,...${prev}()` : ''}];`
   }
   resolve(name) {
     for (let s = this.scope; s; s = s.parent) {
@@ -63,7 +86,12 @@ class Compiler {
     let head = ''
     params.forEach((p, i) => { head += `let ${p}=$A[${i}];` })
     if (node.isVararg) head += `const $va=$A.length>${params.length}?$A.slice(${params.length}):$EMPTY;`
-    const body = this.stats(node.body)
+    let body = this.stats(node.body)
+    // チャンクの一番外側のローカル変数を、実行後もコンソールから読めるように登録
+    if (node.isChunk && this.scope.vars.size) {
+      const vars = [...this.scope.vars].slice(0, 400)
+      body = `$topl($CH,()=>{const o=[];${vars.map(([n, js]) => `try{o.push([${S(n)},${js}])}catch(e){}`).join('')}return o});` + body
+    }
     const temps = this.fs.temps ? 'let ' + Array.from({ length: this.fs.temps }, (_, i) => '$t' + (i + 1)).join(',') + ';' : ''
     const name = node.name || 'anonymous'
     this.popScope()
@@ -71,6 +99,10 @@ class Compiler {
     this.scope = saveScope
     this.loops = saveLoops
     this.stmtLine = saveLine
+    if (this.debug) {
+      // デバッグ実行: 呼び出し履歴 (どの関数の何行目か) を記録する
+      return `$fn(function*($A){let $L=${node.line};const $fr=$D.e(${S(name)},()=>$L);${head}${temps}try{${body}return $EMPTY;}catch($e){throw $annot($e,$L,$CH,${S(name)})}finally{$D.x($fr)}},${S(name)})`
+    }
     return `$fn(function*($A){let $L=${node.line};${head}${temps}try{${body}return $EMPTY;}catch($e){throw $annot($e,$L,$CH,${S(name)})}},${S(name)})`
   }
 
@@ -84,13 +116,19 @@ class Compiler {
 
   stats(stats, hoist) {
     let out = ''
-    for (const st of stats) out += this.stat(st, hoist)
+    for (const st of stats) {
+      if (this.debug) out += this.syncGetter()
+      out += this.stat(st, hoist)
+    }
     return out
   }
 
   stat(st, hoist) {
     this.stmtLine = st.line
-    const L = `$L=${st.line};`
+    // デバッグ実行: 文の前でブレークポイント・ステップ実行を確認し、止まるときは yield で実行を中断する
+    const L = this.debug && st.t !== 'TypeAlias'
+      ? `$L=${st.line};if($D.a&&$D.h(${st.line})&&$D.q(${st.line},${this.scope.getter || 'null'}))yield $D.sig;`
+      : `$L=${st.line};`
     switch (st.t) {
       case 'Local': return L + this.local(st, hoist)
       case 'LocalFunction': {
@@ -400,19 +438,20 @@ class Compiler {
 }
 
 // Luau ソースを JS ソースに変換
-export function compileToJs(src, chunkname = 'main') {
+export function compileToJs(src, chunkname = 'main', debug = false) {
   const ast = parse(src)
-  const c = new Compiler(chunkname)
-  const main = { t: 'Func', params: [], isVararg: true, body: ast.body, name: null, line: 1 }
+  const c = new Compiler(chunkname, debug)
+  const main = { t: 'Func', params: [], isVararg: true, body: ast.body, name: null, line: 1, isChunk: true }
   const code = c.func(main)
   return `"use strict";const {${HELPERS}}=$;return ${code};`
 }
 
 // ソースを読み込み LFunc を返す
 export function loadChunk(src, chunkname, env, helpers) {
-  const js = compileToJs(src, chunkname)
-  const factory = new Function('$', '$E', '$CH', js)
-  const f = factory(helpers, env, chunkname)
+  const dbg = helpers.rt && helpers.rt.debugger
+  const js = compileToJs(src, chunkname, !!dbg)
+  const factory = new Function('$', '$E', '$CH', '$D', js)
+  const f = factory(helpers, env, chunkname, dbg ? dbg.handle(chunkname) : null)
   f.name = chunkname
   return f
 }

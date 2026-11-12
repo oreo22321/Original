@@ -3,6 +3,8 @@ import { app, command, runCommand, setProjectKind, setRunTarget } from './app.js
 import { getSettings, setSettings, getMode, on, isTouch, MODE_LABELS } from './store.js'
 import { h, icon, menu, toast, copyText, shareFile, haptic, promptDialog } from './ui.js'
 import * as vfs from './vfs.js'
+import { bpStore } from './debug-panel.js'
+const bpStoreCount = () => Object.keys(bpStore.forRun()).length
 import { EditorManager } from './editors.js'
 import { Explorer } from './explorer.js'
 import { Runner } from './runner.js'
@@ -39,6 +41,7 @@ export class Workbench {
     on('cursor', () => this.scheduleCursor())
     on('problems', () => this.updateStatus())
     on('running', () => { this.updateTop(); this.updateStatus() })
+    on('breakpoints', () => { if (!(app.runner && app.runner.running)) this.updateTop() })
     on('project', () => { this.updateTop(); this.updateStatus() })
     on('mode', () => { this.updateTop(); this.updateStatus() })
     on('saveState', () => this.updateStatus())
@@ -221,11 +224,14 @@ export class Workbench {
     if (this.layout === 'desktop' && app.editors.order.length > 1) a.append(btn('split', 'エディタを分割', () => { app.editors.toggleSplit(); this.updateTop() }, app.editors.split))
     a.append(btn('terminal', '出力パネル', () => this.togglePanel(), this.panelOpen))
     if (running) {
-      a.append(h('button', { class: 'run-btn stop' + (runner.waiting ? ' waiting' : ''), title: '停止', 'aria-label': '停止', onclick: () => runCommand('stop') }, icon('stop', 18), h('span', null, '停止')))
+      const paused = runner.debug && runner.debug.paused
+      if (paused) a.append(h('button', { class: 'run-btn cont', title: '続行 (F5)', 'aria-label': '続行', onclick: () => runCommand('debugContinue') }, icon('debugContinue', 18), h('span', { class: 'hide-narrow' }, '続行')))
+      a.append(h('button', { class: 'run-btn stop' + (runner.waiting ? ' waiting' : '') + (paused ? ' compact' : ''), title: '停止', 'aria-label': '停止', onclick: () => runCommand('stop') }, icon('stop', 18), paused ? null : h('span', null, '停止')))
     } else {
       const pinned = target && (!doc || doc.path !== target)
-      a.append(h('button', { class: 'run-btn', title: target ? `${target} を実行 (⌘/Ctrl + Enter)` : '実行 (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') },
-        icon('play', 18), h('span', null, pinned ? vfs.basename(target).replace(/\.(server|client)?\.?luau?$/, '') : '実行')))
+      const bps = runner && runner.debug ? bpStoreCount() : 0
+      a.append(h('button', { class: 'run-btn' + (bps ? ' has-bp' : ''), title: (target ? `${target} を実行` : '実行') + (bps ? ' — ブレークポイントで止まります' : '') + ' (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') },
+        icon(bps ? 'bug' : 'play', 18), h('span', null, pinned ? vfs.basename(target).replace(/\.(server|client)?\.?luau?$/, '') : '実行')))
     }
     a.append(btn('more', 'その他', e => this.moreMenu(e.currentTarget)))
   }
@@ -308,7 +314,11 @@ export class Workbench {
     this.sbSet('save', st + auto, () => st === 'saving' ? [icon('saving', 14), h('span', { class: 'hide-mobile' }, '保存中…')] : st === 'error' ? [icon('alert', 14), '保存できません'] : st === 'dirty' ? [h('span', { class: 'sb-dot' }), h('span', { class: 'hide-mobile' }, auto ? '未保存' : '未保存 (⌘S)')] : [icon('saved', 14), h('span', { class: 'hide-mobile' }, '保存済み')])
     const running = runner && runner.running
     this.sb.run.classList.toggle('hidden', !running)
-    this.sbSet('run', running ? (runner.waiting ? 'w' : 'r') : '', () => (running ? [h('span', { class: 'spinner' }), runner.waiting ? '操作待ち' : '実行中'] : null))
+    const dbg = running && runner.debug ? runner.debug.paused : null
+    this.sb.run.classList.toggle('paused', !!dbg)
+    this.sbSet('run', running ? (dbg ? 'p' + dbg.line : runner.waiting ? 'w' : running.debug ? 'd' : 'r') : '', () => (!running ? null
+      : dbg ? [icon('pause', 12), `停止中 ${dbg.line} 行目`]
+      : [h('span', { class: 'spinner' }), runner.waiting ? '操作待ち' : running.debug ? 'デバッグ中' : '実行中']))
     this.sb.indent.classList.toggle('none', !doc)
     this.sb.cursor.classList.toggle('none', !doc)
     this.sb.kind.classList.toggle('none', !doc)

@@ -5,7 +5,10 @@ import { createVM, formatError } from '../luau/vm.js'
 import { installRoblox } from '../luau/roblox.js'
 import { installExecutor } from '../luau/executor.js'
 import { LuauSyntaxError, toBytes, fromBytes } from '../luau/lexer.js'
-import { LuaError } from '../luau/runtime.js'
+import { LuaError, rt, call, nativeGen, Coroutine, LTable } from '../luau/runtime.js'
+import * as runtimeNs from '../luau/runtime.js'
+import { loadChunk } from '../luau/compiler.js'
+import { Debugger, inspect } from '../luau/debug.js'
 
 let apiPromise = null
 function loadApi() {
@@ -39,7 +42,10 @@ function emit(kind, text) {
 setInterval(flush, 80)
 
 let currentVM = null
+let lastVM = null       // 終了した実行 (コンソールで続きの式を評価できるように残す)
 let finishTimer = null
+let deadline = 0        // 実行時間の上限 (デバッガーで止まっている間は延長)
+let remainOnPause = 0
 let guiTimer = null
 let lastGui = ''
 let waiting = false
@@ -56,10 +62,22 @@ function finish(reason) {
   flush()
   const vm = currentVM
   currentVM = null
+  lastVM = vm
   waiting = false
   clearTimeout(finishTimer)
   clearInterval(guiTimer)
+  if (vm.debugger && rt.debugger === vm.debugger) vm.debugger.mode = null
   self.postMessage({ type: 'done', reason, ...snapshot(vm) })
+}
+
+function armDeadline(ms) {
+  clearTimeout(finishTimer)
+  if (!(ms > 0)) return
+  deadline = performance.now() + ms
+  finishTimer = setTimeout(() => {
+    emit('warn', `実行時間の上限に達したため停止しました (設定で変更できます)`)
+    finish('timeout')
+  }, ms)
 }
 
 function snapshot(vm) {
@@ -324,6 +342,23 @@ async function run(msg) {
   }
   vm = createVM(hooks, { timeLimit: opts.timeLimit ?? 10000 })
   currentVM = vm
+  if (opts.debug) {
+    const dbg = new Debugger({
+      env: vm.env,
+      output: (kind, text) => { if (currentVM === vm) emit(kind, text) },
+      onPaused: info => {
+        if (currentVM !== vm) return
+        flush()
+        // 止まっている間は実行時間の上限を数えない
+        if (deadline) { remainOnPause = Math.max(1000, deadline - performance.now()); clearTimeout(finishTimer) }
+        self.postMessage({ type: 'paused', ...info })
+      },
+    })
+    dbg.watches = opts.debug.watches || []
+    dbg.setBreakpoints(opts.debug.breakpoints || {})
+    vm.debugger = dbg
+    rt.debugger = dbg
+  }
   const ctx = { sched: vm.sched, hooks, fs: new Map(), fsFolders: new Set(), currentFile: msg.path, runContext: opts.kind || 'module' }
   for (const [p, c] of Object.entries(msg.wsFiles || {})) ctx.fs.set(p, toBytes(c))
   for (const f of msg.wsFolders || []) ctx.fsFolders.add(f)
@@ -334,26 +369,123 @@ async function run(msg) {
     vm.rbx.mountFiles(msg.files || {}, msg.projectName)
     vm.rbx.setScript(msg.path)
     if (opts.executor) vm.exec = installExecutor(vm.env, ctx, vm.rbx)
+    if (vm.debugger) vm.debugger.markBuiltins()
   } catch (e) {
     emit('error', 'サンドボックスの初期化に失敗しました: ' + (e && e.message))
     finish('error')
     return
   }
-  if (opts.maxRunTime > 0) {
-    finishTimer = setTimeout(() => {
-      emit('warn', `実行時間の上限 (${opts.maxRunTime} 秒) に達したため停止しました (設定で変更できます)`)
-      finish('timeout')
-    }, opts.maxRunTime * 1000)
-  }
+  deadline = 0
+  if (opts.maxRunTime > 0) armDeadline(opts.maxRunTime * 1000)
   guiTimer = setInterval(() => postGui(false), 250)
-  self.postMessage({ type: 'started' })
+  self.postMessage({ type: 'started', debug: !!vm.debugger })
   try {
-    vm.run(msg.source, msg.chunkName)
+    if (msg.repl) startRepl(vm, msg.source)
+    else { vm.mainChunk = msg.chunkName; vm.run(msg.source, msg.chunkName) }
   } catch (e) {
     flush()
     self.postMessage({ type: 'error', ...errorPayload(e, msg.chunkName) })
     finish('error')
   }
+}
+
+// ============================================================
+// デバッガーの操作
+// ============================================================
+function debugCommand(m) {
+  const vm = currentVM
+  const dbg = vm && vm.debugger
+  if (!dbg) return
+  if (m.action === 'pause') { dbg.requestPause(); return }
+  if (!vm.sched.paused) return
+  self.postMessage({ type: 'debugResumed' })
+  if (remainOnPause) { armDeadline(remainOnPause); remainOnPause = 0 }
+  try { dbg.resume(m.action) } catch (e) { flush(); self.postMessage({ type: 'error', ...errorPayload(e) }) }
+}
+
+// ============================================================
+// コンソール (式・コードをその場で実行)
+//  ・デバッガーで止まっているとき: その場所の変数を使って評価 (待機はできません)
+//  ・実行中 / 実行後: 同じ環境 (グローバル変数・作ったオブジェクト) で新しいスレッドとして実行
+// ============================================================
+function display(values) {
+  return values.map(v => inspect(v, 1)).join(', ')
+}
+
+// コンソールの環境: スクリプトの一番外側の local 変数も読めるようにする (書き込みはグローバルへ)
+function replEnv(vm) {
+  const env = new LTable()
+  const mt = new LTable()
+  mt.set(toBytes('__index'), vm.env)
+  mt.set(toBytes('__newindex'), vm.env)
+  env.mt = mt
+  const get = vm.mainChunk && rt.tops && rt.tops.get(vm.mainChunk)
+  if (get) { try { for (const [n, v] of get()) if (v !== undefined) env.set(toBytes(n), v) } catch {} }
+  return env
+}
+
+function compileRepl(vm, code) {
+  const save = rt.debugger
+  rt.debugger = null
+  const env = replEnv(vm)
+  try {
+    try { return loadChunk('return ' + code, 'コンソール', env, runtimeNs) } catch { return loadChunk(code, 'コンソール', env, runtimeNs) }
+  } finally { rt.debugger = save }
+}
+
+function startRepl(vm, code) {
+  const f = compileRepl(vm, code)
+  const wrapper = nativeGen('console', function* () {
+    const r = yield* call(f, [])
+    if (r && r.length) vm.hooks.output('result', display(r))
+    return []
+  })
+  vm.sched.spawn(new Coroutine(wrapper), [])
+}
+
+function evaluate(m) {
+  // デバッガーで一時停止中
+  const vm = currentVM
+  if (vm && vm.debugger && vm.sched.paused) {
+    const save = vm.debugger.condCache
+    vm.debugger.condCache = new Map() // 毎回の入力は使い捨て
+    const r = vm.debugger.evalIn(m.code, vm.debugger.pausedInfo ? vm.debugger.pausedInfo.locals : null)
+    vm.debugger.condCache = save
+    if (r.ok) { if (r.values.length) emit('result', display(r.values)) } else emit('error', r.error)
+    flush()
+    self.postMessage({ type: 'evalDone', id: m.id })
+    return
+  }
+  try {
+    if (vm) {
+      startRepl(vm, m.code)
+      if (waiting) { waiting = false; self.postMessage({ type: 'resumed' }) }
+      vm.sched.checkIdle()
+    } else if (lastVM) {
+      // 終了した実行の環境を再び動かす
+      const old = lastVM
+      currentVM = old
+      lastVM = null
+      old.sched.stopped = false
+      rt.scheduler = old.sched
+      rt.debugger = null
+      rt.halted = null
+      guiTimer = setInterval(() => postGui(false), 250)
+      self.postMessage({ type: 'started', repl: true })
+      startRepl(old, m.code)
+      old.sched.checkIdle()
+    } else {
+      // まだ何も実行していない: 新しい環境を作って実行
+      run({ ...m.init, source: m.code, repl: true })
+      return
+    }
+  } catch (e) {
+    flush()
+    self.postMessage({ type: 'error', ...errorPayload(e, 'コンソール') })
+    if (currentVM && !currentVM.sched.running) currentVM.sched.checkIdle()
+  }
+  flush()
+  self.postMessage({ type: 'evalDone', id: m.id })
 }
 
 self.onmessage = e => {
@@ -362,4 +494,15 @@ self.onmessage = e => {
   else if (msg.type === 'stop') finish('stopped')
   else if (msg.type === 'input') handleInput(msg)
   else if (msg.type === 'warm') loadApi().then(() => self.postMessage({ type: 'warm' }), () => {})
+  else if (msg.type === 'debug') debugCommand(msg)
+  else if (msg.type === 'breakpoints') { const d = currentVM && currentVM.debugger; if (d) d.setBreakpoints(msg.list) }
+  else if (msg.type === 'watches') {
+    const d = currentVM && currentVM.debugger
+    if (d) { d.watches = msg.list || []; if (currentVM.sched.paused) self.postMessage({ type: 'watchValues', watches: d.watches.map(w => d.watchValue(w)) }) }
+  }
+  else if (msg.type === 'expand') {
+    const d = currentVM && currentVM.debugger
+    self.postMessage({ type: 'expanded', id: msg.id, items: d ? d.expand(msg.ref) : [] })
+  }
+  else if (msg.type === 'eval') evaluate(msg)
 }

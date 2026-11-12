@@ -97,11 +97,13 @@ export class KeyBar {
       this.key('⇠', v => indentLess(v), { title: 'インデントを減らす' }),
       this.key('⇢', v => indentMore(v), { title: 'インデントを増やす' }),
       this.key('', v => selectNextOccurrence(v), { icon: 'search', title: '同じ単語を選択' }),
+      this.key('', () => runCommand('codeMenu', this.codeBtnEl), { icon: 'target', title: 'コード操作 (定義へ移動・参照・名前の変更)' }),
       this.key('', v => undo(v), { icon: 'undo', repeat: true, title: '元に戻す' }),
       this.key('', v => redo(v), { icon: 'redo', repeat: true, title: 'やり直し' }),
       this.key('', v => { v.contentDOM.blur() }, { icon: 'keyboardDown', title: 'キーボードを閉じる' }),
     )
     this.root.append(row)
+    this.codeBtnEl = row.querySelector('[title^="コード操作"]')
     this.updateGhost()
   }
 

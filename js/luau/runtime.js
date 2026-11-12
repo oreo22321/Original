@@ -152,6 +152,14 @@ export const rt = {
   timeLimit: 10000,
   halted: null,
   lastTraceback: null,
+  syncDepth: 0,           // 同期実行 (メタメソッドなど) の深さ。この中ではデバッガーで止まれない
+  debugger: null,         // デバッグ実行中は debug.js の Debugger
+}
+
+// チャンクの一番外側のローカル変数 (コンソール用): chunk 名 → 値の一覧を返す関数
+export function topLocals(chunk, getter) {
+  if (!rt.tops) rt.tops = new Map()
+  rt.tops.set(chunk, getter)
 }
 
 export function checkTime() {
@@ -288,7 +296,9 @@ function callMeta(h, args) {
 // generator を同期的に最後まで実行 (メタメソッドや sort の比較関数など)
 export function callSync(f, args) {
   const g = call(f, args)
-  const r = g.next()
+  let r
+  rt.syncDepth++
+  try { r = g.next() } finally { rt.syncDepth-- }
   if (!r.done) {
     const sig = r.value
     if (sig && sig.kind === 'yield') throw rtError('attempt to yield across metamethod/C-call boundary')

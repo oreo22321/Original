@@ -13,10 +13,13 @@ export function createVM(hooks, opts = {}) {
   rt.timeLimit = opts.timeLimit ?? 10000
   rt.current = null
   rt.namecallHook = rt.indexHook = rt.newindexHook = null
+  rt.debugger = null
+  rt.syncDepth = 0
+  rt.tops = new Map()
   const std = createStdlib(env, hooks, sched)
 
   const vm = {
-    env, sched, std, runtime,
+    env, sched, std, runtime, hooks,
     compile(src, chunkname) {
       return loadChunk(src, chunkname, env, runtime)
     },
