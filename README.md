@@ -19,8 +19,10 @@
 | 機能 | 内容 |
 | --- | --- |
 | 💡 補完 | **Roblox の全 API** (950 クラス・8000 メンバー・662 Enum)、Luau 標準ライブラリ、**エグゼキューター API (UNC / sUNC + 別名・syn・bit など)**。自分で作ったテーブルや、`require` したモジュールの中身も候補に出ます |
-| 🧠 型を推論 | `local Players = game:GetService("Players")` → `Players.` で Players のメンバー。`PlayerAdded:Connect(function(player)` の `player` は Player 型。`request({...})` の戻り値や `Drawing.new("Circle")` のプロパティも分かります |
-| 👻 インライン候補 | 薄い文字で続きを提案し、**Tab** (スマホはキーボードバーの **✓**) で確定。`PlayerAdded:Connect(` → `function(player) … end)` のように引数名まで入り、同じような行をくり返すと**次の行を予測**します |
+| 🧠 型を推論 | `local Players = game:GetService("Players")` → `Players.` で Players のメンバー。`PlayerAdded:Connect(function(player)` の `player` は Player 型。**スコープを正しく見分け**、自分で作った**関数の戻り値**・**クラス** (`setmetatable` と `self.X`)・**`type` 定義**・`if x:IsA("Part") then` での**絞り込み**・`camera:WorldToViewportPoint` のような複数の戻り値まで推論します |
+| 🎯 場面に合う候補 | `part.Material = ` で Enum の一覧、`humanoid:ChangeState(` で引数の Enum、`frame.Size = UD` で `UDim2.new(...)`、`TweenService:Create(part, info, {` でアニメーションできるプロパティ、`GetAttribute("` で使った属性名。見えている変数は**型付きで近いものから**並び、よく使うメンバーほど上に出ます |
+| 👻 インライン候補 | 薄い文字で続きを提案し、**Tab** (スマホはキーボードバーの **✓**) で確定。`PlayerAdded:Connect(` → `function(player) … end)` のように引数名まで入り、`frame.Parent = ` では親にふさわしい変数、`Instance.new("TextLabel")` の次の行では**次に設定するプロパティ**、`mt.__namecall = ` ではフックのひな形を提案。同じような行をくり返すと**次の行を予測**します |
+| 🧹 自動整形 | 書き終えた行の空白 (`x=1+2` → `x = 1 + 2`) を整え、入力が止まったときにエラーがなければファイル全体の字下げ・空行も**裏で自動で直します**。カーソルの行には触れず、整形の前後で字句が同じことを確認するのでコードの意味は変わりません |
 | ✍️ 誤字対策 | `GetServise`・`"Playrs"`・`part.Tranparency`・`Enum.KeyCode.Sapce` などのスペルミスに**「もしかして」**を提案。`fucntion` → `function` などの打ち間違い、全角の `（）＝”` や全角スペース、iPhone が変換した `“ ”` は**自動で修正** (文字列・コメントの中はそのまま) |
 | ⚠️ エラーチェック | 構文エラー (どの `if` / `function` の `end` が足りないかまで特定)、未定義の変数、`.` と `:` の間違い、非推奨 API、待機のない無限ループ、サーバーで `LocalPlayer` を使うなどの間違い |
 | 🔧 ワンタップ修正 | 行の右に出る説明をタップ (PC は ⌘/Ctrl + `.`、スマホは 💡 キー) して直し方を選べます。「誤字をまとめて直す」も可能 |
@@ -102,8 +104,9 @@ ForgeCode には JavaScript で書かれた Luau 互換のエンジンが入っ�
   - ボタンなどのイベントに関数を接続していると、実行は終了せず「操作待ち」になります。「ゲーム」タブで操作でき、■ で終了します。
   - GUI は `AbsoluteSize` / `AbsolutePosition` / `TextBounds` / `AbsoluteContentSize` が実際の値になり、変化すると `GetPropertyChangedSignal` も発火します。`UserInputService.InputBegan/InputChanged/InputEnded`、`Mouse.X/Y`、`GetMouseLocation`、`IsMouseButtonPressed`、`TextBox:CaptureFocus` なども画面の操作と連動します。
   - `game:GetObjects` (Roblox のアセット) は読み込めないため、空の Model を返します (Rayfield のように UI をアセットから読み込むライブラリは表示できません)。
+  - `workspace:Raycast` / `Spherecast` / `GetPartBoundsInBox` / `GetPartBoundsInRadius` / `GetPartsInPart` / `GetTouchingParts`、`Camera:WorldToViewportPoint` / `ViewportPointToRay`、`mouse.Hit` / `mouse.Target` は、パーツの位置・大きさとカメラから実際に計算します。
   - 物理演算・3D の描画・本物のサーバー通信は行いません。実装されていないメソッドは「模擬動作です」と表示して既定値を返します。
-- **エグゼキューター API (模擬)**: 環境 (`getgenv`, `getrenv`, `getgc`, `filtergc` …)、クロージャ (`hookfunction`, `restorefunction`, `newcclosure` …)、メタテーブル (`hookmetamethod`, `getnamecallmethod`, `getrawmetatable`, `setreadonly` …)、シグナル (`getconnections`, `firesignal`, `hooksignal` …)、ファイル (`readfile` / `writefile` / `listfiles` … プロジェクトの `workspace/` フォルダに保存)、`request`, `game:HttpGet`, `crypt`, `Drawing` (実行後にプレビュー表示), `WebSocket`, `bit`, `cache`, `debug.*`, `syn.*` など。補完に出る関数はすべてサンドボックスにも存在します (`tests/executor.test.mjs` で確認)。
+- **エグゼキューター API (模擬)**: 環境 (`getgenv`, `getrenv`, `getgc`, `filtergc` …)、クロージャ (`hookfunction`, `restorefunction`, `newcclosure` …)、メタテーブル (`hookmetamethod`, `getnamecallmethod`, `getrawmetatable`, `setreadonly` …)、シグナル (`getconnections`, `firesignal`, `hooksignal` …)、ファイル (`readfile` / `writefile` / `listfiles` … プロジェクトの `workspace/` フォルダに保存)、`request`, `game:HttpGet`, `crypt`, `Drawing` (ゲーム画面にリアルタイムで重ねて表示), `WebSocket`, `bit`, `cache`, `debug.*`, `syn.*` など。補完に出る関数はすべてサンドボックスにも存在します (`tests/executor.test.mjs` で確認)。
 - 無限ループは 10 秒 (設定で変更可) で自動停止します。■ でいつでも止められます。
 
 ### AI (Claude) — 任意
@@ -128,13 +131,16 @@ index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュー
     debug.js                 デバッガー (ブレークポイント・ステップ実行・変数の表示・式の評価)
     gui.js                   GUI エンジン (レイアウト計算・入力の再現・画面への差分送信)
     remote.js                外部スクリプトの取得 (URL の正規化・キャッシュ・中継)
+    spatial.js               レイキャスト・範囲内のパーツ・カメラの投影
   js/editor/                 エディタ機能
     luau-lang.js             色付けと字下げ
     blocks.js                ブロック構造の解析 (end の自動入力・過不足の診断・整形)
     autoend.js               入力・削除に合わせた end の自動挿入・自動削除
     symbols.js               スコープ解析 (定義・参照・名前の変更・ハイライト・スティッキースクロール)
     breakpoints.js           ブレークポイントと停止行の表示
-    luau-intel.js            型の推論と補完
+    luau-index.js            文書の索引 (スコープ付きの宣言・ブロック・return・self のフィールド。大きなファイルは差分だけ解析)
+    luau-intel.js            型の推論と補完 (期待される型・ローカル変数・文字列の引数)
+    format.js / autoformat.js  整形 (空白・字下げ・空行) と、入力中の自動整形
     extlib.js                loadstring で読み込むライブラリのソース解析 (補完・ゴーストテキスト用)
     inline.js                インライン候補 (ゴーストテキスト)
     lint.js / typo.js        エラーチェック・誤字検出・自動修正
@@ -152,7 +158,7 @@ tools/                       ライブラリと API データを作り直すス�
 ```
 
 - テスト: `for f in tests/*.test.mjs; do node "$f" || break; done`
-  - `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論) / `indent` (字下げ・end・整形) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
+  - `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論と補完の候補) / `format` (整形) / `indent` (字下げ・end) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
 - Roblox API データの更新: `node tools/build-roblox-api.mjs` (最新の API ダンプを取得して `data/roblox-api.json` を作り直します)
 - ライブラリの作り直し: `cd tools && npm install && npm run vendor`
 - ファイルを変更したら `node tools/build-sw.mjs` で Service Worker のキャッシュ一覧を更新してください (更新しないと古いキャッシュが使われることがあります)。
