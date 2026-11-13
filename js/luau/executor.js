@@ -440,6 +440,7 @@ export function installExecutor(G, ctx, rbx) {
   wsLib.set('connect', nativeGen('WebSocket.connect', function* (A) {
     const url = fromBytes(A[0] || '')
     if (typeof WebSocket === 'undefined') throw rtError('WebSocket はこの環境で使えません')
+    if (ctx.net && ctx.net.agent) throw rtError('WebSocket: Claude が実行するときは、安全のため外部と通信しません')
     const ws = new WebSocket(url)
     const onMessage = ctx.makeSignal('OnMessage'), onClose = ctx.makeSignal('OnClose')
     const [ok, err] = yield {

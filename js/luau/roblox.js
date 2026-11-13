@@ -1041,13 +1041,17 @@ export function installRoblox(G, ctx) {
     const method = String(opts.method || 'GET').toUpperCase()
     const plain = method === 'GET' && opts.body === undefined && !(opts.headers && Object.keys(opts.headers).length)
     const proxy = ctx.net && ctx.net.proxy
-    const r = plain ? await fetchText(u, { proxy }) : await fetchOther(u, { method, body: opts.body, headers: opts.headers })
+    // Claude が実行するときは外部へ通信しない (取得済みのスクリプトだけ使える)
+    const agent = !!(ctx.net && ctx.net.agent)
+    if (agent && !plain) return { ok: false, status: 0, statusText: 'blocked', body: '', headers: null, error: true, reason: 'agent', url: u }
+    const r = plain ? await fetchText(u, { proxy, cacheOnly: agent }) : await fetchOther(u, { method, body: opts.body, headers: opts.headers })
     return { ok: r.ok, status: r.status, statusText: r.statusText, body: toBytes(r.text || ''), headers: r.headers, error: r.status === 0, reason: r.error, from: r.from, url: r.url }
   }
   ctx.httpFetch = httpFetch
   const netError = (r, what) => {
     const short = shortUrl(r.url)
     if (hooks.post) hooks.post({ type: 'remoteFail', url: r.url, reason: r.reason })
+    if (r.reason === 'agent') return rtError(`${what}: Claude が実行するときは、安全のため外部と通信しません (${short})。一度取得したスクリプトはキャッシュから使えます`)
     if (r.reason === 'offline') return rtError(`${what}: オフラインのため ${short} を取得できません (一度取得した URL は、オフラインでもキャッシュから使えます)`)
     if (r.reason === 'timeout') return rtError(`${what}: ${short} の取得が時間切れになりました`)
     return rtError(`HttpError: ${short} を読み込めません (ブラウザの制限 CORS で、直接は取得できないサイトです)`)

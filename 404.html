@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>ForgeCode</title>
+  <meta name="theme-color" content="#1e1e1e">
+  <meta name="robots" content="noindex">
+  <style>
+    :root { color-scheme: dark; --bg: #1e1e1e; --fg: #d4d4d4; --muted: #8b8b8b; --accent: #4fc1ff; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+    main { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px max(16px, env(safe-area-inset-left, 0px)); box-sizing: border-box; text-align: center; }
+    h1 { font-size: 18px; margin: 0; }
+    p { margin: 0; color: var(--muted); max-width: 32em; }
+    a { color: #0b1a24; background: var(--accent); text-decoration: none; font-weight: 700; padding: 10px 20px; border-radius: 10px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>ページが見つかりません</h1>
+    <p id="msg">ForgeCode のトップページへ移動します…</p>
+    <a id="go" href="./">ForgeCode を開く</a>
+  </main>
+  <script>
+    // GitHub Pages の存在しない URL (末尾に記号が付いたリンクなど) から、アプリのトップへ戻す
+    (function () {
+      var REPO = 'Original' // このリポジトリ名 (大文字・小文字を間違えたリンクも直す)
+      var parts = location.pathname.split('/').filter(Boolean)
+      var first = parts.length ? parts[0] : ''
+      try { first = decodeURIComponent(first) } catch (e) {}
+      first = first.replace(/[^\w.-].*$/, '')
+      // ユーザーサイト (ユーザー名.github.io) 以外は、最初の部分がリポジトリ名
+      if (first.toLowerCase() === REPO.toLowerCase()) first = REPO
+      var base = /\.github\.io$/i.test(location.hostname) && first ? '/' + first + '/' : '/'
+      document.getElementById('go').href = base
+      if (location.pathname !== base) setTimeout(function () { location.replace(base) }, 400)
+      else document.getElementById('msg').textContent = 'ForgeCode を開くには、下のボタンを押してください。'
+    })()
+  </script>
+</body>
+</html>
