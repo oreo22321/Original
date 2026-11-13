@@ -5,11 +5,13 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const files = ['./', 'index.html', 'manifest.webmanifest']
+// 高性能モード (端末内 LLM) は使う人だけが読み込む大きなファイルなので、事前キャッシュしない (使ったときにキャッシュされる)
+const LAZY = new Set(['vendor/web-llm.js', 'js/workers/llm-worker.js', 'vendor/LICENSES.txt'])
 const walk = dir => {
   for (const name of readdirSync(path.join(root, dir))) {
     const rel = dir + '/' + name
     if (statSync(path.join(root, rel)).isDirectory()) walk(rel)
-    else if (!/\.(map|DS_Store)$/.test(name)) files.push(rel)
+    else if (!/\.(map|DS_Store)$/.test(name) && !LAZY.has(rel)) files.push(rel)
   }
 }
 for (const d of ['css', 'js', 'vendor', 'data', 'icons']) walk(d)

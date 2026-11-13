@@ -6,7 +6,6 @@ import { h, icon, toast, copyText, haptic, menu } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { scriptKindOf, KIND_LABELS, langOf } from '../editor/setup.js'
 import { explainError } from './explain.js'
-import { aiReady } from './claude.js'
 import { GuiStage, SCREENS } from './gui-preview.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
 import { proxyTemplate, remoteFailBlock, remoteActions } from './remote-ui.js'
@@ -581,7 +580,7 @@ export class Runner {
     const acts = h('div', { class: 'oe-actions' })
     if (m.file && m.line && app.files.some(f => f.path === m.file)) acts.append(h('button', { class: 'btn small', onclick: () => app.editors.open(m.file, { line: m.line }) }, `${m.line} 行目へ`))
     acts.append(h('button', { class: 'btn small ghost', onclick: () => copyText(m.text).then(() => toast('エラーをコピーしました', { icon: 'copy' })) }, 'コピー'))
-    if (aiReady()) acts.append(h('button', { class: 'btn small ai-fix', onclick: () => runCommand('aiFixRunError', m.text + (m.traceback && m.traceback.length > 1 ? '\n呼び出し元: ' + m.traceback.slice(0, 5).join(' ← ') : '')) }, icon('sparkle', 14), 'Claude で直す'))
+    acts.append(h('button', { class: 'btn small ai-fix', onclick: () => runCommand('aiFixRunError', m.text + (m.traceback && m.traceback.length > 1 ? '\n呼び出し元: ' + m.traceback.slice(0, 5).join(' ← ') : '')) }, icon('sparkle', 14), 'AI で直す'))
     el.append(acts)
     if (!this.lineCount) this.outEl.textContent = ''
     const out = this.outEl

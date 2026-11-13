@@ -48,7 +48,8 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-vendor/anthropic.js — Anthropic TypeScript SDK (@anthropic-ai/sdk)
+vendor/web-llm.js — WebLLM (@mlc-ai/web-llm 0.2.86。TVM / tokenizers / xgrammar を含む)
+端末内 LLM のモデル: Qwen2.5-Coder (Apache License 2.0, Alibaba Cloud) — 利用者が選んだときだけ Hugging Face からダウンロード
 ----------------------------------------------------------------
                                  Apache License
                            Version 2.0, January 2004
@@ -238,7 +239,7 @@ vendor/anthropic.js — Anthropic TypeScript SDK (@anthropic-ai/sdk)
       same "printed page" as the copyright notice for easier
       identification within third-party archives.
 
-   Copyright 2023 Anthropic, PBC.
+   Copyright 2023-2026 MLC LLM / WebLLM contributors
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -251,19 +252,6 @@ vendor/anthropic.js — Anthropic TypeScript SDK (@anthropic-ai/sdk)
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-
-(MIT)
-This repository changed its license from the MIT License to the Apache License, Version 2.0 (see LICENSE) in version 1.0.0 of the @anthropic-ai/sdk package. The MIT License below still applies to every version published under it, and to third-party contributions merged into this repository before the change.
-
---------------------------------------------------------------------------------
-
-Copyright 2023 Anthropic, PBC.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 data/roblox-api.json — Roblox API ダンプ (MaximumADHD/Roblox-Client-Tracker から変換)
 Roblox は Roblox Corporation の商標です。ForgeCode は Roblox Corporation とは関係ありません。

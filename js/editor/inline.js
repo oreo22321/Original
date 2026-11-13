@@ -1,6 +1,6 @@
 // インライン候補 (ゴーストテキスト) — Tab で確定
 // ・ルールベースの即時候補 (オフラインで動作)
-// ・AI 候補 (設定で Claude API キーを登録した場合)
+// ・AI 候補 (内蔵の Forge AI: プロジェクトから学習した続きの提案・コメントからコード)
 import { StateField, StateEffect, EditorView, Decoration, WidgetType, ViewPlugin, Prec, keymap, completionStatus, EditorSelection, indentUnit, Annotation, startCompletion } from '../../vendor/codemirror.js'
 import * as db from './apidb.js'
 import { headerAt } from './blocks.js'
@@ -57,7 +57,7 @@ export const ghostField = StateField.define({
 
 export function hasGhost(state) { return !!state.field(ghostField, false) }
 
-// Claude に続きを頼んでゴーストテキストとして出す (✨ キー / Alt+\\)
+// AI に続きを頼んでゴーストテキストとして出す (✨ キー / Alt+\\)
 export async function requestAiGhost(view, aiProvider) {
   const state = view.state
   const sel = state.selection.main

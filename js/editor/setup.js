@@ -131,7 +131,7 @@ export function buildExtensions(ctx) {
     { key: 'Alt-w', run: () => { cmd.closeTab(); return true } },
     { key: 'Mod-Shift-o', run: () => { cmd.outline(); return true }, preventDefault: true },
     { key: 'Mod-.', run: () => { cmd.quickFix(); return true }, preventDefault: true },
-    // Claude: 続きを提案 / 選択範囲を頼む / パネルを開く
+    // AI: 続きを提案 / 選択範囲を頼む / パネルを開く
     { key: 'Alt-\\', run: () => { cmd.command('aiSuggest'); return true }, preventDefault: true },
     { key: 'Mod-i', run: () => { cmd.command('aiSelectionMenu'); return true }, preventDefault: true },
     { key: 'Mod-Shift-i', run: () => { cmd.command('aiChat'); return true }, preventDefault: true },

@@ -1,14 +1,13 @@
 // 設定画面
 import { getSettings, setSettings, resetSettings, getMode, DEFAULTS, on } from './store.js'
 import { THEMES } from '../editor/themes.js'
-import { AI_MODELS } from '../editor/ai.js'
-import { status as aiStatus, IN_CLAUDE } from './claude.js'
+import * as llm from '../ai/llm.js'
 import { h, icon, toast, modal, confirmDialog, download } from './ui.js'
 import * as vfs from './vfs.js'
 import { apiVersion } from '../editor/apidb.js'
 import { app, command, runCommand, setProjectKind } from './app.js'
 
-export const APP_VERSION = '9.0.1'
+export const APP_VERSION = '10.0.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -82,14 +81,11 @@ const SCHEMA = [
     { key: 'netProxy', type: 'select', label: '外部スクリプトの中継サーバー', desc: 'game:HttpGet で読み込む URL が、ブラウザの制限 (CORS) で直接取れないときだけ使います。使うと、その URL が中継サーバーの運営者に送られます (ヘッダーや本文を付けた request は中継しません)', options: [['', '使わない'], ['corsproxy', 'corsproxy.io'], ['allorigins', 'allorigins.win']] },
     { key: 'remoteScripts', type: 'action', label: '取得した外部スクリプト', desc: 'loadstring で読み込んだスクリプトはこの端末に保存され、オフラインでも動きます', button: '一覧を開く', run: () => runCommand('remoteScripts') },
   ] },
-  { group: 'Claude (AI)', icon: 'sparkle', items: [
-    { key: 'aiStatus', type: 'action', label: '接続', get desc() { const st = aiStatus(); return st.provider === 'claude' ? 'claude.ai のアカウントで動いています (API キー不要)' : st.provider === 'key' ? '設定の API キーで動いています' : IN_CLAUDE ? (st.state === 'checking' ? '接続中…' : st.reason || 'claude.ai の画面の中で開くと使えます') : '未接続です。Claude 版で開くと、API キーなしで使えます' }, get button() { return IN_CLAUDE ? null : 'Claude 版を開く' }, run: () => runCommand('aiOpenClaude') },
-    { key: 'aiTier', type: 'select', label: 'Claude のモデル', desc: '「速い」は短い返事向き、「高性能」は難しい作業向き (時間がかかります)', options: [['quick', '速い'], ['default', '標準'], ['complex', '高性能']] },
-    { key: 'aiInline', type: 'bool', label: '入力が止まったら Claude が続きを提案', desc: 'オフでも、キーボードバーの ✨ や Alt + \\ でいつでも頼めます。オンにすると Claude の利用枠を多く使います' },
-    { key: 'aiDelay', type: 'range', min: 500, max: 4000, step: 100, label: '自動で提案するまでの待ち時間', unit: 'ms' },
-    { key: 'aiIncludeFile', type: 'bool', label: '開いているファイルの内容を Claude に送る', desc: 'オフにすると、Claude は必要なときだけファイルを読みます' },
-    { key: 'aiKey', type: 'password', label: 'Claude API キー (任意)', desc: 'Claude 版では不要です。GitHub Pages 版で AI を使う場合だけ、console.anthropic.com で発行したキーを入れます。キーはこの端末にのみ保存され、Anthropic の API にだけ送信されます (従量課金)。' },
-    { key: 'aiModel', type: 'select', label: 'API キーで使うモデル', options: AI_MODELS.map(m => [m.id, m.label]) },
+  { group: 'AI (Forge AI)', icon: 'sparkle', items: [
+    { key: 'aiAbout', type: 'custom', label: 'Forge AI について 内蔵 オフライン', render: () => aiAboutRow() },
+    { key: 'aiInline', type: 'bool', label: '入力が止まったら AI が続きを提案', desc: 'プロジェクトと内蔵サンプルから学習した統計モデルで、行の続きを薄い文字で出します (Tab で確定)。オフでも ✨ や Alt + \\ で頼めます' },
+    { key: 'aiDelay', type: 'range', min: 300, max: 3000, step: 100, label: '自動で提案するまでの待ち時間', unit: 'ms' },
+    { key: 'aiLlm', type: 'custom', label: '高性能モード 端末内 LLM 言語モデル WebGPU', render: () => llmRow() },
   ] },
   { group: 'スマホ・タブレット', icon: 'keyboard', items: [
     { key: 'keybar', type: 'bool', label: 'キーボードバー (記号・矢印)' },
@@ -103,7 +99,6 @@ export class SettingsView {
     this.root = root
     this.filter = ''
     this.build()
-    on('ai', () => this.render())
   }
 
   build() {
@@ -133,7 +128,7 @@ export class SettingsView {
       for (const p of PRESETS) {
         grid.append(h('button', { class: 'preset', onclick: async () => {
           if (p.reset) {
-            if (await confirmDialog('設定のリセット', 'すべての設定を初期状態に戻しますか? (API キーは残ります)', { okLabel: 'リセット', danger: true })) { resetSettings(); this.render(); toast('初期設定に戻しました') }
+            if (await confirmDialog('設定のリセット', 'すべての設定を初期状態に戻しますか?', { okLabel: 'リセット', danger: true })) { resetSettings(); this.render(); toast('初期設定に戻しました') }
             return
           }
           setSettings(p.patch); this.render(); toast(`「${p.name}」の設定にしました`)
@@ -209,6 +204,7 @@ export class SettingsView {
         break
       }
       case 'action': return this.actionRow(it.label, it.desc, it.button, it.run)
+      case 'custom': return it.render()
       case 'theme': {
         const grid = h('div', { class: 'theme-grid' })
         for (const [id, th] of Object.entries(THEMES)) {
@@ -239,7 +235,6 @@ async function backupAll() {
 
 function editJson(onDone) {
   const s = { ...getSettings() }
-  delete s.aiKey
   const ta = h('textarea', { class: 'input mono json-edit', rows: '18', spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off' })
   ta.value = JSON.stringify(s, null, 2)
   modal({
@@ -249,7 +244,7 @@ function editJson(onDone) {
       try {
         const obj = JSON.parse(ta.value)
         const patch = {}
-        for (const k of Object.keys(DEFAULTS)) if (k in obj && k !== 'aiKey') patch[k] = obj[k]
+        for (const k of Object.keys(DEFAULTS)) if (k in obj) patch[k] = obj[k]
         setSettings(patch)
         onDone()
         toast('設定を保存しました')
@@ -259,3 +254,66 @@ function editJson(onDone) {
 }
 
 command('settings', '設定を開く', () => app.wb.showView('settings'), { icon: 'gear', key: '⌘,' })
+
+// ============================================================
+// AI の設定
+// ============================================================
+function aiAboutRow() {
+  return h('div', { class: 'set-row col' },
+    h('div', { class: 'set-label' }, 'Forge AI (内蔵)'),
+    h('div', { class: 'set-desc' }, 'アプリに入っている AI です。インターネットも API キーも要らず、コードの内容は外に送りません。エラーの自動修正・整形・整理・説明・コメント/型注釈・コードの生成・質問への回答ができます。AI パネル (✨) で頼んでください。'))
+}
+
+function llmRow() {
+  const s = getSettings()
+  const box = h('div', { class: 'set-row col llm-row' })
+  const st = llm.status()
+  const title = h('div', { class: 'set-label' }, '高性能モード (端末内 LLM)')
+  const desc = h('div', { class: 'set-desc' }, '言語モデル (Qwen2.5-Coder) を端末にダウンロードし、GPU で動かします。決まった型に当てはまらない自由な依頼・質問にも答えられるようになります。会話は端末の中だけで処理されます。最初の 1 回だけダウンロードが必要で、電池と容量を使います。')
+  const sel = h('select', { class: 'select', 'aria-label': 'モデル' }, h('option', { value: '' }, '使わない'), ...llm.LLM_MODELS.map(m => h('option', { value: m.key, selected: s.aiLlm === m.key }, `${m.label} — ${m.desc}`)))
+  const info = h('div', { class: 'set-desc llm-status' })
+  const bar = h('div', { class: 'llm-bar hidden' }, h('div', { class: 'llm-bar-fill' }))
+  const acts = h('div', { class: 'llm-acts' })
+  const paint = () => {
+    const cur = llm.status()
+    const key = getSettings().aiLlm
+    acts.replaceChildren()
+    bar.classList.toggle('hidden', cur.state !== 'loading')
+    bar.firstChild.style.width = Math.round((cur.progress.value || 0) * 100) + '%'
+    if (cur.support && !cur.support.ok) { info.textContent = '⚠️ ' + cur.support.reason; return }
+    if (!key) { info.textContent = 'オフ (内蔵 AI だけで動きます)'; return }
+    if (cur.state === 'loading') info.textContent = cur.progress.text || '読み込み中…'
+    else if (cur.state === 'ready' && cur.model === key) info.textContent = '✅ 使えます (メモリに読み込み済み)'
+    else if (cur.state === 'error') info.textContent = '⚠️ ' + cur.error
+    else info.textContent = 'AI パネルで必要になったときに読み込みます (初回はダウンロード)'
+    if (cur.state !== 'loading') {
+      if (!(cur.state === 'ready' && cur.model === key)) acts.append(h('button', { class: 'btn small primary', onclick: async () => {
+        try { await llm.load(key); toast('端末内の AI モデルを読み込みました', { icon: 'sparkle' }) } catch (e) { toast(e.message, { kind: 'error', duration: 6000 }) }
+      } }, icon('download', 14), 'いま読み込む'))
+      else acts.append(h('button', { class: 'btn small', onclick: () => llm.unload() }, icon('stop', 14), 'メモリから外す'))
+      acts.append(h('button', { class: 'btn small ghost', onclick: async () => {
+        if (!(await confirmDialog('モデルを削除', 'ダウンロードしたモデルをこの端末から削除しますか? (もう一度使うときは、またダウンロードします)', { okLabel: '削除', danger: true }))) return
+        const ok = await llm.removeDownloaded(key)
+        toast(ok ? '削除しました' : '削除できませんでした')
+        paint()
+      } }, icon('trash', 14), '削除'))
+    }
+  }
+  sel.addEventListener('change', async () => {
+    const v = sel.value
+    if (v) {
+      const sup = await llm.checkSupport()
+      if (!sup.ok) { toast(sup.reason, { kind: 'error', duration: 7000 }); sel.value = ''; paint(); return }
+      const m = llm.LLM_MODELS.find(x => x.key === v)
+      if (!(await llm.isDownloaded(v)) && !(await confirmDialog('高性能モード', `${m.label} のモデルを使います。初めて使うときにダウンロードします (${m.desc})。Wi-Fi につないでいるときをおすすめします。`, { okLabel: 'オンにする' }))) { sel.value = s.aiLlm || ''; return }
+    } else await llm.unload()
+    setSettings({ aiLlm: v })
+    paint()
+  })
+  const off = llm.onLlmChange(() => { if (!box.isConnected) { off(); return } paint() })
+  // GPU の確認は、高性能モードを使う設定のときだけ (起動時に GPU を起こさないように)
+  if (s.aiLlm) llm.checkSupport().then(paint)
+  paint()
+  box.append(title, desc, sel, info, bar, acts)
+  return box
+}

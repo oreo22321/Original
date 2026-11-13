@@ -100,7 +100,7 @@ async function viaGithubRelease(url, timeout) {
 const online = () => typeof navigator === 'undefined' || navigator.onLine !== false
 
 // GET で取得。戻り値: { ok, status, statusText, text, from: 'net'|'proxy'|'cache'|'manual', error?: 'cors'|'offline'|'http'|'timeout', url }
-// cacheOnly: 通信せず、保存済みの中身だけを返す (Claude が実行するとき。外部へ情報が送られないように)
+// cacheOnly: 通信せず、保存済みの中身だけを返す (AI が実行するとき。外部へ情報が送られないように)
 export async function fetchText(rawUrl, { proxy = null, timeout = 20000, preferCache = false, cacheOnly = false } = {}) {
   const url = normalizeUrl(rawUrl)
   const cached = await readCache(url)

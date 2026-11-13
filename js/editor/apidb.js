@@ -9,8 +9,7 @@ export function loadRobloxApi(url = 'data/roblox-api.json') {
     loading = fetch(url).then(r => {
       if (!r.ok) throw new Error('API データの読み込みに失敗しました: ' + r.status)
       return r.json()
-    // 通信が制限された環境 (claude.ai の Artifact 版) では、同じ内容の JS モジュールから読む
-    }).catch(e => import('../../data/roblox-api.js').then(m => m.default, () => { throw e })).then(d => {
+    }).then(d => {
       api = d
       memberCache.clear()
       serviceList = creatableList = classList = null
