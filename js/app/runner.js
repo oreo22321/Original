@@ -259,7 +259,7 @@ export class Runner {
     }
     this.taps.add(tap)
     try {
-      await this.run({ path })
+      await this.run({ path, agent: true })
       if (!this.running) return { ...rec, started: false }
       const until = performance.now() + Math.max(0.5, Math.min(15, seconds)) * 1000
       await new Promise(resolve => {
@@ -313,7 +313,7 @@ export class Runner {
     return { timeLimit: limit * 1000, maxRunTime: s.maxRunTime, executor: mode === 'executor', kind, touch: sc.id !== 'pc', device: sc.id, screen: [sc.w, sc.h], net: { proxy: proxyTemplate() }, ...extra }
   }
 
-  async run({ selection = false, debug = false, path: forcePath = null } = {}) {
+  async run({ selection = false, debug = false, path: forcePath = null, agent = false } = {}) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
     let path = null, source = null
@@ -370,10 +370,9 @@ export class Runner {
     this.t0 = performance.now()
     this.append([{ kind: 'meta', text: `${useDebug ? '🐞' : '▶'} ${path}${selection ? ' (選択範囲)' : ''} — ${KIND_LABELS[kind]}${useDebug ? ' (デバッグ)' : ''}` }])
     this.renderTabs()
-    this.lastRunMsg = {
-      type: 'run', source, path, chunkName: path, files, wsFiles, wsFolders, projectName: app.project.name,
-      options: this.runOptions(kind, useDebug ? { debug: { breakpoints: bps, watches: this.debug.watches } } : {}),
-    }
+    const options = this.runOptions(kind, useDebug ? { debug: { breakpoints: bps, watches: this.debug.watches } } : {})
+    if (agent) options.net = { ...options.net, agent: true }
+    this.lastRunMsg = { type: 'run', source, path, chunkName: path, files, wsFiles, wsFolders, projectName: app.project.name, options }
     w.postMessage(this.lastRunMsg)
     w.postMessage({ type: 'guiVisible', on: !!this.stage.visible })
   }

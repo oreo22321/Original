@@ -100,10 +100,12 @@ async function viaGithubRelease(url, timeout) {
 const online = () => typeof navigator === 'undefined' || navigator.onLine !== false
 
 // GET で取得。戻り値: { ok, status, statusText, text, from: 'net'|'proxy'|'cache'|'manual', error?: 'cors'|'offline'|'http'|'timeout', url }
-export async function fetchText(rawUrl, { proxy = null, timeout = 20000, preferCache = false } = {}) {
+// cacheOnly: 通信せず、保存済みの中身だけを返す (Claude が実行するとき。外部へ情報が送られないように)
+export async function fetchText(rawUrl, { proxy = null, timeout = 20000, preferCache = false, cacheOnly = false } = {}) {
   const url = normalizeUrl(rawUrl)
   const cached = await readCache(url)
   if (cached && cached.manual) return { ok: true, status: 200, statusText: 'OK', text: cached.text, from: 'manual', url }
+  if (cacheOnly) return cached ? { ok: true, status: 200, statusText: 'OK', text: cached.text, from: 'cache', url, at: cached.at } : { ok: false, status: 0, statusText: 'blocked', text: '', error: 'agent', url }
   if (cached && preferCache) return { ok: true, status: 200, statusText: 'OK', text: cached.text, from: 'cache', url, at: cached.at }
   let failure = null
   if (online()) {

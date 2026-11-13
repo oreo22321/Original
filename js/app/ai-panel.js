@@ -127,7 +127,7 @@ export class AiView {
       h('p', null, 'Claude がファイルを読んで、編集して、実行して確かめます。'),
       h('div', { class: 'ai-way' },
         h('div', { class: 'ai-way-title' }, icon('check', 15), 'おすすめ: Claude 版で開く (API キー不要)'),
-        h('p', { class: 'set-desc' }, 'claude.ai のアカウントで動きます。料金はかからず、Claude の利用枠を使います。'),
+        h('p', { class: 'set-desc' }, 'claude.ai のアカウントで動きます。料金はかからず、Claude の利用枠を使います。claude.ai にログインしたブラウザで開いてください (ログインしていないと「ページが見つかりません」と表示されます)。'),
         h('a', { class: 'btn primary', href: CLAUDE_APP_URL, target: '_blank', rel: 'noopener' }, icon('link', 16), 'Claude 版を開く'),
         h('p', { class: 'set-desc' }, 'プロジェクトは「ファイル → ⋯ → プロジェクトを ZIP で保存」で保存し、Claude 版の「ZIP を読み込む」で移せます。')),
       h('div', { class: 'ai-way' },
@@ -191,7 +191,7 @@ export class AiView {
       if (m.pending) body.append(h('div', { class: 'ai-thinking' }, h('span', { class: 'spinner' }), m.steps && m.steps.length ? '作業中…' : '考えています…'))
       return
     }
-    body.innerHTML = renderMarkdown(text, { codeBlock: (code, lang) => `<div class="ai-code"><div class="ai-code-bar"><span>${lang || 'code'}</span><span class="ai-code-actions"><button data-act="copy">コピー</button><button data-act="insert">挿入</button><button data-act="replace">選択範囲と置換</button></span></div><pre><code></code></pre></div>` })
+    body.innerHTML = renderMarkdown(text, { images: false, codeBlock: (code, lang) => `<div class="ai-code"><div class="ai-code-bar"><span>${lang || 'code'}</span><span class="ai-code-actions"><button data-act="copy">コピー</button><button data-act="insert">挿入</button><button data-act="replace">選択範囲と置換</button></span></div><pre><code></code></pre></div>` })
     const codes = []
     const re = /```[\w+-]*\n([\s\S]*?)(?:```|$)/g
     let mm

@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = 'a2ee3d24e4'
+const VERSION = 'bb2447a3f2'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -105,6 +105,8 @@ self.addEventListener('fetch', e => {
     if (hit) return hit
     try {
       const res = await fetch(req)
+      // 存在しないページ (末尾に記号が付いたリンクなど) を開いたときは、アプリのトップへ
+      if (req.mode === 'navigate' && res.status === 404) return Response.redirect(self.registration.scope, 302)
       if (res.ok && res.type === 'basic') c.put(req, res.clone())
       return res
     } catch {

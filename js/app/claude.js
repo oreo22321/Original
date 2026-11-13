@@ -14,6 +14,7 @@ let sample = null          // claude.use('sample') の関数
 let limits = null          // { tools, images, ... }
 let state = IN_CLAUDE ? 'checking' : 'none' // checking | ready | none | denied
 let denyReason = ''
+let toolsOff = false
 
 export function initClaude() {
   if (!IN_CLAUDE) return Promise.resolve(null)
@@ -35,7 +36,7 @@ export function provider() {
   return null
 }
 export const aiReady = () => !!provider()
-export const canUseTools = () => provider() === 'key' || !!(limits && limits.tools) || (provider() === 'claude' && !limits)
+export const canUseTools = () => provider() === 'key' || (!toolsOff && (!!(limits && limits.tools) || (provider() === 'claude' && !limits)))
 export const canSendImages = () => provider() === 'key' || !!(limits && limits.images)
 export function status() {
   return { provider: provider(), state, inClaude: IN_CLAUDE, reason: denyReason, tools: canUseTools(), images: canSendImages() }
@@ -59,7 +60,7 @@ const MESSAGES = {
   empty_completion: '回答が空でした。もう少し具体的に頼んでみてください',
   prompt_too_large: '送る内容が大きすぎます。範囲を選ぶか、ファイルを分けてください',
   invalid_json: 'AI の返答を読み取れませんでした。もう一度お試しください',
-  tools_unavailable: 'この画面では、ファイルを操作する AI を使えません',
+  tools_unavailable: 'この画面では Claude がファイルを直接操作できません。もう一度送ると、コードを表示する形で答えます',
   images_unavailable: 'この画面では画像を送れません',
   image_rejected: 'この画像は送れません (JPEG / PNG / WebP / GIF を選んでください)',
   upstream_error: '通信エラーが発生しました。もう一度お試しください',
@@ -67,6 +68,9 @@ const MESSAGES = {
 }
 function fromSampleError(e) {
   const code = e && typeof e.code === 'string' ? e.code : 'upstream_error'
+  // この画面ではツール (ファイル操作) を使えない: 次からはツールなしで頼む
+  if (code === 'tools_unavailable') { limits = { ...(limits || {}), tools: undefined }; toolsOff = true; emit('ai', status()) }
+  if (code === 'images_unavailable') { limits = { ...(limits || {}), images: undefined }; emit('ai', status()) }
   if (code === 'not_granted' || code === 'sampling_disabled' || code === 'not_declared' || code === 'capability_disabled') {
     state = 'denied'
     denyReason = MESSAGES[code]
