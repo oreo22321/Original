@@ -49,6 +49,9 @@ let remainOnPause = 0
 let uiTimer = null
 let drawTimer = null
 let drawSent = -1       // 最後に送った Drawing の版
+let drawAvail = false   // ゲーム画面が隠れている間に Drawing ができたことを知らせたか
+let interactKey = ''    // 最後に送った「操作できるもの」
+let uiTick = 0
 let uiMode = false        // 操作できる GUI を表示中 (実行時間の上限を数えない)
 let guiShown = true       // 画面側でゲーム画面が見えているか
 let waiting = false
@@ -108,7 +111,12 @@ function snapshotTree(root, depth = 0) {
 // Drawing を画面に送る (変更があったときだけ、最大 25 回/秒。ゲーム画面が隠れている間は送らない)
 function sendDrawings() {
   const vm = currentVM
-  if (!vm || !vm.exec || !guiShown || vm.sched.paused) return
+  if (!vm || !vm.exec || vm.sched.paused) return
+  if (!guiShown) {
+    // 隠れている間は中身を送らず、「表示するものがある」ことだけ知らせる (画面側がゲームタブを開く)
+    if (!drawAvail) for (const d of vm.exec.drawings) if (!d.removed && d.props.get('Visible')) { drawAvail = true; self.postMessage({ type: 'guiAvail' }); break }
+    return
+  }
   const v = vm.exec.drawVersion()
   if (v === drawSent) return
   drawSent = v
@@ -168,6 +176,16 @@ function hasInteractive(vm) {
   return !!snapshotInteract(vm.rbx)
 }
 
+// 「操作できるもの」が前回と変わっていれば返す (同じなら undefined)
+function interactNow(vm) {
+  let it = null
+  try { it = snapshotInteract(vm.rbx) } catch {}
+  const key = JSON.stringify(it)
+  if (key === interactKey) return undefined
+  interactKey = key
+  return it
+}
+
 // 操作できる GUI が表示されている間は、実行時間の上限を数えない (GUI が消えたら数え直す)
 let maxRunMs = 0
 function checkUi() {
@@ -180,7 +198,12 @@ function checkUi() {
   if (on && !uiMode) {
     uiMode = true
     clearTimeout(finishTimer)
-    self.postMessage({ type: 'uiMode' })
+    uiTick = 0
+    self.postMessage({ type: 'uiMode', interact: interactNow(vm) })
+  } else if (on && uiMode && ++uiTick % 5 === 0) {
+    // 実行中も「操作できるもの」(キー入力のボタンなど) を最新にする
+    const it = interactNow(vm)
+    if (it !== undefined) self.postMessage({ type: 'interact', interact: it })
   } else if (!on && uiMode) {
     uiMode = false
     if (maxRunMs > 0 && !waiting) armDeadline(maxRunMs)
@@ -329,6 +352,8 @@ async function run(msg) {
   if (maxRunMs) armDeadline(maxRunMs)
   uiTimer = setInterval(checkUi, 400)
   drawSent = -1
+  drawAvail = false
+  interactKey = ''
   if (vm.exec) drawTimer = setInterval(sendDrawings, 40)
   self.postMessage({ type: 'started', debug: !!vm.debugger })
   try {

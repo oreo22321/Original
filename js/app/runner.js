@@ -425,7 +425,12 @@ export class Runner {
         if (m.id !== null && this.tab !== 'game' && !this.stage.full) this.show('game')
         this.stage.focusText(m)
         break
+      case 'interact':
+        this.game.interact = m.interact
+        if (this.tab === 'game') this.renderGame(true)
+        break
       case 'uiMode':
+        if (m.interact !== undefined) { this.game.interact = m.interact; if (this.tab === 'game') this.renderGame(true) }
         this.uiMode = true
         if (!this.waitNoted) { this.waitNoted = true; this.append([{ kind: 'meta', text: '🎮 GUI を表示しています — 「ゲーム」タブで操作できます (■ で終了)' }]) }
         break
