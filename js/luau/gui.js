@@ -1382,6 +1382,41 @@ export function installGui(k) {
     // 全体を送り直す (画面側を作り直したとき)
     full() { pendingFull = true; sendPatch() },
     snapshot() { pendingFull = true; const p = buildPatch(true, true); pendingFull = false; return p },
+    // AI 用: 表示中の GUI を文章にする (画面上の位置・大きさ・文字・色)
+    describe(max = 180) {
+      layoutAll()
+      const out = [`screen ${screen.w}x${screen.h} px (top bar ${inset()} px)`]
+      const R = Math.round
+      const col = c => (c && c.luaTypeName === 'Color3' ? `rgb(${R(c.r * 255)},${R(c.g * 255)},${R(c.b * 255)})` : '')
+      const walk = (n, depth) => {
+        for (const c of objsOf(n)) {
+          if (out.length >= max) return
+          const r = c._r && c._lv === epoch ? c._r : null
+          let line = '  '.repeat(depth) + `${c.ClassName} "${c.name}"`
+          if (P(c, 'Visible') === false) line += ' [hidden]'
+          else if (r) line += ` at (${R(r[0])},${R(r[1])}) size ${R(r[2])}x${R(r[3])}`
+          const bgT = num(P(c, 'BackgroundTransparency'))
+          if (bgT < 1 && c.ClassName !== 'ImageLabel' && c.ClassName !== 'ImageButton') line += ` bg=${col(P(c, 'BackgroundColor3'))}${bgT > 0 ? ' alpha=' + (1 - bgT).toFixed(2) : ''}`
+          if (isText(c)) {
+            const raw = P(c, 'Text')
+            const t = typeof raw === 'string' ? fromBytes(raw) : ''
+            if (t) line += ` text=${JSON.stringify(t.length > 60 ? t.slice(0, 60) + '…' : t)} color=${col(P(c, 'TextColor3'))} size=${num(P(c, 'TextSize'), 14)}`
+            if (c.ClassName === 'TextBox') { const ph = P(c, 'PlaceholderText'); if (typeof ph === 'string' && ph) line += ` placeholder=${JSON.stringify(fromBytes(ph))}` }
+          }
+          out.push(line)
+          if (P(c, 'Visible') !== false) walk(c, depth + 1)
+        }
+      }
+      const rs = roots()
+      if (!rs.length) out.push('(no visible ScreenGui)')
+      for (const rt of rs) {
+        if (out.length >= max) break
+        out.push(`ScreenGui "${rt.g.name}" (in ${rt.g.parent ? rt.g.parent.name : '?'})`)
+        walk(rt.g, 1)
+      }
+      if (out.length >= max) out.push('… (truncated)')
+      return out.join('\n')
+    },
     // 操作を待つ GUI があるか (ボタン・入力欄・ドラッグなど)
     interactive() {
       if (dirtyNow()) layoutAll()

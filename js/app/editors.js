@@ -2,6 +2,7 @@
 import { EditorView, EditorSelection, forEachDiagnostic, forceLinting, undo } from '../../vendor/codemirror.js'
 import { createState, reconfigureEffects, langOf, scriptKindOf, LANG_LABELS, KIND_LABELS } from '../editor/setup.js'
 import { makeAiProvider } from '../editor/ai.js'
+import { aiReady } from './claude.js'
 import { formatLuau, tidy } from '../editor/format.js'
 import { setRunError } from '../editor/errorlens.js'
 import { intel } from '../editor/luau-intel.js'
@@ -31,6 +32,7 @@ export class EditorManager {
     this.fixNoted = false
     this.build()
     on('files', () => this.renderTabs())
+    on('ai', () => this.renderEmpty())
     on('mode', () => { this.reconfigureAll('mode'); this.relint(); this.renderBreadcrumb() })
     // require したモジュールの中身を補完に使う (開いているファイルは編集中の内容を優先)
     intel.moduleSource = name => {
@@ -86,8 +88,9 @@ export class EditorManager {
         command: (id, ...a) => runCommand(id, ...a),
       },
       onUpdate: u => this.onUpdate(doc, u),
-      aiProvider: this.aiProvider || (this.aiProvider = makeAiProvider(getSettings, () => ({ lang: this.activeDoc() ? this.activeDoc().lang : 'text', name: this.active || '', mode: getMode() }))),
-      onAiError: e => { if (!this.aiErrShown) { this.aiErrShown = true; toast('AI 候補: ' + e.message, { kind: 'error', duration: 5000 }); setTimeout(() => { this.aiErrShown = false }, 30000) } },
+      aiProvider: this.aiProvider || (this.aiProvider = makeAiProvider(() => ({ lang: this.activeDoc() ? this.activeDoc().lang : 'text', name: this.active || '', mode: getMode() }))),
+      aiReady,
+      onAiError: e => { if (!this.aiErrShown) { this.aiErrShown = true; toast('Claude の候補: ' + e.message, { kind: 'error', duration: 5000 }); setTimeout(() => { this.aiErrShown = false }, 30000) } },
       onScale: size => {
         if (size === null) return getSettings().fontSize
         if (size !== getSettings().fontSize) setSettings({ fontSize: size })
@@ -533,6 +536,7 @@ export class EditorManager {
         items.push({ label: a.name, icon: 'wand', run: () => { a.apply(view, from, to); view.focus() } })
       }
     })
+    if (aiReady() && cur.some(c => c.d.severity !== 'hint')) items.push('-', { label: 'Claude で直す', icon: 'sparkle', run: () => runCommand('aiFixDiagnostics', view, cur.map(c => ({ message: c.d.message, line: view.state.doc.lineAt(c.from).number }))) })
     items.push('-', { label: 'メッセージをコピー', icon: 'copy', run: () => copyText(cur.map(c => c.d.message).join('\n')).then(() => toast('コピーしました')) })
     menu(items, anchor, { title: `${view.state.doc.lineAt(cur[0].from).number} 行目` })
   }
@@ -689,6 +693,7 @@ export class EditorManager {
       h('div', { class: 'empty-title' }, app.project ? app.project.name : 'ForgeCode'),
       h('div', { class: 'empty-actions' },
         h('button', { class: 'btn primary', onclick: () => runCommand('newFile') }, icon('newFile', 18), '新しいファイル'),
+        aiReady() ? h('button', { class: 'btn ai-cta', onclick: () => runCommand('aiChat') }, icon('sparkle', 18), 'Claude に作ってもらう') : null,
         h('button', { class: 'btn', onclick: () => runCommand('quickOpen') }, icon('search', 18), 'ファイルを開く'),
         h('button', { class: 'btn', onclick: () => runCommand('importFiles') }, icon('upload', 18), '端末から読み込む'),
         h('button', { class: 'btn', onclick: () => runCommand('projects') }, icon('folder', 18), 'プロジェクト一覧'),
@@ -697,7 +702,9 @@ export class EditorManager {
         h('div', null, h('kbd', null, '⌘/Ctrl + P'), ' ファイルを開く'),
         h('div', null, h('kbd', null, '⌘/Ctrl + Shift + P'), ' コマンド'),
         h('div', null, h('kbd', null, '⌘/Ctrl + Enter'), ' 実行'),
-        h('div', null, h('kbd', null, '⌘/Ctrl + .'), ' エラーを修正')))
+        h('div', null, h('kbd', null, '⌘/Ctrl + .'), ' エラーを修正'),
+        h('div', null, h('kbd', null, 'Alt + \\'), ' Claude が続きを提案'),
+        h('div', null, h('kbd', null, '⌘/Ctrl + I'), ' 選択範囲を Claude に頼む')))
   }
 
   sessionData() {

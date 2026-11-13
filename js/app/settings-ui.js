@@ -1,13 +1,14 @@
 // 設定画面
-import { getSettings, setSettings, resetSettings, getMode, DEFAULTS } from './store.js'
+import { getSettings, setSettings, resetSettings, getMode, DEFAULTS, on } from './store.js'
 import { THEMES } from '../editor/themes.js'
 import { AI_MODELS } from '../editor/ai.js'
+import { status as aiStatus, IN_CLAUDE } from './claude.js'
 import { h, icon, toast, modal, confirmDialog, download } from './ui.js'
 import * as vfs from './vfs.js'
 import { apiVersion } from '../editor/apidb.js'
 import { app, command, runCommand, setProjectKind } from './app.js'
 
-export const APP_VERSION = '8.0.0'
+export const APP_VERSION = '9.0.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -81,12 +82,14 @@ const SCHEMA = [
     { key: 'netProxy', type: 'select', label: '外部スクリプトの中継サーバー', desc: 'game:HttpGet で読み込む URL が、ブラウザの制限 (CORS) で直接取れないときだけ使います。使うと、その URL が中継サーバーの運営者に送られます (ヘッダーや本文を付けた request は中継しません)', options: [['', '使わない'], ['corsproxy', 'corsproxy.io'], ['allorigins', 'allorigins.win']] },
     { key: 'remoteScripts', type: 'action', label: '取得した外部スクリプト', desc: 'loadstring で読み込んだスクリプトはこの端末に保存され、オフラインでも動きます', button: '一覧を開く', run: () => runCommand('remoteScripts') },
   ] },
-  { group: 'AI (Claude)', icon: 'sparkle', items: [
-    { key: 'aiKey', type: 'password', label: 'Claude API キー', desc: 'console.anthropic.com で発行します。キーはこの端末のブラウザにのみ保存され、Anthropic の API にだけ送信されます。利用料金は API キーの持ち主に請求されます。' },
-    { key: 'aiModel', type: 'select', label: 'モデル', options: AI_MODELS.map(m => [m.id, m.label]) },
-    { key: 'aiInline', type: 'bool', label: 'AI のインライン候補', desc: '入力が止まると AI が続きを提案します (API の利用料金がかかります)' },
-    { key: 'aiDelay', type: 'range', min: 300, max: 3000, step: 100, label: 'AI 候補を出すまでの待ち時間', unit: 'ms' },
-    { key: 'aiIncludeFile', type: 'bool', label: 'AI チャットに開いているファイルを含める' },
+  { group: 'Claude (AI)', icon: 'sparkle', items: [
+    { key: 'aiStatus', type: 'action', label: '接続', get desc() { const st = aiStatus(); return st.provider === 'claude' ? 'claude.ai のアカウントで動いています (API キー不要)' : st.provider === 'key' ? '設定の API キーで動いています' : IN_CLAUDE ? (st.state === 'checking' ? '接続中…' : st.reason || 'claude.ai の画面の中で開くと使えます') : '未接続です。Claude 版で開くと、API キーなしで使えます' }, get button() { return IN_CLAUDE ? null : 'Claude 版を開く' }, run: () => runCommand('aiOpenClaude') },
+    { key: 'aiTier', type: 'select', label: 'Claude のモデル', desc: '「速い」は短い返事向き、「高性能」は難しい作業向き (時間がかかります)', options: [['quick', '速い'], ['default', '標準'], ['complex', '高性能']] },
+    { key: 'aiInline', type: 'bool', label: '入力が止まったら Claude が続きを提案', desc: 'オフでも、キーボードバーの ✨ や Alt + \\ でいつでも頼めます。オンにすると Claude の利用枠を多く使います' },
+    { key: 'aiDelay', type: 'range', min: 500, max: 4000, step: 100, label: '自動で提案するまでの待ち時間', unit: 'ms' },
+    { key: 'aiIncludeFile', type: 'bool', label: '開いているファイルの内容を Claude に送る', desc: 'オフにすると、Claude は必要なときだけファイルを読みます' },
+    { key: 'aiKey', type: 'password', label: 'Claude API キー (任意)', desc: 'Claude 版では不要です。GitHub Pages 版で AI を使う場合だけ、console.anthropic.com で発行したキーを入れます。キーはこの端末にのみ保存され、Anthropic の API にだけ送信されます (従量課金)。' },
+    { key: 'aiModel', type: 'select', label: 'API キーで使うモデル', options: AI_MODELS.map(m => [m.id, m.label]) },
   ] },
   { group: 'スマホ・タブレット', icon: 'keyboard', items: [
     { key: 'keybar', type: 'bool', label: 'キーボードバー (記号・矢印)' },
@@ -100,6 +103,7 @@ export class SettingsView {
     this.root = root
     this.filter = ''
     this.build()
+    on('ai', () => this.render())
   }
 
   build() {
@@ -172,7 +176,7 @@ export class SettingsView {
   }
 
   actionRow(label, desc, btn, run) {
-    return h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, label), desc ? h('div', { class: 'set-desc' }, desc) : null), h('button', { class: 'btn small', onclick: run }, btn))
+    return h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, label), desc ? h('div', { class: 'set-desc' }, desc) : null), btn ? h('button', { class: 'btn small', onclick: run }, btn) : null)
   }
 
   row(it, s) {

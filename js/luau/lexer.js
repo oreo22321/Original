@@ -38,7 +38,7 @@ export function utf8Encode(c) {
   return String.fromCharCode(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
 }
 
-// UTF-8 バイト文字列 → UTF-16 文字列 (不正なバイトは � に)
+// UTF-8 バイト文字列 → UTF-16 文字列 (不正なバイトは置換文字 U+FFFD に)
 export function fromBytes(bytes) {
   if (!/[\x80-\xff]/.test(bytes)) return bytes
   const arr = new Uint8Array(bytes.length)

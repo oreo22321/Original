@@ -6,6 +6,7 @@ import { h, icon, toast, copyText, haptic, menu } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { scriptKindOf, KIND_LABELS, langOf } from '../editor/setup.js'
 import { explainError } from './explain.js'
+import { aiReady } from './claude.js'
 import { GuiStage, SCREENS } from './gui-preview.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
 import { proxyTemplate, remoteFailBlock, remoteActions } from './remote-ui.js'
@@ -26,7 +27,10 @@ export class Runner {
     this.problemCount = { error: 0, warning: 0 }
     this.problems = []
     this.game = { tree: null, gui: null, interact: null, drawings: null }
-    this.screen = localStorage.getItem('forgecode.screen') || (isTouch ? 'phone' : 'pc')
+    this.screen = (() => { try { return localStorage.getItem('forgecode.screen') } catch { return null } })() || (isTouch ? 'phone' : 'pc')
+    this.taps = new Set()          // 実行結果を受け取る側 (AI エージェントの「実行」など)
+    this.descWaits = new Map()
+    this.descSeq = 0
     // ゲーム画面 (実行のたびに作り直さず、差分だけ反映する)
     this.stage = new GuiStage({ onInput: m => this.sendInput(m), screen: this.screen })
     this.stage.onFull = () => { if (this.tab === 'game') this.renderGame() }
@@ -186,22 +190,88 @@ export class Runner {
   // ============================================================
   ensureWorker() {
     if (this.worker) return this.worker
-    let w
-    try {
-      w = new Worker(new URL('../workers/luau-worker.js', import.meta.url), { type: 'module' })
-    } catch (e) {
-      return null
+    let w = null
+    if (!this.noWorker) {
+      try { w = new Worker(new URL('../workers/luau-worker.js', import.meta.url), { type: 'module' }) } catch { w = null }
     }
+    if (!w) { this.noWorker = true; w = this.inlineWorker() }
     w.onerror = e => {
       if (e.preventDefault) e.preventDefault()
       if (this.worker !== w) return
       this.worker = null
+      // 一度も応答しないまま失敗した = この環境ではワーカーを使えない → メインスレッドで動かす
+      if (!w.alive && !w.inline) {
+        this.noWorker = true
+        const nw = this.ensureWorker()
+        if (this.running && this.lastRunMsg && nw) { nw.postMessage(this.lastRunMsg); nw.postMessage({ type: 'guiVisible', on: !!this.stage.visible }) }
+        return
+      }
       if (this.running) { this.line('error', '実行エンジンでエラーが発生しました: ' + (e.message || 'このブラウザはモジュールワーカーに対応していない可能性があります')); this.finished('error') }
     }
-    w.onmessage = e => { if (this.worker === w) this.onMessage(e.data) }
+    w.onmessage = e => { w.alive = true; if (this.worker === w) this.onMessage(e.data) }
     w.postMessage({ type: 'warm' })
     this.worker = w
     return w
+  }
+
+  // ワーカーを作れない環境用: 同じ実行エンジンをメインスレッドで動かす (無限ループは時間切れで止まります)
+  inlineWorker() {
+    let handler = null, dead = false
+    const queue = []
+    const clone = d => { try { return structuredClone(d) } catch { return JSON.parse(JSON.stringify(d)) } }
+    const fake = {
+      inline: true, alive: true, onmessage: null, onerror: null,
+      postMessage(m) {
+        if (dead) return
+        const d = clone(m)
+        if (handler) setTimeout(() => { if (!dead) handler(d) })
+        else queue.push(d)
+      },
+      terminate() { if (handler && !dead) { try { handler({ type: 'stop' }) } catch {} } dead = true },
+    }
+    import('../workers/luau-worker.js').then(mod => {
+      if (dead) return
+      handler = mod.attachHost(m => { if (!dead) setTimeout(() => { if (!dead && fake.onmessage) fake.onmessage({ data: m }) }) })
+      for (const d of queue.splice(0)) setTimeout(() => { if (!dead) handler(d) })
+    }, e => { if (fake.onerror) fake.onerror({ message: e && e.message }) })
+    return fake
+  }
+
+  // いまの画面 (GUI・Drawing・Workspace) を文章で受け取る (AI 用)
+  describeScreen() {
+    return new Promise(resolve => {
+      const w = this.worker
+      if (!w) { resolve(null); return }
+      const id = ++this.descSeq
+      this.descWaits.set(id, resolve)
+      w.postMessage({ type: 'describe', id })
+      setTimeout(() => { if (this.descWaits.delete(id)) resolve(null) }, 2000)
+    })
+  }
+
+  // 実行して、出力・エラー・画面の様子をまとめて返す (AI エージェント用)
+  async runAndCollect({ path, seconds = 4, signal } = {}) {
+    const rec = { output: [], errors: [], done: null }
+    const tap = m => {
+      if (m.type === 'output') { for (const it of m.items) if (rec.output.length < 400) rec.output.push(it) }
+      else if (m.type === 'error') rec.errors.push({ text: m.text, file: m.file, line: m.line, traceback: m.traceback })
+      else if (m.type === 'done') rec.done = m.reason || 'done'
+    }
+    this.taps.add(tap)
+    try {
+      await this.run({ path })
+      if (!this.running) return { ...rec, started: false }
+      const until = performance.now() + Math.max(0.5, Math.min(15, seconds)) * 1000
+      await new Promise(resolve => {
+        const iv = setInterval(() => {
+          if (rec.done || !this.running || performance.now() > until || (signal && signal.aborted)) { clearInterval(iv); resolve() }
+        }, 80)
+      })
+      // GUI の反映を少し待つ
+      await new Promise(r => setTimeout(r, 120))
+      const screen = await this.describeScreen()
+      return { ...rec, started: true, stillRunning: !!this.running, screen }
+    } finally { this.taps.delete(tap) }
   }
 
   resetWorker() {
@@ -238,10 +308,12 @@ export class Runner {
     const mode = getMode()
     const sc = SCREENS.find(x => x.id === this.screen) || SCREENS[0]
     // 選んだ画面 (スマホ / タブレット / PC) の端末として動かす
-    return { timeLimit: s.timeLimit * 1000, maxRunTime: s.maxRunTime, executor: mode === 'executor', kind, touch: sc.id !== 'pc', device: sc.id, screen: [sc.w, sc.h], net: { proxy: proxyTemplate() }, ...extra }
+    // ワーカーを使えずメインスレッドで動かすときは、画面が固まらないよう連続実行の上限を短くする
+    const limit = this.noWorker ? Math.min(s.timeLimit, 4) : s.timeLimit
+    return { timeLimit: limit * 1000, maxRunTime: s.maxRunTime, executor: mode === 'executor', kind, touch: sc.id !== 'pc', device: sc.id, screen: [sc.w, sc.h], net: { proxy: proxyTemplate() }, ...extra }
   }
 
-  async run({ selection = false, debug = false } = {}) {
+  async run({ selection = false, debug = false, path: forcePath = null } = {}) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
     let path = null, source = null
@@ -253,7 +325,7 @@ export class Runner {
       const sel = v.state.selection.main
       source = '\n'.repeat(v.state.doc.lineAt(sel.from).number - 1) + v.state.sliceDoc(sel.from, sel.to)
     } else {
-      const target = this.runTarget()
+      const target = forcePath && app.files.some(f => f.path === forcePath && !f.dir) ? forcePath : this.runTarget()
       if (target) path = target
       else if (doc && doc.lang === 'luau') path = doc.path
       else if (doc && doc.lang === 'markdown') { app.editors.togglePreview(true); return }
@@ -298,10 +370,11 @@ export class Runner {
     this.t0 = performance.now()
     this.append([{ kind: 'meta', text: `${useDebug ? '🐞' : '▶'} ${path}${selection ? ' (選択範囲)' : ''} — ${KIND_LABELS[kind]}${useDebug ? ' (デバッグ)' : ''}` }])
     this.renderTabs()
-    w.postMessage({
+    this.lastRunMsg = {
       type: 'run', source, path, chunkName: path, files, wsFiles, wsFolders, projectName: app.project.name,
       options: this.runOptions(kind, useDebug ? { debug: { breakpoints: bps, watches: this.debug.watches } } : {}),
-    })
+    }
+    w.postMessage(this.lastRunMsg)
     w.postMessage({ type: 'guiVisible', on: !!this.stage.visible })
   }
 
@@ -366,7 +439,9 @@ export class Runner {
   }
 
   onMessage(m) {
+    if (this.taps.size) for (const t of this.taps) { try { t(m) } catch {} }
     switch (m.type) {
+      case 'described': { const r = this.descWaits.get(m.id); if (r) { this.descWaits.delete(m.id); r(m) } break }
       case 'output': this.append(m.items); break
       case 'error': this.showError(m); break
       case 'remoteFail': {
@@ -507,7 +582,7 @@ export class Runner {
     const acts = h('div', { class: 'oe-actions' })
     if (m.file && m.line && app.files.some(f => f.path === m.file)) acts.append(h('button', { class: 'btn small', onclick: () => app.editors.open(m.file, { line: m.line }) }, `${m.line} 行目へ`))
     acts.append(h('button', { class: 'btn small ghost', onclick: () => copyText(m.text).then(() => toast('エラーをコピーしました', { icon: 'copy' })) }, 'コピー'))
-    if (s.aiKey) acts.append(h('button', { class: 'btn small ghost', onclick: () => runCommand('aiAsk', `次のエラーの原因と直し方を教えてください:\n${m.text}`) }, icon('sparkle', 14), 'AI に聞く'))
+    if (aiReady()) acts.append(h('button', { class: 'btn small ai-fix', onclick: () => runCommand('aiFixRunError', m.text + (m.traceback && m.traceback.length > 1 ? '\n呼び出し元: ' + m.traceback.slice(0, 5).join(' ← ') : '')) }, icon('sparkle', 14), 'Claude で直す'))
     el.append(acts)
     if (!this.lineCount) this.outEl.textContent = ''
     const out = this.outEl

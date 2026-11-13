@@ -2,6 +2,7 @@
 
 スマホ・iPad・PC のブラウザで動く、**Roblox の Luau 専用**のコードエディタです。
 インストール不要で、ホーム画面に追加すればアプリのように全画面・オフラインで使えます。
+**Claude を内蔵**しており、[Claude 版](https://claude.ai/artifact/A8AyqZNprnumvcP85pG6mJ) で開けば API キーなしで、Claude がファイルを読み・編集し・実行して確かめながらコードを書きます。
 
 ![アイコン](icons/icon-192.png)
 
@@ -38,7 +39,17 @@
 | 💾 保存 | 入力が止まるとすぐ自動保存。保存が終わる前にアプリが閉じられても、**下書きから復元**します。変更履歴、ZIP の書き出し / 読み込み、共有シートにも対応 |
 | 🔍 検索 | ファイル内の検索・置換 (正規表現対応)、全ファイル検索・一括置換、ファイル名検索 (⌘P)、関数・変数へ移動 |
 | 📱 スマホ向け | 記号・矢印・Tab のキーボードバー、選択モード、ピンチで文字サイズ変更、長押しメニュー、画面キーボードに合わせたレイアウト |
-| ✨ AI (任意) | Claude API キーを設定すると、AI による続きの提案と、コードの説明・修正・作成をするチャットが使えます |
+| ✨ Claude 内蔵 | 「Claude」パネルで頼むと、Claude が**ファイルを読み・編集・作成し、実行して出力・エラー・画面の GUI を確かめながら**仕上げます (Claude Code のような使い方)。変更は差分で確認でき、まとめて元に戻せます。UI のスクリーンショットも添付できます |
+| ✨ エディタの AI | ✨ キー (Alt + `\`) で Claude が続きを提案、範囲を選んで ✨ (⌘/Ctrl + I) で説明・バグ修正・整理・コメント・型注釈・指示して書き換え。エラーのメニューと実行エラーに「Claude で直す」。ローカルの補完はこれまでどおり即時に出ます |
+
+## Claude 版 (API キー不要)
+
+[https://claude.ai/artifact/A8AyqZNprnumvcP85pG6mJ](https://claude.ai/artifact/A8AyqZNprnumvcP85pG6mJ) は、claude.ai 上で動く ForgeCode です。
+
+- 開いた人の **claude.ai アカウント**で Claude が動きます。API キーは要らず、料金もかかりません (Claude の利用枠を使います)。最初の 1 回だけ、Claude を使ってよいかの確認が出ます。
+- 中身は GitHub Pages 版と同じアプリです (`node tools/build-artifact.mjs <出力フォルダ>` で公開用ファイルを作ります)。claude.ai の制限 (ダウンロード・eval・ワーカーなど) に合わせて自動で動き方を切り替えます: ダウンロードは claude.ai の保存確認を通し、eval が使えない場合は構文木を直接実行するエンジン (`js/luau/interp.js`) で実行します。
+- 保存場所は GitHub Pages 版と別です。プロジェクトは **ZIP で保存 → ZIP を読み込む** で移せます。
+- GitHub Pages 版でも、設定で Anthropic の API キーを入れれば同じ Claude 機能を使えます (従量課金)。
 
 ## はじめかた (GitHub Pages で無料公開)
 
@@ -132,6 +143,7 @@ index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュー
     gui.js                   GUI エンジン (レイアウト計算・入力の再現・画面への差分送信)
     remote.js                外部スクリプトの取得 (URL の正規化・キャッシュ・中継)
     spatial.js               レイキャスト・範囲内のパーツ・カメラの投影
+    interp.js                構文木を直接実行するエンジン (eval が使えない環境用。コンパイル版と同じ結果)
   js/editor/                 エディタ機能
     luau-lang.js             色付けと字下げ
     blocks.js                ブロック構造の解析 (end の自動入力・過不足の診断・整形)
@@ -143,11 +155,15 @@ index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュー
     format.js / autoformat.js  整形 (空白・字下げ・空行) と、入力中の自動整形
     extlib.js                loadstring で読み込むライブラリのソース解析 (補完・ゴーストテキスト用)
     inline.js                インライン候補 (ゴーストテキスト)
+    ai.js                    Claude による続きの提案 (手動 / 自動)
     lint.js / typo.js        エラーチェック・誤字検出・自動修正
     errorlens.js             行の右に出るエラー表示
   js/app/                    画面 (ファイル一覧・タブ・実行パネル・ゲーム画面・設定・初回案内など)
     gui-preview.js           ゲーム画面 (差分の描画・タップ / ドラッグ / キー入力・全画面)
     extlibs.js / remote-ui.js  ライブラリの裏読み込み、外部スクリプトの管理・UI ライブラリのギャラリー
+    claude.js                Claude との接続 (claude.ai の sample 機能 = API キー不要 / API キー)
+    agent.js                 Claude エージェントのツール (読む・探す・編集・作成・実行・チェック・API 検索・元に戻す)
+    ai-panel.js / ai-actions.js  Claude パネル、エディタから頼む操作 (提案・修正・選択範囲の書き換え)
   js/workers/                実行用の Web Worker
   js/data/                   補完用の API データ (Luau・エグゼキューター・スニペット)
 data/roblox-api.json         Roblox API ダンプ (変換済み)
@@ -158,9 +174,11 @@ tools/                       ライブラリと API データを作り直すス�
 ```
 
 - テスト: `for f in tests/*.test.mjs; do node "$f" || break; done`
-  - `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論と補完の候補) / `format` (整形) / `indent` (字下げ・end) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
+  - eval を使わないエンジンでも確認: `node --import ./tests/force-interp.mjs tests/luau-basic.test.mjs` (roblox / executor / gui / debug / extlib も同様)
+  - `agent` (Claude エージェントの置き換え・差分・API 検索) / `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論と補完の候補) / `format` (整形) / `indent` (字下げ・end) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
 - Roblox API データの更新: `node tools/build-roblox-api.mjs` (最新の API ダンプを取得して `data/roblox-api.json` を作り直します)
 - ライブラリの作り直し: `cd tools && npm install && npm run vendor`
+- Claude 版の公開用ファイル: `node tools/build-artifact.mjs <出力フォルダ>` (中の `files.json` が公開するファイルの一覧)
 - ファイルを変更したら `node tools/build-sw.mjs` で Service Worker のキャッシュ一覧を更新してください (更新しないと古いキャッシュが使われることがあります)。
 
 Roblox は Roblox Corporation の商標です。ForgeCode は Roblox Corporation とは関係ありません。

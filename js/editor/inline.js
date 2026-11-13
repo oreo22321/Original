@@ -57,6 +57,19 @@ export const ghostField = StateField.define({
 
 export function hasGhost(state) { return !!state.field(ghostField, false) }
 
+// Claude に続きを頼んでゴーストテキストとして出す (✨ キー / Alt+\\)
+export async function requestAiGhost(view, aiProvider) {
+  const state = view.state
+  const sel = state.selection.main
+  if (!sel.empty || !aiProvider) return false
+  const pos = sel.head, docAt = state.doc
+  const text = await aiProvider(state, pos, { manual: true })
+  if (view.state.doc !== docAt || view.state.selection.main.head !== pos) return false
+  if (!text || !text.trim()) return false
+  view.dispatch({ effects: setGhost.of({ pos, text, source: 'ai' }) })
+  return true
+}
+
 export function acceptGhost(view, partial = false) {
   const g = view.state.field(ghostField, false)
   if (!g) return false

@@ -1,15 +1,7 @@
-// AI 機能 (Claude API) — インライン候補・チャット
-// API キーはこの端末のブラウザ (localStorage) にのみ保存され、Anthropic の API にだけ送信されます。
-let cached = { key: null, client: null, Anthropic: null }
-
-async function getClient(apiKey) {
-  if (!apiKey) throw new Error('設定で Claude の API キーを入力してください')
-  if (cached.key !== apiKey) {
-    const { Anthropic } = await import('../../vendor/anthropic.js')
-    cached = { key: apiKey, client: new Anthropic({ apiKey, dangerouslyAllowBrowser: true, maxRetries: 1 }), Anthropic }
-  }
-  return cached
-}
+// エディタの AI 候補 (Claude が続きを提案するゴーストテキスト)
+// ・ローカルの補完 (即時) はそのまま。Claude の候補は、手で呼んだとき (✨ キー / Alt+\) か、
+//   設定で「入力が止まったら自動で」をオンにしたときだけ取りに行きます (速度・利用枠を守るため)
+import { ask, provider } from '../app/claude.js'
 
 export const AI_MODELS = [
   { id: 'claude-opus-5-5', label: 'Claude Opus 5.5 (標準・高性能)' },
@@ -18,37 +10,9 @@ export const AI_MODELS = [
   { id: 'claude-fable-5-2', label: 'Claude Fable 5.2 (最上位)' },
 ]
 
-const LANG_NAMES = { luau: 'Luau (Roblox)', json: 'JSON', markdown: 'Markdown', text: 'plain text' }
-// プロジェクトのモードに合わせた前提
 const MODE_NOTES = {
   studio: 'The file is a Roblox Studio script (Script / LocalScript / ModuleScript). Use only official Roblox APIs.',
-  executor: 'The file is a Roblox executor script (client-side). Executor APIs following the UNC standard are available (getgenv, writefile/readfile, request, hookmetamethod, Drawing, gethui ...).',
-}
-
-const INLINE_SYSTEM = `You are the inline code-completion engine of ForgeCode, a code editor used on phones and tablets.
-You receive the code before and after the cursor. Reply with ONLY the exact text to insert at the cursor:
-- no explanations, no markdown code fences, no repetition of code that is already before or after the cursor
-- usually finish the current line or the current small block (at most about 8 lines)
-- match the existing indentation, naming style and language of comments
-- for Roblox Luau prefer modern APIs (task.wait, task.spawn, game:GetService, :Connect)
-If nothing useful can be inserted, reply with an empty message.`
-
-const CHAT_SYSTEM = `You are the coding assistant built into ForgeCode, a mobile/tablet code editor for Roblox Luau.
-Answer in Japanese unless the user writes in another language. Keep answers practical and concise; beginners use this app.
-When you show code, put it in fenced code blocks with the lua language tag. When fixing code, show the full corrected snippet.
-Prefer current Roblox APIs (task.wait over wait, GetService, :Connect, Instance properties set before Parent).`
-
-function friendlyError(e, Anthropic) {
-  if (!Anthropic) return e && e.message ? e.message : String(e)
-  if (e instanceof Anthropic.APIUserAbortError) return null
-  if (e instanceof Anthropic.AuthenticationError) return 'API キーが正しくありません (設定 → AI で確認してください)'
-  if (e instanceof Anthropic.PermissionDeniedError) return 'この API キーではこのモデルを使えません'
-  if (e instanceof Anthropic.NotFoundError) return 'モデルが見つかりません (設定 → AI でモデルを変更してください)'
-  if (e instanceof Anthropic.RateLimitError) return '利用制限に達しました。少し待ってから再度お試しください'
-  if (e instanceof Anthropic.BadRequestError) return 'リクエストが不正です: ' + e.message
-  if (e instanceof Anthropic.APIConnectionError) return 'ネットワークに接続できません'
-  if (e instanceof Anthropic.APIError) return `API エラー (${e.status}): ${e.message}`
-  return e && e.message ? e.message : String(e)
+  executor: 'The file is a Roblox executor script (client-side). UNC executor APIs are available (getgenv, writefile/readfile, request, hookmetamethod, Drawing, gethui ...).',
 }
 
 function stripFences(text) {
@@ -56,75 +20,60 @@ function stripFences(text) {
   return m ? m[1] : text
 }
 
-// インライン候補: カーソル位置に挿入するテキストを返す
-export async function aiInline({ apiKey, model, before, after, lang, filename, mode, signal }) {
-  const { client, Anthropic } = await getClient(apiKey)
-  try {
-    const resp = await client.beta.messages.create({
-      model,
-      max_tokens: 512,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-      output_config: { effort: 'low' },
-      system: INLINE_SYSTEM,
-      messages: [{
-        role: 'user',
-        content: `File: ${filename} (${LANG_NAMES[lang] || lang})\n${MODE_NOTES[mode] || ''}\n<code_before_cursor>\n${before}</code_before_cursor>\n<code_after_cursor>\n${after}\n</code_after_cursor>\nReply with only the text to insert at the cursor.`,
-      }],
-    }, { signal })
-    if (resp.stop_reason === 'refusal') return ''
-    let text = resp.content.filter(b => b.type === 'text').map(b => b.text).join('')
-    text = stripFences(text)
-    // 直前と重複する部分を取り除く
-    const lastLine = before.split('\n').pop()
-    if (lastLine.trim() && text.startsWith(lastLine)) text = text.slice(lastLine.length)
-    return text.replace(/\s+$/, m => (m.includes('\n') ? '' : m))
-  } catch (e) {
-    const msg = friendlyError(e, Anthropic)
-    if (msg === null) return ''
-    throw new Error(msg)
+// 返ってきた候補を整える (重複・前後のゴミを除く)
+export function cleanSuggestion(text, before, after) {
+  let t = stripFences(String(text || ''))
+  if (/^\s*<none>\s*$/i.test(t)) return ''
+  t = t.replace(/<\/?CURSOR>/g, '')
+  const lastLine = before.split('\n').pop()
+  if (lastLine.trim() && t.startsWith(lastLine)) t = t.slice(lastLine.length)
+  // 後ろに既にある行を繰り返していたら、そこで切る
+  const nextLine = (after.split('\n').find(l => l.trim()) || '').trim()
+  if (nextLine.length > 3) {
+    const lines = t.split('\n')
+    const k = lines.findIndex((l, i) => i > 0 && l.trim() === nextLine)
+    if (k > 0) t = lines.slice(0, k).join('\n')
   }
+  return t.replace(/\s+$/, m => (m.includes('\n') ? '' : m))
 }
 
-// チャット (ストリーミング)。onText に差分テキストが届きます
-export async function aiChat({ apiKey, model, messages, context, onText, signal }) {
-  const { client, Anthropic } = await getClient(apiKey)
-  const system = context ? `${CHAT_SYSTEM}\n\n<current_file>\n${context}\n</current_file>` : CHAT_SYSTEM
-  try {
-    const stream = client.beta.messages.stream({
-      model,
-      max_tokens: 64000,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-      output_config: { effort: 'medium' },
-      system,
-      messages,
-    }, { signal })
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') onText(event.delta.text)
-    }
-    const final = await stream.finalMessage()
-    if (final.stop_reason === 'refusal') onText('\n\n(このリクエストには回答できませんでした)')
-    if (final.stop_reason === 'max_tokens') onText('\n\n(回答が長すぎたため途中で終了しました)')
-    return final
-  } catch (e) {
-    const msg = friendlyError(e, Anthropic)
-    if (msg === null) return null
-    throw new Error(msg)
-  }
+export function inlinePrompt({ before, after, filename, mode }) {
+  return `You are the inline code-completion engine of ForgeCode, a Roblox Luau editor on phones.
+${MODE_NOTES[mode] || ''}
+Reply with ONLY the exact text to insert at <CURSOR>: no explanation, no code fences, nothing that is already before or after the cursor.
+Usually finish the current line or the current small block (at most about 8 lines). Match the indentation, naming and comment language. Prefer modern APIs (task.wait, GetService, :Connect).
+If nothing useful can be inserted, reply with exactly <none>.
+
+File: ${filename}
+<code>
+${before}<CURSOR>${after}
+</code>`
 }
 
-// エディタ用: インライン候補プロバイダ
-export function makeAiProvider(getSettings, getFile) {
+// エディタ用: インライン候補プロバイダ ((state, pos) → 挿入する文字列)
+let lastAuto = 0, pausedUntil = 0
+export function makeAiProvider(getFile) {
   let ctrl = null
-  return async (state, pos) => {
-    const s = getSettings()
-    if (!s.aiKey) return ''
+  return async (state, pos, { manual = false } = {}) => {
+    if (!provider()) return ''
+    if (!manual) {
+      // 自動のときは呼びすぎない (利用枠を守る)
+      const now = Date.now()
+      if (now < pausedUntil || now - lastAuto < 2500) return ''
+      lastAuto = now
+    }
     if (ctrl) ctrl.abort()
     ctrl = new AbortController()
     const file = getFile()
-    const before = state.doc.sliceString(Math.max(0, pos - 6000), pos)
-    const after = state.doc.sliceString(pos, Math.min(state.doc.length, pos + 2000))
-    return aiInline({ apiKey: s.aiKey, model: s.aiModel, before, after, lang: file.lang, filename: file.name, mode: file.mode, signal: ctrl.signal })
+    const before = state.doc.sliceString(Math.max(0, pos - 5000), pos)
+    const after = state.doc.sliceString(pos, Math.min(state.doc.length, pos + 1500))
+    try {
+      const r = await ask(inlinePrompt({ before, after, filename: file.name, mode: file.mode }), { tier: 'quick', signal: ctrl.signal, maxTokens: 400 })
+      return cleanSuggestion(r.text, before, after)
+    } catch (e) {
+      if (e && e.code === 'cancelled') return ''
+      if (e && e.code === 'rate_limited') pausedUntil = Date.now() + 120000
+      throw e
+    }
   }
 }

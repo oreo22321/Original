@@ -61,6 +61,7 @@ export const DEFAULTS = {
   aiInline: false,
   aiDelay: 800,
   aiIncludeFile: true,
+  aiTier: 'default',   // Claude のモデル: quick (速い) / default (標準) / complex (高性能)
   // モバイル
   keybar: true,
   keybarKeys: '( ) { } [ ] " \' = . : , ; + - * / # ~ < > _ ` ! & | % ^ @ \\ $ ?',

@@ -7,6 +7,7 @@ import { app, runCommand } from './app.js'
 import { getSettings, on } from './store.js'
 import { h, icon, haptic } from './ui.js'
 import { acceptGhost, hasGhost } from '../editor/inline.js'
+import { aiReady } from './claude.js'
 
 export function typeText(view, text) {
   const { state } = view
@@ -27,6 +28,7 @@ export class KeyBar {
     on('editorupdate', () => this.scheduleUpdate())
     on('active', () => this.scheduleUpdate())
     on('problems', () => this.scheduleUpdate())
+    on('ai', () => this.render())
   }
 
   view() { return app.editors && app.editors.activeView() }
@@ -74,10 +76,14 @@ export class KeyBar {
     this.acceptBtn = this.key('✓', v => { if (!acceptGhost(v)) insertTab(v) }, { cls: 'accept hidden', title: '候補を確定 (Tab)' })
     // その行にエラーがあるときだけ出る「修正」キー
     this.fixBtn = this.key('', () => runCommand('quickFix'), { icon: 'bulb', cls: 'fix hidden', title: 'この行のエラーを修正' })
+    // Claude: 選択していなければ続きを提案、選択中なら頼むメニュー
+    const aiBtn = aiReady() ? this.key('', v => runCommand(v.state.selection.main.empty ? 'aiSuggest' : 'aiSelectionMenu', this.aiBtnEl), { icon: 'sparkle', cls: 'ai', title: 'Claude (続きを提案 / 選択範囲を頼む)' }) : null
+    this.aiBtnEl = aiBtn
     row.append(
       this.key('Tab', v => { if (!acceptGhost(v)) { if (!v.state.selection.main.empty) indentMore(v); else insertTab(v) } }, { cls: 'wide', title: 'Tab (候補があれば確定)' }),
       this.acceptBtn,
       this.fixBtn,
+      ...(aiBtn ? [aiBtn] : []),
       this.key('←', mv(cursorCharLeft, selectCharLeft), { repeat: true, cls: 'arrow', title: '左' }),
       this.key('→', mv(cursorCharRight, selectCharRight), { repeat: true, cls: 'arrow', title: '右' }),
       this.key('↑', mv(cursorLineUp, selectLineUp), { repeat: true, cls: 'arrow', title: '上' }),

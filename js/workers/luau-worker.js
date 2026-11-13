@@ -10,13 +10,17 @@ import * as runtimeNs from '../luau/runtime.js'
 import { loadChunk } from '../luau/compiler.js'
 import { Debugger, inspect } from '../luau/debug.js'
 
+// メッセージの送り先 (通常はワーカーの外。ワーカーを使えない環境ではメインスレッドで動かす: attachHost)
+let post = m => self.postMessage(m)
+
 let apiPromise = null
 function loadApi() {
   if (!apiPromise) {
     apiPromise = fetch(new URL('../../data/roblox-api.json', import.meta.url)).then(r => {
       if (!r.ok) throw new Error('Roblox API データの読み込みに失敗しました (' + r.status + ')')
       return r.json()
-    }).catch(e => { apiPromise = null; throw e })
+    }).catch(e => import('../../data/roblox-api.js').then(m => m.default, () => { throw e }))
+      .catch(e => { apiPromise = null; throw e })
   }
   return apiPromise
 }
@@ -27,7 +31,7 @@ let lastFlush = 0
 let lineCount = 0
 const MAX_LINES = 20000
 function flush() {
-  if (buf.length) { self.postMessage({ type: 'output', items: buf }); buf = [] }
+  if (buf.length) { post({ type: 'output', items: buf }); buf = [] }
   lastFlush = performance.now()
 }
 function emit(kind, text) {
@@ -75,7 +79,7 @@ function finish(reason) {
   clearInterval(uiTimer)
   clearInterval(drawTimer)
   if (vm.debugger && rt.debugger === vm.debugger) vm.debugger.mode = null
-  self.postMessage({ type: 'done', reason, ...snapshot(vm) })
+  post({ type: 'done', reason, ...snapshot(vm) })
 }
 
 function armDeadline(ms) {
@@ -114,13 +118,13 @@ function sendDrawings() {
   if (!vm || !vm.exec || vm.sched.paused) return
   if (!guiShown) {
     // 隠れている間は中身を送らず、「表示するものがある」ことだけ知らせる (画面側がゲームタブを開く)
-    if (!drawAvail) for (const d of vm.exec.drawings) if (!d.removed && d.props.get('Visible')) { drawAvail = true; self.postMessage({ type: 'guiAvail' }); break }
+    if (!drawAvail) for (const d of vm.exec.drawings) if (!d.removed && d.props.get('Visible')) { drawAvail = true; post({ type: 'guiAvail' }); break }
     return
   }
   const v = vm.exec.drawVersion()
   if (v === drawSent) return
   drawSent = v
-  try { self.postMessage({ type: 'drawings', list: snapshotDrawings(vm.exec.drawings) || [] }) } catch {}
+  try { post({ type: 'drawings', list: snapshotDrawings(vm.exec.drawings) || [] }) } catch {}
 }
 
 const vec = v => (v && v.luaTypeName === 'Vector2' ? [v.x, v.y] : null)
@@ -199,11 +203,11 @@ function checkUi() {
     uiMode = true
     clearTimeout(finishTimer)
     uiTick = 0
-    self.postMessage({ type: 'uiMode', interact: interactNow(vm) })
+    post({ type: 'uiMode', interact: interactNow(vm) })
   } else if (on && uiMode && ++uiTick % 5 === 0) {
     // 実行中も「操作できるもの」(キー入力のボタンなど) を最新にする
     const it = interactNow(vm)
-    if (it !== undefined) self.postMessage({ type: 'interact', interact: it })
+    if (it !== undefined) post({ type: 'interact', interact: it })
   } else if (!on && uiMode) {
     uiMode = false
     if (maxRunMs > 0 && !waiting) armDeadline(maxRunMs)
@@ -243,7 +247,7 @@ function handleInput(m) {
   } catch (e) {
     reportError(e)
   }
-  if (waiting && m.phase !== 'move') { waiting = false; self.postMessage({ type: 'resumed' }) }
+  if (waiting && m.phase !== 'move') { waiting = false; post({ type: 'resumed' }) }
   vm.sched.checkIdle()
 }
 function reportError(e) {
@@ -258,13 +262,13 @@ function postError(payload) {
   const seen = errSeen.get(key)
   if (!seen) {
     // 種類が多すぎるときは、まとめずにそのまま送る (捨てない)
-    if (errSeen.size > 200) { self.postMessage({ type: 'error', ...payload }); return }
+    if (errSeen.size > 200) { post({ type: 'error', ...payload }); return }
     errSeen.set(key, { n: 1, t: null })
-    self.postMessage({ type: 'error', ...payload })
+    post({ type: 'error', ...payload })
     return
   }
   seen.n++
-  if (!seen.t) seen.t = setTimeout(() => { seen.t = null; self.postMessage({ type: 'errorRepeat', text: key, n: seen.n }) }, 400)
+  if (!seen.t) seen.t = setTimeout(() => { seen.t = null; post({ type: 'errorRepeat', text: key, n: seen.n }) }, 400)
 }
 
 function errorPayload(e, chunk) {
@@ -297,13 +301,13 @@ async function run(msg) {
           waiting = true
           flush()
           clearTimeout(finishTimer)
-          self.postMessage({ type: 'waiting', ...snapshot(vm) })
+          post({ type: 'waiting', ...snapshot(vm) })
         }
         return
       }
       finish('idle')
     },
-    post: m => { if (currentVM !== vm) return; flush(); self.postMessage(m) },
+    post: m => { if (currentVM !== vm) return; flush(); post(m) },
     printSep: ' ',
     touch: !!opts.touch,
     device: opts.device || (opts.touch ? 'phone' : 'pc'),
@@ -320,7 +324,7 @@ async function run(msg) {
         flush()
         // 止まっている間は実行時間の上限を数えない
         if (deadline) { remainOnPause = Math.max(1000, deadline - performance.now()); clearTimeout(finishTimer) }
-        self.postMessage({ type: 'paused', ...info })
+        post({ type: 'paused', ...info })
       },
     })
     dbg.watches = opts.debug.watches || []
@@ -355,13 +359,13 @@ async function run(msg) {
   drawAvail = false
   interactKey = ''
   if (vm.exec) drawTimer = setInterval(sendDrawings, 40)
-  self.postMessage({ type: 'started', debug: !!vm.debugger })
+  post({ type: 'started', debug: !!vm.debugger })
   try {
     if (msg.repl) startRepl(vm, msg.source)
     else { vm.mainChunk = msg.chunkName; vm.run(msg.source, msg.chunkName) }
   } catch (e) {
     flush()
-    self.postMessage({ type: 'error', ...errorPayload(e, msg.chunkName) })
+    post({ type: 'error', ...errorPayload(e, msg.chunkName) })
     finish('error')
   }
 }
@@ -375,9 +379,9 @@ function debugCommand(m) {
   if (!dbg) return
   if (m.action === 'pause') { dbg.requestPause(); return }
   if (!vm.sched.paused) return
-  self.postMessage({ type: 'debugResumed' })
+  post({ type: 'debugResumed' })
   if (remainOnPause) { armDeadline(remainOnPause); remainOnPause = 0 }
-  try { dbg.resume(m.action) } catch (e) { flush(); self.postMessage({ type: 'error', ...errorPayload(e) }) }
+  try { dbg.resume(m.action) } catch (e) { flush(); post({ type: 'error', ...errorPayload(e) }) }
 }
 
 // ============================================================
@@ -430,13 +434,13 @@ function evaluate(m) {
     vm.debugger.condCache = save
     if (r.ok) { if (r.values.length) emit('result', display(r.values)) } else emit('error', r.error)
     flush()
-    self.postMessage({ type: 'evalDone', id: m.id })
+    post({ type: 'evalDone', id: m.id })
     return
   }
   try {
     if (vm) {
       startRepl(vm, m.code)
-      if (waiting) { waiting = false; self.postMessage({ type: 'resumed' }) }
+      if (waiting) { waiting = false; post({ type: 'resumed' }) }
       vm.sched.checkIdle()
     } else if (lastVM) {
       // 終了した実行の環境を再び動かす
@@ -452,7 +456,7 @@ function evaluate(m) {
       drawSent = -1
       if (old.exec) drawTimer = setInterval(sendDrawings, 40)
       if (old.gui) old.gui.full()
-      self.postMessage({ type: 'started', repl: true })
+      post({ type: 'started', repl: true })
       startRepl(old, m.code)
       old.sched.checkIdle()
     } else {
@@ -462,15 +466,14 @@ function evaluate(m) {
     }
   } catch (e) {
     flush()
-    self.postMessage({ type: 'error', ...errorPayload(e, 'コンソール') })
+    post({ type: 'error', ...errorPayload(e, 'コンソール') })
     if (currentVM && !currentVM.sched.running) currentVM.sched.checkIdle()
   }
   flush()
-  self.postMessage({ type: 'evalDone', id: m.id })
+  post({ type: 'evalDone', id: m.id })
 }
 
-self.onmessage = e => {
-  const msg = e.data
+function handleMessage(msg) {
   if (msg.type === 'run') run(msg)
   else if (msg.type === 'stop') finish('stopped')
   else if (msg.type === 'input') handleInput(msg)
@@ -481,19 +484,51 @@ self.onmessage = e => {
       vm.gui.setScreen(msg.w, msg.h)
       // 終了後も、最後の画面を新しい大きさで描き直す
       if (currentVM) vm.gui.full()
-      else { try { self.postMessage({ type: 'gui', patch: vm.gui.snapshot() }) } catch {} }
+      else { try { post({ type: 'gui', patch: vm.gui.snapshot() }) } catch {} }
     }
   }
-  else if (msg.type === 'warm') loadApi().then(() => self.postMessage({ type: 'warm' }), () => {})
+  else if (msg.type === 'warm') loadApi().then(() => post({ type: 'warm' }), () => {})
   else if (msg.type === 'debug') debugCommand(msg)
   else if (msg.type === 'breakpoints') { const d = currentVM && currentVM.debugger; if (d) d.setBreakpoints(msg.list) }
   else if (msg.type === 'watches') {
     const d = currentVM && currentVM.debugger
-    if (d) { d.watches = msg.list || []; if (currentVM.sched.paused) self.postMessage({ type: 'watchValues', watches: d.watches.map(w => d.watchValue(w)) }) }
+    if (d) { d.watches = msg.list || []; if (currentVM.sched.paused) post({ type: 'watchValues', watches: d.watches.map(w => d.watchValue(w)) }) }
   }
   else if (msg.type === 'expand') {
     const d = currentVM && currentVM.debugger
-    self.postMessage({ type: 'expanded', id: msg.id, items: d ? d.expand(msg.ref) : [] })
+    post({ type: 'expanded', id: msg.id, items: d ? d.expand(msg.ref) : [] })
   }
   else if (msg.type === 'eval') evaluate(msg)
+  else if (msg.type === 'describe') describe(msg)
 }
+
+// AI 用: いまの画面 (GUI・Drawing・ゲーム内のもの) を文章にする
+function describe(msg) {
+  const vm = currentVM || lastVM
+  let gui = '', drawings = '', tree = ''
+  try { gui = vm && vm.gui ? vm.gui.describe(msg.max || 180) : '(GUI なし)' } catch (e) { gui = '(GUI を読み取れませんでした: ' + e.message + ')' }
+  try {
+    const list = vm && vm.exec ? (snapshotDrawings(vm.exec.drawings) || []) : []
+    const R = v => Math.round(v)
+    const xy = v => (v ? `(${R(v[0])},${R(v[1])})` : '')
+    drawings = list.slice(0, 40).map(d => {
+      let s = d.kind
+      if (d.Position) s += ' at ' + xy(d.Position)
+      if (d.Size) s += ' size ' + xy(d.Size)
+      if (d.From) s += ' from ' + xy(d.From) + ' to ' + xy(d.To)
+      if (d.Radius) s += ' r=' + R(d.Radius)
+      if (d.Text) s += ' text=' + JSON.stringify(String(d.Text).slice(0, 40))
+      return s
+    }).join('\n') + (list.length > 40 ? `\n… (${list.length} drawings)` : '')
+  } catch {}
+  try {
+    const ws = vm && vm.rbx ? vm.rbx.game.children.find(c => c.ClassName === 'Workspace') : null
+    if (ws) tree = ws.children.slice(0, 40).map(c => `${c.ClassName} "${c.name}"${c.children.length ? ` (${c.children.length} children)` : ''}`).join('\n')
+  } catch {}
+  post({ type: 'described', id: msg.id, gui, drawings, workspace: tree, running: !!currentVM })
+}
+
+const IS_WORKER = typeof WorkerGlobalScope !== 'undefined' && typeof self !== 'undefined' && self instanceof WorkerGlobalScope
+if (IS_WORKER) self.onmessage = e => handleMessage(e.data)
+// ワーカーを作れない環境 (一部の埋め込み表示など) 用: 同じ処理をメインスレッドで動かす
+export function attachHost(fn) { post = fn; return handleMessage }
