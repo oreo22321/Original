@@ -152,13 +152,15 @@ export function haptic(ms = 8) {
 let toastHost = null
 export function toast(msg, opts = {}) {
   if (!toastHost) { toastHost = h('div', { class: 'toast-host' }); document.body.append(toastHost) }
-  const el = h('div', { class: 'toast ' + (opts.kind || '') }, opts.icon ? icon(opts.icon, 18) : null, h('span', null, msg),
+  const el = h('div', { class: 'toast ' + (opts.kind || '') }, opts.spinner ? h('span', { class: 'spinner' }) : opts.icon ? icon(opts.icon, 18) : null, h('span', null, msg),
     opts.action ? h('button', { class: 'toast-action', onclick: () => { opts.action.run(); el.remove() } }, opts.action.label) : null)
   // 同時に表示するのは 3 件まで
   while (toastHost.childElementCount >= 3) toastHost.firstElementChild.remove()
   toastHost.append(el)
   requestAnimationFrame(() => el.classList.add('show'))
-  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 250) }, opts.duration || 2600)
+  // 途中で閉じられるように (作業中の表示など)
+  el.close = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 250) }
+  setTimeout(el.close, opts.duration || 2600)
   return el
 }
 
@@ -319,8 +321,30 @@ export async function copyText(text) {
   }
 }
 
+// claude.ai の画面内ではページから直接ダウンロードできないので、保存の確認を出してもらう
+const SAVE_EXT = /\.(gif|png|jpe?g|webp|mp4|webm|txt|json|md|csv|html|svg|pdf|zip)$/i
+async function saveInClaude(name, blob) {
+  let dl = null
+  try { dl = await window.claude.use('downloads') } catch {}
+  if (!dl) return false
+  try {
+    await dl.save({ filename: SAVE_EXT.test(name) ? name : name + '.txt', data: blob })
+    toast('保存しました', { icon: 'check', duration: 1500 })
+  } catch (e) {
+    if (!e || e.code !== 'declined') toast('保存できませんでした' + (e && e.message ? ': ' + e.message : ''), { kind: 'error' })
+  }
+  return true
+}
+
 export function download(name, data, type = 'text/plain') {
   const blob = data instanceof Blob ? data : new Blob([data], { type: type + ';charset=utf-8' })
+  if (window.claude && typeof window.claude.use === 'function') {
+    saveInClaude(name, blob).then(done => { if (!done) anchorDownload(name, blob) })
+    return
+  }
+  anchorDownload(name, blob)
+}
+function anchorDownload(name, blob) {
   const url = URL.createObjectURL(blob)
   const a = h('a', { href: url, download: name })
   document.body.append(a)

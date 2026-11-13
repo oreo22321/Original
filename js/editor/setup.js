@@ -131,6 +131,10 @@ export function buildExtensions(ctx) {
     { key: 'Alt-w', run: () => { cmd.closeTab(); return true } },
     { key: 'Mod-Shift-o', run: () => { cmd.outline(); return true }, preventDefault: true },
     { key: 'Mod-.', run: () => { cmd.quickFix(); return true }, preventDefault: true },
+    // Claude: 続きを提案 / 選択範囲を頼む / パネルを開く
+    { key: 'Alt-\\', run: () => { cmd.command('aiSuggest'); return true }, preventDefault: true },
+    { key: 'Mod-i', run: () => { cmd.command('aiSelectionMenu'); return true }, preventDefault: true },
+    { key: 'Mod-Shift-i', run: () => { cmd.command('aiChat'); return true }, preventDefault: true },
   ])
   const luau = lang === 'luau'
   return [
@@ -162,7 +166,7 @@ export function buildExtensions(ctx) {
     luau ? keywordAutoCorrect(() => st().autoCorrect, ctx.onFix) : [],
     luau ? inlineSuggestions(() => {
       const c = st()
-      return { enabled: c.inlineSuggest, mode: ctx.getMode(), ai: c.aiInline && !!c.aiKey, aiProvider: ctx.aiProvider, aiDelay: c.aiDelay, onError: ctx.onAiError }
+      return { enabled: c.inlineSuggest, mode: ctx.getMode(), ai: c.aiInline && !!(ctx.aiReady && ctx.aiReady()), aiProvider: ctx.aiProvider, aiDelay: c.aiDelay, onError: ctx.onAiError }
     }) : [],
     luau ? luauAutoEnd(() => st().autoEnd) : [],
     luau && !ctx.readOnly ? autoFormat(() => ({ enabled: st().autoFormat !== false }), ctx.onAutoFormat) : [],

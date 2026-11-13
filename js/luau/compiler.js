@@ -3,6 +3,7 @@
 // コルーチンや task.wait は generator の yield で実現しています。
 import { parse } from './parser.js'
 import { LuauSyntaxError, toBytes } from './lexer.js'
+import { loadChunkInterp } from './interp.js'
 
 const HELPERS = 'topLocals:$topl,call:$call,callMethod:$callm,index:$idx,setindex:$set,T:$T,add:$add,sub:$sub,mul:$mul,div:$div,mod:$mod,pow:$pow,idiv:$idiv,unm:$unm,eq:$eq,lt:$lt,le:$le,gt:$gt,ge:$ge,concat:$cat,len:$len,chk:$chk,annot:$annot,fn:$fn0,tbl:$tbl,iter:$iter,interp:$interp,forNum:$forNum,EMPTY:$EMPTY,rtError:$err'
 
@@ -450,9 +451,18 @@ export function compileToJs(src, chunkname = 'main', debug = false) {
   return `"use strict";const {${HELPERS}}=$;const $NOF={};const $fn=(g,n,e)=>{const f=$fn0(g,n);f.envD=e;return f};return ${code};`
 }
 
+// eval (new Function) を使えるか。CSP で禁止された環境 (claude.ai の埋め込み表示など) では、構文木を直接実行するインタプリタを使います
+let canEval = null
+export function evalAllowed() {
+  if (canEval === null) { try { canEval = new Function('return 1')() === 1 } catch { canEval = false } }
+  return canEval
+}
+export function forceInterpreter(on) { canEval = on ? false : null }
+
 // ソースを読み込み LFunc を返す
 export function loadChunk(src, chunkname, env, helpers) {
   const dbg = helpers.rt && helpers.rt.debugger
+  if (!evalAllowed()) return loadChunkInterp(src, chunkname, env, helpers, dbg ? dbg.handle(chunkname) : null)
   const js = compileToJs(src, chunkname, !!dbg)
   const factory = new Function('$', '$E0', '$CH', '$D', js)
   const f = factory(helpers, env, chunkname, dbg ? dbg.handle(chunkname) : null)

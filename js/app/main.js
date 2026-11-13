@@ -1,4 +1,5 @@
 // ForgeCode 起動処理
+import './safe-storage.js'
 import { getSettings, onSettings, emit, on, loadSession, getMode } from './store.js'
 import { uiColors, THEMES } from '../editor/themes.js'
 import { intel } from '../editor/luau-intel.js'
@@ -11,6 +12,8 @@ import { createFromTemplate } from './explorer.js'
 import { APP_VERSION } from './settings-ui.js'
 import { showWhatsNew } from './views.js'
 import './palette.js'
+import './ai-actions.js'
+import { initClaude, IN_CLAUDE } from './claude.js'
 import './code-nav.js'
 import './remote-ui.js'
 import './extlibs.js'
@@ -66,6 +69,9 @@ async function boot() {
   setupErrorHandling()
   const root = document.getElementById('app')
   app.wb = new Workbench(root)
+  document.body.classList.toggle('in-claude', IN_CLAUDE)
+  // claude.ai で開いているときは、見ている人の Claude アカウントで AI が動く (API キー不要)
+  initClaude()
   intel.executor = getMode() === 'executor'
   on('mode', m => { intel.executor = m === 'executor' })
 
@@ -137,7 +143,7 @@ async function boot() {
   })
 
   // オフライン対応 (Service Worker)
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  if ('serviceWorker' in navigator && location.protocol !== 'file:' && !IN_CLAUDE) {
     navigator.serviceWorker.register('sw.js').then(reg => {
       reg.addEventListener('updatefound', () => {
         const w = reg.installing

@@ -7,6 +7,7 @@ import { outlineSymbols } from './palette.js'
 import { EditorState, EditorView, unifiedMergeView } from '../../vendor/codemirror.js'
 import { editorTheme } from '../editor/themes.js'
 import { getSettings } from './store.js'
+import { CLAUDE_APP_URL } from './claude.js'
 
 // ============================================================
 // ファイル内検索・置換
@@ -208,6 +209,16 @@ export function showHelp() {
     <li>コードを書くと自動で保存されます。保存の状態は画面下のバーに表示されます。</li>
     <li><b>▶</b> を押すと実行します。結果は下の「出力」、作った GUI は「ゲーム」タブに表示されます。</li>
   </ol>
+  <h3>Claude (AI)</h3>
+  <ul>
+    <li><b>Claude パネル</b> (✨ のアイコン): 「ショップの UI を作って」「このエラーを直して」のように頼むと、Claude がファイルを読み・編集・作成し、実行して結果と画面の GUI を確かめながら作業します。やったことは一覧で表示され、変更したファイルは <b>差分</b> で確認、<b>すべて元に戻す</b> で取り消せます。</li>
+    <li><b>続ける / 停止</b>: 作業が途中で終わったら「続ける」。送信ボタンは作業中に ■ (停止) になります。</li>
+    <li><b>画像</b>: ⤴ で UI のスクリーンショットなどを添付できます。</li>
+    <li><b>エディタで</b>: キーボードバーの ✨ (Alt + \\) で、カーソルの位置から続きを提案 (Tab で確定)。範囲を選んで ✨ (⌘/Ctrl + I) で、説明・バグ修正・整理・コメント・型注釈・指示して書き換え。赤い波線のメニューと実行エラーの「Claude で直す」でも頼めます。</li>
+    <li><b>API キーなしで使うには</b>: <a href="${CLAUDE_APP_URL}" target="_blank" rel="noopener">Claude 版</a> で開きます (claude.ai にログインして使います。料金はかからず、Claude の利用枠を使います)。最初の 1 回だけ、Claude を使ってよいかの確認が出ます。この画面 (GitHub Pages 版) では、設定で API キーを入れた場合だけ使えます。</li>
+    <li><b>プロジェクトの移動</b>: 2 つの版は保存場所が別です。「ファイル → ⋯ → プロジェクトを ZIP で保存」して、もう一方で「ZIP を読み込む」と移せます。</li>
+    <li>設定 → Claude で、モデル (速い / 標準 / 高性能) や、入力が止まったら自動で提案するかを選べます。</li>
+  </ul>
   <h3>2 つのモード</h3>
   <ul>
     <li><b>Studio</b>: Roblox Studio に貼り付けるスクリプト用。ファイル名で種類が決まります — <code>〜.server.luau</code> は Script、<code>〜.client.luau</code> は LocalScript、それ以外は ModuleScript。</li>
@@ -303,7 +314,15 @@ export function showHelp() {
 export function showWhatsNew() {
   const body = h('div', { class: 'help whats-new' })
   body.innerHTML = `
-  <p>ForgeCode 8 の新しい機能です。</p>
+  <p>ForgeCode 9 の新しい機能です。</p>
+  <ul>
+    <li><b>Claude を内蔵</b> — 「Claude」パネルで頼むと、Claude がプロジェクトのファイルを読み、編集・新規作成し、実行して出力・エラー・画面の GUI を確かめながら仕上げます。変更は差分で確認でき、まとめて元に戻せます。</li>
+    <li><b>API キー不要の Claude 版</b> — <a href="${CLAUDE_APP_URL}" target="_blank" rel="noopener">Claude 版</a> (claude.ai 上の ForgeCode) では、あなたの claude.ai アカウントで Claude が動きます。料金はかからず、Claude の利用枠を使います。</li>
+    <li><b>エディタでも Claude</b> — キーボードバーの ✨ (Alt + \\) で続きを提案、選択して ✨ (⌘/Ctrl + I) で「バグを直す・整理・コメント・型注釈・指示して書き換え」。エラーのメニューと実行エラーには「Claude で直す」。</li>
+    <li><b>画像から</b> — UI のスクリーンショットを添付して「これと同じ UI を作って」と頼めます。</li>
+    <li><b>どこでも実行</b> — Web Worker や eval が使えない環境でも、構文木を直接実行するエンジンに切り替えて動きます。</li>
+  </ul>
+  <p>ForgeCode 8 の機能:</p>
   <ul>
     <li><b>賢くなった補完</b> — 変数のスコープを正しく見分け、自分で作った関数の戻り値・クラス (<code>setmetatable</code> と <code>self.X</code>)・<code>type</code> 定義・<code>IsA</code> での絞り込みまで型を推論します。大きなファイルでも速さはそのままです。</li>
     <li><b>その場面に合う候補</b> — <code>part.Material = </code> で Enum の一覧、<code>humanoid:ChangeState(</code> で引数の Enum、<code>TweenService:Create(part, info, {</code> でアニメーションできるプロパティ、<code>GetAttribute("</code> で使った属性名。変数は型付きで、近いものから並びます。</li>
