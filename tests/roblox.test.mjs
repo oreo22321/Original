@@ -165,6 +165,19 @@ a.Completed:Connect(function(s) stateA = s.Name end)
 a:Play() task.wait(0.03) b:Play() task.wait(0.3)
 print(stateA, f.BackgroundTransparency)`, 'Cancelled 0.5'],
   ['stats', `local st = game:GetService("Stats") print(type(st.Network.ServerStatsItem["Data Ping"]:GetValue()), typeof(st:GetTotalMemoryUsageMb()))`, 'number number'],
+  ['raycast & spatial queries', `
+local floor = Instance.new("Part") floor.Name = "Floor" floor.Anchored = true floor.Size = Vector3.new(20, 1, 20) floor.Position = Vector3.new(50, 0, 0) floor.Material = Enum.Material.Grass floor.Parent = workspace
+local ball = Instance.new("Part") ball.Name = "Ball" ball.Shape = Enum.PartType.Ball ball.Size = Vector3.new(2, 2, 2) ball.Position = Vector3.new(55, 5, 0) ball.Parent = workspace
+local r = workspace:Raycast(Vector3.new(50, 10, 0), Vector3.new(0, -20, 0))
+print(r.Instance.Name, r.Position, r.Normal, r.Material, r.Distance)
+print(workspace:Raycast(Vector3.new(55, 10, 0), Vector3.new(0, -20, 0)).Instance.Name)
+local p = RaycastParams.new() p.FilterDescendantsInstances = {ball} p.FilterType = Enum.RaycastFilterType.Exclude
+print(workspace:Raycast(Vector3.new(55, 10, 0), Vector3.new(0, -20, 0), p).Instance.Name, workspace:Raycast(Vector3.new(50, 10, 0), Vector3.new(0, -5, 0)))
+print(#workspace:GetPartBoundsInRadius(Vector3.new(55, 5, 0), 1.5), workspace:GetPartBoundsInRadius(Vector3.new(55, 5, 0), 1.5)[1].Name)
+local cam = workspace.CurrentCamera cam.CFrame = CFrame.lookAt(Vector3.new(0, 5, 20), Vector3.new(0, 5, 0))
+local sp, on = cam:WorldToViewportPoint(Vector3.new(0, 5, 0))
+print(math.round(sp.X) == math.round(cam.ViewportSize.X / 2), math.round(sp.Y) == math.round(cam.ViewportSize.Y / 2), sp.Z, on, select(2, cam:WorldToViewportPoint(Vector3.new(0, 5, 40))))`,
+  'Floor 50, 0.5, 0 0, 1, 0 Enum.Material.Grass 9.5\nBall\nFloor nil\n1 Ball\ntrue true 20 true false'],
 ]
 
 let pass = 0, fail = 0

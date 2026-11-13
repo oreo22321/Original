@@ -47,6 +47,8 @@ let finishTimer = null
 let deadline = 0        // 実行時間の上限 (デバッガーで止まっている間は延長)
 let remainOnPause = 0
 let uiTimer = null
+let drawTimer = null
+let drawSent = -1       // 最後に送った Drawing の版
 let uiMode = false        // 操作できる GUI を表示中 (実行時間の上限を数えない)
 let guiShown = true       // 画面側でゲーム画面が見えているか
 let waiting = false
@@ -68,6 +70,7 @@ function finish(reason) {
   uiMode = false
   clearTimeout(finishTimer)
   clearInterval(uiTimer)
+  clearInterval(drawTimer)
   if (vm.debugger && rt.debugger === vm.debugger) vm.debugger.mode = null
   self.postMessage({ type: 'done', reason, ...snapshot(vm) })
 }
@@ -102,12 +105,24 @@ function snapshotTree(root, depth = 0) {
   return node
 }
 
+// Drawing を画面に送る (変更があったときだけ、最大 25 回/秒。ゲーム画面が隠れている間は送らない)
+function sendDrawings() {
+  const vm = currentVM
+  if (!vm || !vm.exec || !guiShown || vm.sched.paused) return
+  const v = vm.exec.drawVersion()
+  if (v === drawSent) return
+  drawSent = v
+  try { self.postMessage({ type: 'drawings', list: snapshotDrawings(vm.exec.drawings) || [] }) } catch {}
+}
+
+const vec = v => (v && v.luaTypeName === 'Vector2' ? [v.x, v.y] : null)
 function snapshotDrawings(set) {
   if (!set || !set.size) return null
   const out = []
   for (const d of set) {
     if (d.removed || !d.props.get('Visible')) continue
     const o = { kind: d.kind }
+    if (d.kind === 'Image') { out.push({ kind: 'Image', Position: vec(d.props.get('Position')), Size: vec(d.props.get('Size')), Transparency: d.props.get('Transparency'), ZIndex: d.props.get('ZIndex') }); continue }
     for (const [k, v] of d.props) {
       if (typeof v === 'number' || typeof v === 'boolean') o[k] = v
       else if (typeof v === 'string') o[k] = fromBytes(v)
@@ -160,6 +175,8 @@ function checkUi() {
   if (!vm || !vm.gui || vm.sched.paused) return
   let on = false
   try { on = vm.gui.interactive() } catch {}
+  // Drawing (ESP など) を表示している間も、見ている画面なので時間切れにしない
+  if (!on && vm.exec && guiShown) { for (const d of vm.exec.drawings) if (!d.removed && d.props.get('Visible')) { on = true; break } }
   if (on && !uiMode) {
     uiMode = true
     clearTimeout(finishTimer)
@@ -311,6 +328,8 @@ async function run(msg) {
   maxRunMs = opts.maxRunTime > 0 ? opts.maxRunTime * 1000 : 0
   if (maxRunMs) armDeadline(maxRunMs)
   uiTimer = setInterval(checkUi, 400)
+  drawSent = -1
+  if (vm.exec) drawTimer = setInterval(sendDrawings, 40)
   self.postMessage({ type: 'started', debug: !!vm.debugger })
   try {
     if (msg.repl) startRepl(vm, msg.source)
@@ -404,6 +423,9 @@ function evaluate(m) {
       rt.debugger = null
       rt.halted = null
       uiTimer = setInterval(checkUi, 400)
+      clearInterval(drawTimer)
+      drawSent = -1
+      if (old.exec) drawTimer = setInterval(sendDrawings, 40)
       if (old.gui) old.gui.full()
       self.postMessage({ type: 'started', repl: true })
       startRepl(old, m.code)
@@ -427,7 +449,7 @@ self.onmessage = e => {
   if (msg.type === 'run') run(msg)
   else if (msg.type === 'stop') finish('stopped')
   else if (msg.type === 'input') handleInput(msg)
-  else if (msg.type === 'guiVisible') { guiShown = !!msg.on; const vm = currentVM; if (vm && vm.gui) vm.gui.setVisible(guiShown) }
+  else if (msg.type === 'guiVisible') { guiShown = !!msg.on; drawSent = -1; const vm = currentVM; if (vm && vm.gui) vm.gui.setVisible(guiShown) }
   else if (msg.type === 'screen') {
     const vm = currentVM || lastVM
     if (vm && vm.gui) {

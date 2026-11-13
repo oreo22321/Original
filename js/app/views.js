@@ -216,8 +216,10 @@ export function showHelp() {
   </ul>
   <h3>入力を助ける機能</h3>
   <ul>
-    <li><b>補完</b>: <code>game:GetService("</code> でサービス名、<code>part.</code> でプロパティ、<code>:</code> でメソッド。自分で作ったテーブルや、<code>require</code> したモジュールの中身も候補に出ます。</li>
-    <li><b>インライン候補</b>: 薄い文字の続きは <b>Tab</b> (スマホはキーボードの上の <b>✓</b>) で確定。<code>PlayerAdded:Connect(</code> では引数名 (player) まで入り、同じような行をくり返すと次の行を予測します。</li>
+    <li><b>補完</b>: <code>game:GetService("</code> でサービス名、<code>part.</code> でプロパティ、<code>:</code> でメソッド。自分で作ったテーブル・クラス (<code>setmetatable</code>)・関数の戻り値・<code>type</code> 定義・<code>require</code> したモジュールの中身も、型を推論して候補に出します。<code>if x:IsA("BasePart") then</code> の中では <code>x</code> を BasePart として扱います。</li>
+    <li><b>その場面に合う候補</b>: <code>part.Material = </code> で Enum の一覧、<code>humanoid:ChangeState(</code> で引数の Enum、<code>frame.Size = UD</code> で <code>UDim2.new(...)</code>、<code>TweenService:Create(part, info, {</code> でアニメーションできるプロパティ、<code>GetAttribute("</code> でこのファイルで使った属性名が出ます。見えている変数は型と一緒に、近くで宣言したものほど上に並びます。</li>
+    <li><b>インライン候補</b>: 薄い文字の続きは <b>Tab</b> (スマホはキーボードの上の <b>✓</b>) で確定。<code>PlayerAdded:Connect(</code> では引数名 (player) まで入り、<code>frame.Parent = </code> では親にふさわしい変数 (ScreenGui など)、<code>Instance.new("TextLabel")</code> の次の行では次に設定するプロパティを提案します。同じような行をくり返すと次の行を予測します。</li>
+    <li><b>自動整形</b>: 書き終えた行の空白 (<code>x=1+2</code> → <code>x = 1 + 2</code>、カンマの後など) を整え、入力が止まったときにエラーがなければファイル全体の字下げ・空行も直します。カーソルのある行には触れず、<kbd>⌘Z</kbd> は自分の入力だけを戻します。設定 → エディタ でオフにできます。</li>
     <li><b>end の自動入力・自動削除</b>: <code>if ... then</code> / <code>for ... do</code> / <code>function()</code> を書いた時点で、次の行に <code>end</code> が入ります。自分で <code>end</code> を書いても二重になりません。<code>if</code> や <code>function</code> を消すと、対になっていた <code>end</code> も一緒に消えます (<kbd>⌘Z</kbd> 1 回で元に戻せます)。</li>
     <li><b>スティッキースクロール</b>: 長いコードをスクロールすると、いま見ている <code>function</code> / <code>if</code> の行が画面の上に固定されます (タップでその行へ)。</li>
     <li><b>引数ヒント</b>: 関数の <code>(</code> の中で、引数の名前と型が表示されます (自分で作った関数も対象)。</li>
@@ -258,6 +260,8 @@ export function showHelp() {
     <li><b>ゲーム画面</b>: スクリプトが作った ScreenGui を、Roblox と同じ規則で大きさ・位置を計算して「ゲーム」タブに表示します (UIListLayout・UIPadding・AutomaticSize・ScrollingFrame・UIScale など)。タップ・ドラッグ (スライダーやウィンドウの移動)・スクロール・文字入力・キー入力がそのままスクリプトに届きます。右上の ⛶ で全画面 (スマホは自動で横向き)。</li>
     <li><b>スマホ / タブレット / PC</b>: ゲーム画面の大きさと、端末の種類 (TouchEnabled など) を切り替えられます。</li>
     <li><b>操作できるもの</b>: ClickDetector・ProximityPrompt・Touched・キー入力に関数を接続していると、「ゲーム」タブから試せます。</li>
+    <li><b>レイキャスト・カメラ</b>: <code>workspace:Raycast</code>・<code>GetPartBoundsInRadius</code> などは、パーツの位置と大きさから実際に計算します。<code>camera:WorldToViewportPoint</code> や <code>mouse.Hit</code> もカメラの向きから計算します。</li>
+    <li><b>Drawing</b> (Executor): <code>Drawing.new</code> で描いた線・四角・円・文字は、ゲーム画面に重ねてリアルタイムに表示されます (ESP などの確認に)。</li>
     <li>ファイルを長押し → <b>▶ で常にこのファイルを実行</b> を選ぶと、別のファイルを編集中でもそのファイルを実行します。</li>
     <li>無限ループは自動で止まります。<b>■</b> でいつでも停止できます。</li>
   </ul>
@@ -299,7 +303,15 @@ export function showHelp() {
 export function showWhatsNew() {
   const body = h('div', { class: 'help whats-new' })
   body.innerHTML = `
-  <p>ForgeCode 7 の新しい機能です。</p>
+  <p>ForgeCode 8 の新しい機能です。</p>
+  <ul>
+    <li><b>賢くなった補完</b> — 変数のスコープを正しく見分け、自分で作った関数の戻り値・クラス (<code>setmetatable</code> と <code>self.X</code>)・<code>type</code> 定義・<code>IsA</code> での絞り込みまで型を推論します。大きなファイルでも速さはそのままです。</li>
+    <li><b>その場面に合う候補</b> — <code>part.Material = </code> で Enum の一覧、<code>humanoid:ChangeState(</code> で引数の Enum、<code>TweenService:Create(part, info, {</code> でアニメーションできるプロパティ、<code>GetAttribute("</code> で使った属性名。変数は型付きで、近いものから並びます。</li>
+    <li><b>ゴーストテキストの強化</b> — <code>frame.Parent = </code> で親にふさわしい ScreenGui / Frame、<code>Instance.new("TextLabel")</code> の次の行で次に設定するプロパティ、<code>mt.__namecall = </code> でフックのひな形、<code>Drawing.new</code> の設定などを提案します。</li>
+    <li><b>自動整形</b> — 書き終えた行の空白を整え、入力が止まるとファイル全体の字下げ・空行も裏で直します (エラーがないときだけ。カーソルの行には触れません)。整形した行は一瞬光ります。</li>
+    <li><b>実行の強化</b> — <code>Raycast</code>・範囲内のパーツ・<code>WorldToViewportPoint</code>・<code>mouse.Hit</code> を実際に計算。<code>Drawing</code> はゲーム画面にリアルタイムで重ねて表示します。</li>
+  </ul>
+  <p>ForgeCode 7 の機能:</p>
   <ul>
     <li><b>loadstring がそのまま動く</b> — <code>loadstring(game:HttpGet(URL))()</code> で読み込む Obsidian・LinoriaLib・Orion・Kavo・WindUI などの UI ライブラリを、実際に表示してタップ・ドラッグで操作できます。</li>
     <li><b>本物に近いゲーム画面</b> — GUI の大きさ・位置を Roblox と同じ規則で計算します (UIListLayout・AutomaticSize・ScrollingFrame・UIScale など)。スライダーのドラッグ、文字入力、スクロール、キー入力にも対応。全画面表示もできます。</li>

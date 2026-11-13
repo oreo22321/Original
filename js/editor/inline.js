@@ -1,10 +1,11 @@
 // インライン候補 (ゴーストテキスト) — Tab で確定
 // ・ルールベースの即時候補 (オフラインで動作)
 // ・AI 候補 (設定で Claude API キーを登録した場合)
-import { StateField, StateEffect, EditorView, Decoration, WidgetType, ViewPlugin, Prec, keymap, completionStatus, EditorSelection, indentUnit, Annotation } from '../../vendor/codemirror.js'
+import { StateField, StateEffect, EditorView, Decoration, WidgetType, ViewPlugin, Prec, keymap, completionStatus, EditorSelection, indentUnit, Annotation, startCompletion } from '../../vendor/codemirror.js'
 import * as db from './apidb.js'
 import { headerAt } from './blocks.js'
-import { resolveChain, parseChain, docText, chainBefore, intel } from './luau-intel.js'
+import { resolveChain, parseChain, docText, chainBefore, intel, expectedTypeAt } from './luau-intel.js'
+import { textIndex } from './luau-index.js'
 import { membersOfRef, argTemplate } from './extlib.js'
 import { inStringOrComment } from './typo.js'
 import { addAutoEnd } from './autoend.js'
@@ -72,6 +73,8 @@ export function acceptGhost(view, partial = false) {
     userEvent: 'input.complete',
     scrollIntoView: true,
   })
+  // 続けて選ぶもの (テーブルのキー・Enum の項目) があれば候補を開く
+  if (!partial && (g.complete || /\.$/.test(text))) setTimeout(() => startCompletion(view), 0)
   return true
 }
 
@@ -183,6 +186,214 @@ function extFactory(src, lineFrom, varName, ind, unit) {
   const t = argTemplate(callM, ind, unit) || { text: '' }
   const head = `${best.obj}${sep}${best.name}(`
   return { text: head + t.text + ')', cursor: t.cursor !== undefined ? head.length + t.cursor : undefined }
+}
+
+// ---- 型から考える候補: プロパティの値・親・次に設定するプロパティ・引数 ----
+// プロパティに入れる値の定番 (クラスの種類で変わるものは gui / part)
+const PROP_VALUES = {
+  Size: { gui: 'UDim2.new(0, 200, 0, 50)', part: 'Vector3.new(4, 1, 2)' },
+  Position: { gui: 'UDim2.new(0.5, 0, 0.5, 0)', part: 'Vector3.new(0, 10, 0)' },
+  AnchorPoint: 'Vector2.new(0.5, 0.5)', BackgroundColor3: 'Color3.fromRGB(30, 30, 30)', TextColor3: 'Color3.fromRGB(255, 255, 255)',
+  ImageColor3: 'Color3.fromRGB(255, 255, 255)', BorderColor3: 'Color3.fromRGB(0, 0, 0)', BorderSizePixel: '0', BackgroundTransparency: '0',
+  Transparency: '0.5', TextSize: '14', TextScaled: 'true', TextWrapped: 'true', RichText: 'true', Font: 'Enum.Font.GothamBold',
+  Material: 'Enum.Material.SmoothPlastic', CornerRadius: 'UDim.new(0, 8)', Thickness: '1', Padding: 'UDim.new(0, 6)',
+  PaddingTop: 'UDim.new(0, 8)', PaddingBottom: 'UDim.new(0, 8)', PaddingLeft: 'UDim.new(0, 8)', PaddingRight: 'UDim.new(0, 8)',
+  SortOrder: 'Enum.SortOrder.LayoutOrder', FillDirection: 'Enum.FillDirection.Vertical', ZIndexBehavior: 'Enum.ZIndexBehavior.Sibling',
+  ResetOnSpawn: 'false', Anchored: 'true', CanCollide: 'false', Visible: 'false', Enabled: 'true', ClipsDescendants: 'true', AutoButtonColor: 'false',
+  WalkSpeed: '16', JumpPower: '50', JumpHeight: '7.2', Health: '100', MaxHealth: '100', Volume: '0.5', Looped: 'true',
+  ZIndex: '1', LayoutOrder: '1', CFrame: 'CFrame.new(0, 10, 0)', Brightness: '1', Range: '8', TextXAlignment: 'Enum.TextXAlignment.Left',
+  CanvasSize: 'UDim2.new(0, 0, 0, 0)', ScrollBarThickness: '4', AutomaticCanvasSize: 'Enum.AutomaticSize.Y', AutomaticSize: 'Enum.AutomaticSize.Y',
+  FillColor: 'Color3.fromRGB(255, 0, 0)', OutlineColor: 'Color3.fromRGB(255, 255, 255)', FillTransparency: '0.5', HoldDuration: '0',
+  MaxActivationDistance: '10', Rotation: '0', Shape: 'Enum.PartType.Ball', PlaybackSpeed: '1', TimePosition: '0', Archivable: 'true',
+}
+const STRING_PROPS = new Set(['Text', 'Name', 'ActionText', 'ObjectText', 'PlaceholderText', 'Title'])
+const ASSET_PROPS = new Set(['SoundId', 'Image', 'AnimationId', 'Texture', 'MeshId', 'TextureId', 'ImageContent'])
+const BY_TYPE = { Vector3: 'Vector3.new(0, 0, 0)', Vector2: 'Vector2.new(0, 0)', Color3: 'Color3.fromRGB(255, 255, 255)', UDim2: 'UDim2.new(0, 0, 0, 0)', UDim: 'UDim.new(0, 0)', CFrame: 'CFrame.new(0, 0, 0)', BrickColor: 'BrickColor.new("Bright red")', Font: 'Font.fromEnum(Enum.Font.Gotham)', NumberRange: 'NumberRange.new(0, 1)', ColorSequence: 'ColorSequence.new(Color3.fromRGB(255, 255, 255))', NumberSequence: 'NumberSequence.new(0)', bool: 'true', TweenInfo: 'TweenInfo.new(0.5)' }
+
+const isA = (c, b) => !!c && db.isA(c, b)
+const isGui = c => isA(c, 'GuiObject') || isA(c, 'LayerCollector') || isA(c, 'UIComponent') || isA(c, 'GuiBase2d')
+
+// 近くにある (見えている) 変数とその型 (近い順)
+function typedLocals(src, pos, limit = 50) {
+  const ctx = { text: src, pos, index: 0 }
+  const out = []
+  const t0 = Date.now()
+  for (const d of textIndex(src).visible(pos, 120).slice(0, limit)) {
+    if (Date.now() - t0 > 6) break
+    let ty = null
+    try { ty = resolveChain(parseChain(d.name), ctx) } catch { ty = null }
+    if (ty) out.push({ name: d.name, ty, cls: ty.k === 'class' ? ty.name : null, pos: d.pos })
+  }
+  return out
+}
+
+// obj (クラス cls) の親にふさわしいもの
+export function guessParent(src, pos, objName, cls, mode) {
+  if (!cls) return null
+  const locals = typedLocals(src, pos).filter(l => l.name !== objName && l.cls)
+  const near = test => { const l = locals.find(x => test(x.cls, x)); return l ? l.name : null }
+  const playerVar = () => near(c => c === 'Player')
+  if (isA(cls, 'UIComponent') || isA(cls, 'UIBase')) return near(c => isA(c, 'GuiObject'))
+  if (isA(cls, 'LayerCollector') && !isA(cls, 'BillboardGui') && !isA(cls, 'SurfaceGui')) {
+    const pg = near(c => c === 'PlayerGui')
+    if (pg) return pg
+    if (mode === 'executor') return 'gethui and gethui() or game:GetService("CoreGui")'
+    const pl = playerVar()
+    return `${pl || 'game:GetService("Players").LocalPlayer'}:WaitForChild("PlayerGui")`
+  }
+  if (isA(cls, 'GuiObject')) return near(c => isA(c, 'LayerCollector') || c === 'Frame' || c === 'ScrollingFrame' || c === 'CanvasGroup')
+  if (isA(cls, 'ValueBase')) return near((c, l) => c === 'Folder' && /stats|data|folder/i.test(l.name)) || near(c => c === 'Folder' || c === 'Player')
+  if (isA(cls, 'BackpackItem')) { const pl = playerVar(); return near(c => c === 'Backpack') || (pl ? `${pl}.Backpack` : null) }
+  if (isA(cls, 'RemoteEvent') || isA(cls, 'RemoteFunction') || isA(cls, 'UnreliableRemoteEvent')) return near(c => c === 'ReplicatedStorage' || c === 'Folder') || 'game:GetService("ReplicatedStorage")'
+  if (isA(cls, 'Attachment') || isA(cls, 'Light') || isA(cls, 'ParticleEmitter') || isA(cls, 'JointInstance') || isA(cls, 'Constraint') || isA(cls, 'WeldConstraint') || isA(cls, 'FaceInstance') || isA(cls, 'DataModelMesh') || isA(cls, 'BodyMover') || isA(cls, 'Fire') || isA(cls, 'Smoke') || isA(cls, 'Sparkles') || cls === 'ClickDetector' || cls === 'ProximityPrompt' || cls === 'BillboardGui' || cls === 'SurfaceGui') return near(c => isA(c, 'BasePart')) || near(c => isA(c, 'Model'))
+  if (cls === 'Highlight') return near(c => isA(c, 'Model')) || near(c => isA(c, 'BasePart'))
+  if (cls === 'Sound') return near(c => isA(c, 'BasePart')) || 'workspace'
+  if (isA(cls, 'BasePart') || isA(cls, 'Model')) return near((c, l) => c === 'Folder' || (c === 'Model' && !/char/i.test(l.name))) || 'workspace'
+  if (cls === 'Folder') return 'workspace'
+  return null
+}
+
+// obj.Prop = の右辺の定番の値
+export function propValue(prop, cls, type, src, pos, objName, mode) {
+  if (prop === 'Parent') return guessParent(src, pos, objName, cls, mode)
+  if (STRING_PROPS.has(prop)) return { text: '""', cursor: 1 }
+  if (ASSET_PROPS.has(prop)) return { text: '"rbxassetid://"', cursor: 14 }
+  const v = PROP_VALUES[prop]
+  if (v) return typeof v === 'string' ? v : (isGui(cls) ? v.gui : v.part)
+  if (!type) return null
+  const T = type.replace(/\?$/, '')
+  if (BY_TYPE[T]) return BY_TYPE[T]
+  if (db.isClass(T)) { const l = typedLocals(src, pos).find(x => x.name !== objName && x.cls && isA(x.cls, T)); return l ? l.name : null }
+  return null
+}
+
+// local x = Instance.new("Frame") の後に、次に設定するとよいプロパティ
+const NEXT_PROPS = [
+  [c => isA(c, 'TextLabel') || isA(c, 'TextButton') || isA(c, 'TextBox'), ['Size', 'Position', 'BackgroundColor3', 'Text', 'TextColor3', 'TextSize', 'Font', 'Parent']],
+  [c => isA(c, 'ImageLabel') || isA(c, 'ImageButton'), ['Size', 'Position', 'BackgroundTransparency', 'Image', 'Parent']],
+  [c => isA(c, 'ScrollingFrame'), ['Size', 'Position', 'CanvasSize', 'ScrollBarThickness', 'BackgroundColor3', 'Parent']],
+  [c => isA(c, 'GuiObject'), ['Size', 'Position', 'BackgroundColor3', 'BorderSizePixel', 'Parent']],
+  [c => isA(c, 'LayerCollector'), ['Name', 'ResetOnSpawn', 'Parent']],
+  [c => c === 'UICorner', ['CornerRadius', 'Parent']],
+  [c => c === 'UIStroke', ['Thickness', 'Color', 'Parent']],
+  [c => c === 'UIListLayout', ['Padding', 'SortOrder', 'Parent']],
+  [c => c === 'UIPadding', ['PaddingTop', 'PaddingBottom', 'PaddingLeft', 'PaddingRight', 'Parent']],
+  [c => c === 'UIGradient', ['Color', 'Rotation', 'Parent']],
+  [c => isA(c, 'BasePart'), ['Size', 'Position', 'Anchored', 'Color', 'Material', 'Parent']],
+  [c => c === 'Sound', ['SoundId', 'Volume', 'Parent']],
+  [c => c === 'Highlight', ['FillColor', 'OutlineColor', 'Parent']],
+  [c => c === 'ProximityPrompt', ['ActionText', 'HoldDuration', 'Parent']],
+  [c => isA(c, 'ValueBase'), ['Name', 'Value', 'Parent']],
+  [c => isA(c, 'Light'), ['Brightness', 'Range', 'Parent']],
+  [() => true, ['Name', 'Parent']],
+]
+// local box = Drawing.new("Square") の後に設定するプロパティ (最後に Visible = true)
+const DRAWING_NEXT = {
+  Line: ['From', 'To', 'Color', 'Thickness', 'Visible'], Square: ['Size', 'Position', 'Color', 'Thickness', 'Filled', 'Visible'],
+  Circle: ['Position', 'Radius', 'Color', 'Thickness', 'Filled', 'NumSides', 'Visible'], Text: ['Text', 'Size', 'Position', 'Color', 'Center', 'Outline', 'Visible'],
+  Image: ['Data', 'Size', 'Position', 'Visible'], Triangle: ['PointA', 'PointB', 'PointC', 'Color', 'Filled', 'Visible'], Quad: ['PointA', 'PointB', 'PointC', 'PointD', 'Color', 'Filled', 'Visible'],
+}
+const DRAWING_VALUES = {
+  From: 'Vector2.new(0, 0)', To: 'Vector2.new(100, 100)', Color: 'Color3.fromRGB(255, 0, 0)', Thickness: '1', Visible: 'true', Position: 'Vector2.new(100, 100)',
+  Filled: 'false', Radius: '50', NumSides: '32', Text: '""', Center: 'true', Outline: 'true', Data: 'readfile("")', PointA: 'Vector2.new(0, 0)', PointB: 'Vector2.new(50, 0)', PointC: 'Vector2.new(25, 50)', PointD: 'Vector2.new(0, 50)',
+}
+function nextDrawingLine(lines, p) {
+  let name = null, kind = null
+  const set = new Set()
+  for (let q = p; q >= 0 && q > p - 30; q--) {
+    const t = lines[q].trim()
+    if (!t) continue
+    const dm = /^(?:local\s+)?([A-Za-z_]\w*)\s*=\s*Drawing\.new\(\s*["'](\w+)["']\s*\)/.exec(t)
+    if (dm && (!name || dm[1] === name)) { name = dm[1]; kind = dm[2]; break }
+    const pm = /^([A-Za-z_]\w*)\.(\w+)\s*=/.exec(t)
+    if (!pm || (name && pm[1] !== name)) return null
+    name = pm[1]
+    set.add(pm[2])
+  }
+  if (!kind || !DRAWING_NEXT[kind] || set.has('Visible')) return null
+  for (const prop of DRAWING_NEXT[kind]) {
+    if (set.has(prop)) continue
+    const v = prop === 'Size' ? (kind === 'Text' ? '16' : 'Vector2.new(50, 50)') : DRAWING_VALUES[prop]
+    const head = `${name}.${prop} = `
+    return v === '""' ? { text: head + v, cursor: head.length + 1 } : { text: head + v }
+  }
+  return null
+}
+
+function nextPropertyLine(lines, ln, src, pos, mode) {
+  let p = ln - 1
+  while (p >= 0 && !lines[p].trim()) p--
+  if (p < 0) return null
+  const prev = lines[p].trim()
+  if (/Drawing\.new|^\w+\.\w+\s*=/.test(prev) && /Drawing\.new/.test(lines.slice(Math.max(0, p - 30), p + 1).join('\n'))) {
+    const d = nextDrawingLine(lines, p)
+    if (d) return d
+  }
+  let m = /^(?:local\s+)?([A-Za-z_]\w*)\s*=\s*Instance\.new\(\s*["'](\w+)["']\s*(,[^)]*)?\)\s*(?:--.*)?$/.exec(prev)
+  let name, cls, withParent = false
+  if (m) { name = m[1]; cls = m[2]; withParent = !!m[3] }
+  else {
+    m = /^([A-Za-z_]\w*)\.\w+\s*=/.exec(prev)
+    if (!m) return null
+    name = m[1]
+    // 同じ変数を Instance.new で作った行までさかのぼる (設定の行が続いている間)
+    for (let q = p - 1; q >= 0 && q > p - 30; q--) {
+      const t = lines[q].trim()
+      if (!t) continue
+      const dm = new RegExp(`^(?:local\\s+)?${name}\\s*=\\s*Instance\\.new\\(\\s*["'](\\w+)["']\\s*(,[^)]*)?\\)`).exec(t)
+      if (dm) { cls = dm[1]; withParent = !!dm[2]; break }
+      if (!new RegExp(`^${name}\\.\\w+\\s*=`).test(t)) return null
+    }
+    if (!cls) return null
+  }
+  if (!db.isClass(cls)) return null
+  const set = new Set()
+  for (let q = p; q >= 0 && q > p - 30; q--) { const sm = new RegExp(`^\\s*${name}\\.(\\w+)\\s*=`).exec(lines[q]); if (sm) set.add(sm[1]) }
+  if (set.has('Parent') || withParent) return null
+  const order = NEXT_PROPS.find(([test]) => test(cls))[1]
+  for (const prop of order) {
+    if (set.has(prop)) continue
+    const mem = db.member(cls, prop)
+    if (!mem || mem.kind !== 'p') continue
+    let v = prop === 'Name' ? `"${name[0].toUpperCase()}${name.slice(1)}"` : propValue(prop, cls, mem.type, src, pos, name, mode)
+    if (!v) { if (prop === 'Parent') return null; continue }
+    const head = `${name}.${prop} = `
+    if (typeof v === 'object') return { text: head + v.text, cursor: head.length + v.cursor }
+    return { text: head + v }
+  }
+  return null
+}
+
+// obj:Method( → 引数のひな形 (型から確実に作れるときだけ)
+function apiArgTemplate(src, pos, mode) {
+  const callee = chainBefore(src, pos - 1)
+  const chain = callee && parseChain(callee)
+  if (!chain || !chain.steps.length) return null
+  const last = chain.steps[chain.steps.length - 1]
+  if (last.op !== ':' && last.op !== '.') return null
+  const ctx = { text: src, pos, index: 0 }
+  const parent = resolveChain({ root: chain.root, steps: chain.steps.slice(0, -1) }, ctx)
+  if (!parent || parent.k !== 'class') return null
+  if (parent.name === 'TweenService' && last.name === 'Create') {
+    const l = typedLocals(src, pos).find(x => x.cls && (isA(x.cls, 'GuiObject') || isA(x.cls, 'BasePart') || isA(x.cls, 'Model')))
+    const head = `${l ? l.name : 'part'}, TweenInfo.new(0.5), {`
+    return { text: head + '})', cursor: head.length, complete: true }
+  }
+  const mem = db.member(parent.name, last.name)
+  if (!mem || mem.kind !== 'f') return null
+  const params = db.paramsOf(mem.type).filter(p => !/\?$/.test(p.type))
+  if (!params.length) return null
+  const locals = typedLocals(src, pos)
+  const args = []
+  for (const p of params) {
+    const T = p.type
+    if (T === 'Vector3') { const l = locals.find(x => x.ty.k === 'dt' && x.ty.name === 'Vector3'); args.push(l ? l.name : 'Vector3.new(0, 0, 0)') }
+    else if (T === 'CFrame') { const l = locals.find(x => x.ty.k === 'dt' && x.ty.name === 'CFrame'); args.push(l ? l.name : 'CFrame.new(0, 10, 0)') }
+    else if (db.isClass(T)) { const l = locals.find(x => x.cls && isA(x.cls, T) && x.name !== chain.root.name); if (!l) return null; args.push(l.name) }
+    else if (T === 'bool') args.push('true')
+    else return null
+  }
+  return { text: args.join(', ') + ')' }
 }
 
 function balanced(s) {
@@ -312,6 +523,23 @@ export function luauLocalSuggest(state, pos, mode = 'studio') {
       if (/^(old|oldNamecall|oldIndex|original|orig)\w*$/.test(m[1]) && mode === 'executor') return null
       return null
     }
+    // ---- Instance.new("Frame", → 親 ----
+    if ((m = /Instance\.new\(\s*["'](\w+)["']\s*,\s*$/.exec(before))) {
+      const lm = /^\s*(?:local\s+)?([A-Za-z_]\w*)\s*=/.exec(before)
+      const par = guessParent(src, line.from, lm ? lm[1] : null, m[1], mode)
+      return par ? { text: par + (after.startsWith(')') ? '' : ')') } : null
+    }
+    // ---- obj.Prop = → 型に合った定番の値 / { Size = (Tween の目標) ----
+    if (/(?:\.\s*[A-Za-z_]\w*|(?:^|[{,;])\s*[A-Za-z_]\w*)\s*=\s*$/.test(before) && !/(==|~=|<=|>=)\s*$/.test(before) && !/^\s*local\s/.test(before)) {
+      let exp = null
+      try { exp = expectedTypeAt(state, pos, { text: src, pos, index: 0 }) } catch { exp = null }
+      if (exp && exp.src === 'assign' && exp.prop) {
+        const om = /([A-Za-z_]\w*)\s*\.\s*[A-Za-z_]\w*\s*=\s*$/.exec(before)
+        const v = propValue(exp.prop, exp.cls, exp.type, src, line.from, om ? om[1] : null, mode)
+        if (v) return typeof v === 'object' ? { text: sp + v.text, cursor: sp.length + v.cursor } : { text: sp + v }
+      }
+    }
+    if ((m = /^\s*local\s+[A-Za-z_]\w*\s*:\s*(\w+)\s*=\s*$/.exec(before)) && BY_TYPE[m[1]]) return { text: sp + BY_TYPE[m[1]] }
     // ---- イベント: :Connect( → function(引数) ... end) ----
     if (/:(Connect|Once|ConnectParallel)\(\s*$/.test(before)) {
       const head = `function(${eventParams(src, before, pos)})\n`
@@ -322,6 +550,9 @@ export function luauLocalSuggest(state, pos, mode = 'studio') {
     if (/[\w)\]"']\s*[.:]\s*[A-Za-z_]\w*\($/.test(before) && !/\b(?:Connect|Once|ConnectParallel)\($/.test(before)) {
       const t = extCallTemplate(src, pos, ind, unit)
       if (t) return { text: t.text + (after.startsWith(')') ? '' : ')'), cursor: t.cursor }
+      // Roblox API のメソッド (TweenService:Create( / humanoid:MoveTo( など)
+      const a = apiArgTemplate(src, pos, mode)
+      if (a) return { text: after.startsWith(')') ? a.text.replace(/\)$/, '') : a.text, cursor: a.cursor, complete: a.complete }
     }
     // ---- 関数を渡す呼び出し: task.spawn( / pcall( / table.sort(t, ----
     if ((m = /(?:^|[^\w.])((?:task|coroutine)\.\w+|pcall|xpcall|spawn|delay)\(\s*((?:[\d.]+)\s*,\s*)?$/.exec(before)) && m[1] in CALLBACK_CALLS && (CALLBACK_CALLS[m[1]] !== null || m[2])) {
@@ -374,6 +605,22 @@ export function luauLocalSuggest(state, pos, mode = 'studio') {
         const head = 'game, "__namecall", newcclosure(function(self, ...)\n', body = ind + unit
         return { text: head + body + 'local method = getnamecallmethod()\n' + body + '\n' + body + `return ${old}(self, ...)\n` + ind + 'end)' + (after.startsWith(')') ? '' : ')'), cursor: head.length + body.length + 'local method = getnamecallmethod()\n'.length + body.length }
       }
+      // old = hookfunction( → 対象, newcclosure(function(...) ... return old(...) end))
+      // (local old = hookfunction( の形では関数の中から old が見えないので出さない)
+      if ((m = /^\s*([A-Za-z_]\w*)\s*=\s*hookfunction\($/.exec(before))) {
+        const body = ind + unit
+        return { text: `, newcclosure(function(...)\n${body}\n${body}return ${m[1]}(...)\n${ind}end))`, cursor: 0 }
+      }
+      // mt.__namecall = → newcclosure(function(self, ...) ... return old(self, ...) end)
+      if ((m = /^\s*([A-Za-z_]\w*)\.(__namecall|__index|__newindex)\s*=\s*$/.exec(before))) {
+        const om = new RegExp(`\\blocal\\s+([A-Za-z_]\\w*)\\s*=\\s*${m[1]}\\.${m[2]}\\b`).exec(src.slice(0, line.from))
+        const old = om ? om[1] : null
+        const args = m[2] === '__namecall' ? 'self, ...' : m[2] === '__index' ? 'self, key' : 'self, key, value'
+        const body = ind + unit
+        const first = m[2] === '__namecall' ? `${body}local method = getnamecallmethod()\n` : ''
+        const head = `${sp}newcclosure(function(${args})\n${first}${body}`
+        return { text: head + (old ? `\n${body}return ${old}(${args})` : '') + `\n${ind}end)`, cursor: head.length }
+      }
       if (/(?:^|[^\w.])(?:request|http_request|syn\.request)\($/.test(before)) {
         const body = ind + unit
         return { text: '{\n' + body + 'Url = "",\n' + body + 'Method = "GET",\n' + ind + '}' + (after.startsWith(')') ? '' : ')'), cursor: 2 + body.length + 7 }
@@ -392,6 +639,10 @@ export function luauLocalSuggest(state, pos, mode = 'studio') {
   if (after.trim()) return null
   const next = analogyNext(lines, ln, typed)
   if (next) return { text: next }
+  if (!typed) {
+    const np = nextPropertyLine(lines, ln, docText(state), pos, mode)
+    if (np) return np
+  }
   if (typed) {
     const rep = lineRepeat(lines, ln, typed)
     if (rep) return { text: rep }
@@ -430,7 +681,7 @@ export function inlineSuggestions(getConfig) {
           let sug = null
           try { sug = luauLocalSuggest(state, pos, cfg.mode) } catch { sug = null }
           if (sug && sug.text) {
-            view.dispatch({ effects: setGhost.of({ pos, text: sug.text, cursor: sug.cursor, source: 'local' }) })
+            view.dispatch({ effects: setGhost.of({ pos, text: sug.text, cursor: sug.cursor, complete: sug.complete, source: 'local' }) })
             return
           }
           if (cfg.ai && cfg.aiProvider) {

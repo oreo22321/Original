@@ -16,6 +16,7 @@ import { errorLens, runErrorMarks } from './errorlens.js'
 import { autoEndPairs } from './autoend.js'
 import { breakpointGutter, debugHover } from './breakpoints.js'
 import { symbolHighlight, stickyScroll } from './symbols.js'
+import { autoFormat } from './autoformat.js'
 
 export function langOf(path) {
   const ext = (path.split('.').pop() || '').toLowerCase()
@@ -164,6 +165,7 @@ export function buildExtensions(ctx) {
       return { enabled: c.inlineSuggest, mode: ctx.getMode(), ai: c.aiInline && !!c.aiKey, aiProvider: ctx.aiProvider, aiDelay: c.aiDelay, onError: ctx.onAiError }
     }) : [],
     luau ? luauAutoEnd(() => st().autoEnd) : [],
+    luau && !ctx.readOnly ? autoFormat(() => ({ enabled: st().autoFormat !== false }), ctx.onAutoFormat) : [],
     luau ? autoEndPairs(() => { const c = st(); return { insert: c.autoEnd, remove: c.autoEndDelete !== false } }) : [],
     luau ? makeLinter(() => {
       const c = st()

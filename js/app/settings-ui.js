@@ -7,7 +7,7 @@ import * as vfs from './vfs.js'
 import { apiVersion } from '../editor/apidb.js'
 import { app, command, runCommand, setProjectKind } from './app.js'
 
-export const APP_VERSION = '7.0.0'
+export const APP_VERSION = '8.0.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -67,6 +67,7 @@ const SCHEMA = [
   { group: '保存', icon: 'save', items: [
     { key: 'autoSave', type: 'bool', label: '自動保存', desc: '入力が止まるとすぐ保存します。保存前にアプリが閉じても、下書きから復元されます' },
     { key: 'autoSaveDelay', type: 'range', min: 200, max: 3000, step: 100, label: '自動保存までの時間', unit: 'ms' },
+    { key: 'autoFormat', type: 'bool', label: '自動整形', desc: '書き終えた行の空白 (= や , の前後など) を整え、エラーのないときはファイル全体の字下げ・空行も裏で直します。カーソルのある行には触れません' },
     { key: 'formatOnSave', type: 'bool', label: '保存時に整形', desc: '⌘/Ctrl + S で保存したとき' },
     { key: 'trimOnSave', type: 'bool', label: '保存時に行末の空白を削除' },
     { key: 'confirmDelete', type: 'bool', label: '削除の前に確認' },

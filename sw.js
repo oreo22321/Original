@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = '555653e483'
+const VERSION = 'ec85530b0b'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -37,6 +37,7 @@ const PRECACHE = [
   "js/editor/ai.js",
   "js/editor/apidb.js",
   "js/editor/autoend.js",
+  "js/editor/autoformat.js",
   "js/editor/blocks.js",
   "js/editor/breakpoints.js",
   "js/editor/errorlens.js",
@@ -45,6 +46,7 @@ const PRECACHE = [
   "js/editor/format.js",
   "js/editor/inline.js",
   "js/editor/lint.js",
+  "js/editor/luau-index.js",
   "js/editor/luau-intel.js",
   "js/editor/luau-lang.js",
   "js/editor/setup.js",
@@ -62,6 +64,7 @@ const PRECACHE = [
   "js/luau/remote.js",
   "js/luau/roblox.js",
   "js/luau/runtime.js",
+  "js/luau/spatial.js",
   "js/luau/stdlib.js",
   "js/luau/vm.js",
   "js/workers/luau-worker.js",

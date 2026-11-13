@@ -3,6 +3,7 @@
 import { LTable, LFunc, LuaError, Coroutine, rt, native, nativeGen, call, callSync, rtError, tostring, typeOf, type, T, EMPTY, index, setindex, getMetatable } from './runtime.js'
 import { fromBytes, toBytes } from './lexer.js'
 import { V2, C3 } from './rbx-types.js'
+import { textWidth, fontKind } from './gui.js'
 import { awaitSignal } from './stdlib.js'
 
 const str = v => fromBytes(String(v))
@@ -469,8 +470,10 @@ export function installExecutor(G, ctx, rbx) {
   }))
   G.set('WebSocket', wsLib)
 
-  // ---- Drawing (プレビュー用に描画命令を記録) ----
+  // ---- Drawing (ゲーム画面に重ねて描く。変更があれば版を進め、ワーカーが差分を送る) ----
   const drawings = new Set()
+  let drawVer = 0
+  const DRAW_FONTS = ['Gotham', 'Arial', 'SourceSans', 'Code']
   const DRAW_DEFAULTS = {
     Line: { From: () => V2(0, 0), To: () => V2(0, 0), Thickness: () => 1 },
     Text: { Text: () => '', Size: () => 16, Center: () => false, Outline: () => false, OutlineColor: () => C3(0, 0, 0), Position: () => V2(0, 0), Font: () => 0, TextBounds: () => V2(0, 0) },
@@ -480,7 +483,7 @@ export function installExecutor(G, ctx, rbx) {
     Quad: { PointA: () => V2(0, 0), PointB: () => V2(0, 0), PointC: () => V2(0, 0), PointD: () => V2(0, 0), Thickness: () => 1, Filled: () => false },
     Triangle: { PointA: () => V2(0, 0), PointB: () => V2(0, 0), PointC: () => V2(0, 0), Thickness: () => 1, Filled: () => false },
   }
-  const drawRemove = native('Remove', A => { drawings.delete(A[0]); A[0].removed = true; return EMPTY })
+  const drawRemove = native('Remove', A => { if (drawings.delete(A[0])) drawVer++; A[0].removed = true; return EMPTY })
   const drawLib = new LTable()
   drawLib.set('new', native('Drawing.new', A => {
     const kind = fromBytes(A[0] || '')
@@ -493,22 +496,32 @@ export function installExecutor(G, ctx, rbx) {
       luaIndex(k) {
         if (k === 'Remove' || k === 'Destroy') return drawRemove
         if (k === '__OBJECT_EXISTS') return !this.removed
+        // 文字の大きさ (中央寄せの計算などに使われる)
+        if (k === 'TextBounds' && kind === 'Text') {
+          const size = props.get('Size') || 16
+          const lines = fromBytes(props.get('Text') || '').split('\n')
+          const fam = DRAW_FONTS[props.get('Font') | 0] || 'Gotham'
+          const font = { kind: fontKind(fam), weight: 400, italic: false, key: 'draw-' + fam }
+          return V2(Math.max(0, ...lines.map(l => textWidth(l, size, font))), lines.length * size)
+        }
         if (props.has(k)) return props.get(k)
         throw rtError(`${str(k)} is not a valid member of Drawing.${kind}`)
       },
       luaNewIndex(k, v) {
         if (!props.has(k)) throw rtError(`${str(k)} is not a valid member of Drawing.${kind}`)
-        props.set(k, v)
+        if (k === 'TextBounds') throw rtError('TextBounds is read-only')
+        if (props.get(k) !== v) { props.set(k, v); drawVer++ }
       },
       luaToString() { return 'Drawing.' + kind },
     }
     drawings.add(d)
+    drawVer++
     return d
   }))
   drawLib.set('Fonts', LTable.fromObject({ UI: 0, System: 1, Plex: 2, Monospace: 3 }))
-  drawLib.set('clear', native('Drawing.clear', () => { drawings.clear(); return EMPTY }))
+  drawLib.set('clear', native('Drawing.clear', () => { drawings.clear(); drawVer++; return EMPTY }))
   G.set('Drawing', drawLib)
-  def('cleardrawcache', () => { for (const d of drawings) d.removed = true; drawings.clear(); return EMPTY })
+  def('cleardrawcache', () => { for (const d of drawings) d.removed = true; drawings.clear(); drawVer++; return EMPTY })
   def('isrenderobj', A => !!(A[0] && A[0].luaTypeName === 'Drawing'))
   def('getrenderproperty', A => A[0].luaIndex(A[1]))
   def('setrenderproperty', A => { A[0].luaNewIndex(A[1], A[2]); return EMPTY })
@@ -680,5 +693,5 @@ export function installExecutor(G, ctx, rbx) {
   fluxus.set('set_thread_identity', G.get('setthreadidentity'))
 
   void type; void typeOf; void setindex
-  return { drawings }
+  return { drawings, drawVersion: () => drawVer }
 }

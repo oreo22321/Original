@@ -62,5 +62,33 @@ eq('analogy: mismatch typed', sug(gui + 'b.Size = UDim2.fromOffset(10, 10)\nb.Te
 eq('line repeat', sug('humanoid.WalkSpeed = 16\nprint(1)\nhumanoid.Walk|'), 'Speed = 16')
 eq('line repeat too short', sug('humanoid.WalkSpeed = 16\nprint(1)\nhum|'), null)
 
+// ---- v8: 型から考える候補 ----
+const H = `local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local screenGui = Instance.new("ScreenGui")
+local frame = Instance.new("Frame")
+local part = Instance.new("Part")
+`
+eq('gui color value', sug(H + 'frame.BackgroundColor3 = |'), 'Color3.fromRGB(30, 30, 30)')
+eq('part size value', sug(H + 'part.Size = |'), 'Vector3.new(4, 1, 2)')
+eq('gui size value', sug(H + 'frame.Size = |'), 'UDim2.new(0, 200, 0, 50)')
+eq('ScreenGui parent', sug(H + 'screenGui.Parent = |'), 'playerGui')
+eq('Frame parent', sug(H + 'frame.Parent = |'), 'screenGui')
+eq('Part parent', sug(H + 'part.Parent = |'), 'workspace')
+eq('UICorner parent', sug(H + 'local corner = Instance.new("UICorner")\ncorner.Parent = |'), 'frame')
+eq('next property', sug(H + 'local label = Instance.new("TextLabel")\n|'), 'label.Size = UDim2.new(0, 200, 0, 50)')
+eq('Parent comes last', sug(H + 'local p2 = Instance.new("Part")\np2.Size = Vector3.new(1, 1, 1)\np2.Position = Vector3.new(0, 5, 0)\np2.Anchored = true\np2.Color = Color3.new(1, 0, 0)\np2.Material = Enum.Material.Neon\n|'), 'p2.Parent = workspace')
+eq('no suggestion after Parent', sug(H + 'local p3 = Instance.new("Part")\np3.Parent = workspace\n|'), null)
+eq('Instance.new parent arg', sug(H + 'local b = Instance.new("TextButton", |'), 'frame)')
+eq('tween args', sug(H + 'game:GetService("TweenService"):Create(|'), 'part, TweenInfo.new(0.5), {})')
+eq('MoveTo arg', sug(H + 'local h = player.Character.Humanoid\nh:MoveTo(|'), 'Vector3.new(0, 0, 0))')
+eq('tween goal value', sug(H + 'game:GetService("TweenService"):Create(frame, TweenInfo.new(1), { Size = |'), 'UDim2.new(0, 200, 0, 50)')
+eq('asset id', sug(H + 'local s = Instance.new("Sound")\ns.SoundId = |'), '"rbxassetid://"')
+eq('executor ScreenGui parent', sug('local g = Instance.new("ScreenGui")\ng.Parent = |', 'executor'), 'gethui and gethui() or game:GetService("CoreGui")')
+eq('drawing props', sug('local box = Drawing.new("Square")\nbox.Size = Vector2.new(10, 10)\n|', 'executor'), 'box.Position = Vector2.new(100, 100)')
+eq('hookfunction body', sug('local old\nold = hookfunction(|', 'executor'), ', newcclosure(function(...)\n\t\n\treturn old(...)\nend))')
+eq('namecall hook', sug('local mt = getrawmetatable(game)\nlocal oldNc = mt.__namecall\nmt.__namecall = |', 'executor'), 'newcclosure(function(self, ...)\n\tlocal method = getnamecallmethod()\n\t\n\treturn oldNc(self, ...)\nend)')
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)
