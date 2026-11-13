@@ -56,12 +56,9 @@ export const DEFAULTS = {
   explainErrors: true, // 実行エラーに日本語の解説を付ける
   netProxy: '',        // 外部 URL を直接取得できないときの中継サーバー ('' / corsproxy / allorigins / 独自 URL)
   // AI
-  aiKey: '',
-  aiModel: 'claude-opus-5-5',
-  aiInline: false,
-  aiDelay: 800,
-  aiIncludeFile: true,
-  aiTier: 'default',   // Claude のモデル: quick (速い) / default (標準) / complex (高性能)
+  aiInline: true,      // 入力が止まったら AI (内蔵の統計モデル) が続きを提案
+  aiDelay: 700,
+  aiLlm: '',           // 高性能モード (端末内 LLM): '' (使わない) / small / medium / large
   // モバイル
   keybar: true,
   keybarKeys: '( ) { } [ ] " \' = . : , ; + - * / # ~ < > _ ` ! & | % ^ @ \\ $ ?',
@@ -77,8 +74,13 @@ try {
   if (raw) {
     const saved = JSON.parse(raw)
     // 廃止した設定は捨てる
-    for (const k of Object.keys(saved)) if (!(k in DEFAULTS)) delete saved[k]
+    let dropped = false
+    // v10: AI が内蔵になり無料で動くので、続きの提案を有効にする (以前は API の利用料を抑えるため既定でオフ)
+    if (!('aiLlm' in saved) && 'aiKey' in saved) saved.aiInline = true
+    for (const k of Object.keys(saved)) if (!(k in DEFAULTS)) { delete saved[k]; dropped = true }
     settings = { ...DEFAULTS, ...saved }
+    // 使わなくなった設定 (以前の API キーなど) は端末からも消す
+    if (dropped) localStorage.setItem(KEY, JSON.stringify(settings))
   }
 } catch {}
 
@@ -91,7 +93,7 @@ export function setSettings(patch) {
   for (const fn of listeners) fn(settings, prev)
 }
 export function resetSettings() {
-  const keep = { aiKey: settings.aiKey, onboarded: true }
+  const keep = { onboarded: true }
   settings = { ...DEFAULTS, ...keep }
   try { localStorage.setItem(KEY, JSON.stringify(settings)) } catch {}
   for (const fn of listeners) fn(settings, {})

@@ -451,7 +451,7 @@ export function compileToJs(src, chunkname = 'main', debug = false) {
   return `"use strict";const {${HELPERS}}=$;const $NOF={};const $fn=(g,n,e)=>{const f=$fn0(g,n);f.envD=e;return f};return ${code};`
 }
 
-// eval (new Function) を使えるか。CSP で禁止された環境 (claude.ai の埋め込み表示など) では、構文木を直接実行するインタプリタを使います
+// eval (new Function) を使えるか。CSP で禁止された環境 (厳しい CSP を設定したホスティングなど) では、構文木を直接実行するインタプリタを使います
 let canEval = null
 export function evalAllowed() {
   if (canEval === null) { try { canEval = new Function('return 1')() === 1 } catch { canEval = false } }

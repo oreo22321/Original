@@ -20,7 +20,7 @@ const VIEWS = [
   ['files', 'files', 'ファイル'],
   ['search', 'search', '検索'],
   ['outline', 'outline', '構造'],
-  ['ai', 'sparkle', 'Claude'],
+  ['ai', 'sparkle', 'AI'],
   ['settings', 'gear', '設定'],
 ]
 
@@ -261,7 +261,7 @@ export class Workbench {
       { label: '変更履歴', icon: 'history', run: () => runCommand('history'), disabled: !doc },
       { label: '長い行を折り返す', icon: 'wrap', checked: s.wordWrap, run: () => setSettings({ wordWrap: !s.wordWrap }) },
       '-',
-      { label: 'Claude に頼む', icon: 'sparkle', run: () => runCommand('aiChat') },
+      { label: 'AI に頼む', icon: 'sparkle', run: () => runCommand('aiChat') },
       { label: 'コマンドパレット', icon: 'command', hint: '⇧⌘P', run: () => runCommand('palette') },
       { label: 'プロジェクト一覧', icon: 'folder', run: () => runCommand('projects') },
       { label: '設定', icon: 'gear', run: () => runCommand('settings') },

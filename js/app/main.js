@@ -13,7 +13,7 @@ import { APP_VERSION } from './settings-ui.js'
 import { showWhatsNew } from './views.js'
 import './palette.js'
 import './ai-actions.js'
-import { initClaude, IN_CLAUDE } from './claude.js'
+import { refreshCorpus } from './ai-host.js'
 import './code-nav.js'
 import './remote-ui.js'
 import './extlibs.js'
@@ -63,17 +63,37 @@ function setupErrorHandling() {
   } })
 }
 
+// オフライン対応 (Service Worker)。はじめての画面の操作を待たずに、起動したらすぐ登録する
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      reg.addEventListener('updatefound', () => {
+        const w = reg.installing
+        if (!w) return
+        w.addEventListener('statechange', () => {
+          if (w.state === 'installed' && navigator.serviceWorker.controller) {
+            toast('新しいバージョンがあります', { action: { label: '更新', run: () => { app.editors.flushDrafts(); location.reload() } }, duration: 12000 })
+          }
+        })
+      })
+      // 開きっぱなしでも 1 時間ごとに更新を確認
+      setInterval(() => reg.update().catch(() => {}), 3600000)
+    }).catch(() => {})
+  }
+}
+
 async function boot() {
   const s = getSettings()
   applyTheme(s)
   setupErrorHandling()
   const root = document.getElementById('app')
   app.wb = new Workbench(root)
-  document.body.classList.toggle('in-claude', IN_CLAUDE)
-  // claude.ai で開いているときは、見ている人の Claude アカウントで AI が動く (API キー不要)
-  initClaude()
+  registerServiceWorker()
   intel.executor = getMode() === 'executor'
   on('mode', m => { intel.executor = m === 'executor' })
+  // 続きの提案 (AI) にプロジェクトのコードを学習させる
+  on('files', refreshCorpus)
+  on('saved', refreshCorpus)
 
   loadRobloxApi().then(() => app.editors.relint()).catch(e => toast('Roblox API データを読み込めませんでした: ' + e.message, { kind: 'error' }))
 
@@ -142,22 +162,7 @@ async function boot() {
     remoteTimer = setTimeout(() => refreshFiles(), 400)
   })
 
-  // オフライン対応 (Service Worker)
-  if ('serviceWorker' in navigator && location.protocol !== 'file:' && !IN_CLAUDE) {
-    navigator.serviceWorker.register('sw.js').then(reg => {
-      reg.addEventListener('updatefound', () => {
-        const w = reg.installing
-        if (!w) return
-        w.addEventListener('statechange', () => {
-          if (w.state === 'installed' && navigator.serviceWorker.controller) {
-            toast('新しいバージョンがあります', { action: { label: '更新', run: () => { app.editors.flushDrafts(); location.reload() } }, duration: 12000 })
-          }
-        })
-      })
-      // 開きっぱなしでも 1 時間ごとに更新を確認
-      setInterval(() => reg.update().catch(() => {}), 3600000)
-    }).catch(() => {})
-  }
+
   document.getElementById('boot') && document.getElementById('boot').remove()
 
   // バージョンアップ後に 1 度だけ変更点を表示

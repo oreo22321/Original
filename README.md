@@ -2,7 +2,7 @@
 
 スマホ・iPad・PC のブラウザで動く、**Roblox の Luau 専用**のコードエディタです。
 インストール不要で、ホーム画面に追加すればアプリのように全画面・オフラインで使えます。
-**Claude を内蔵**しており、[Claude 版](https://claude.ai/artifact/A8AyqZNprnumvcP85pG6mJ) で開けば API キーなしで、Claude がファイルを読み・編集し・実行して確かめながらコードを書きます。
+**自前の AI (Forge AI) を内蔵**しており、インターネットも API キーも使わずに、コードの自動修正・整形・説明・生成・質問への回答をアプリの中だけで行います。
 
 ![アイコン](icons/icon-192.png)
 
@@ -39,19 +39,22 @@
 | 💾 保存 | 入力が止まるとすぐ自動保存。保存が終わる前にアプリが閉じられても、**下書きから復元**します。変更履歴、ZIP の書き出し / 読み込み、共有シートにも対応 |
 | 🔍 検索 | ファイル内の検索・置換 (正規表現対応)、全ファイル検索・一括置換、ファイル名検索 (⌘P)、関数・変数へ移動 |
 | 📱 スマホ向け | 記号・矢印・Tab のキーボードバー、選択モード、ピンチで文字サイズ変更、長押しメニュー、画面キーボードに合わせたレイアウト |
-| ✨ Claude 内蔵 | 「Claude」パネルで頼むと、Claude が**ファイルを読み・編集・作成し、実行して出力・エラー・画面の GUI を確かめながら**仕上げます (Claude Code のような使い方)。変更は差分で確認でき、まとめて元に戻せます。UI のスクリーンショットも添付できます |
-| ✨ エディタの AI | ✨ キー (Alt + `\`) で Claude が続きを提案、範囲を選んで ✨ (⌘/Ctrl + I) で説明・バグ修正・整理・コメント・型注釈・指示して書き換え。エラーのメニューと実行エラーに「Claude で直す」。ローカルの補完はこれまでどおり即時に出ます |
+| ✨ Forge AI (内蔵) | 「AI」パネルで日本語で頼むと、**構文エラー・打ち間違い・非推奨 API・よくあるバグの自動修正**、整形・整理・最適化、コードの説明 (1 行ずつも)、コメント・型注釈の追加、**コードの生成** (「触れたら死ぬブロック」「E キーでドアが開く」「ショップの UI」…)、Luau / Roblox の質問への回答をすぐに行います。変更は差分で確認でき、まとめて元に戻せます。オフラインで動き、コードを外に送りません |
+| ✨ エディタの AI | ✨ キー (Alt + `\`) で続きを提案 (プロジェクトから学習)、`-- 触れたら死ぬ` のようなコメントの次の行ではコードを組み立てて提案。範囲を選んで ✨ (⌘/Ctrl + I) で直す・整理・整形・コメント・型注釈・説明。エラーのメニューと実行エラーに「AI で直す」 |
+| 🚀 高性能モード (任意) | 設定 → AI で端末内の言語モデル (Qwen2.5-Coder 0.5B / 1.5B / 3B) をオンにすると、決まった型に当てはまらない自由な依頼にも答えます。WebGPU で端末の中だけで動き、答えのコードは内蔵 AI が構文チェック・自動修正してから表示します |
 
-## Claude 版 (API キー不要)
+## Forge AI (内蔵 AI) のしくみ
 
-[https://claude.ai/artifact/A8AyqZNprnumvcP85pG6mJ](https://claude.ai/artifact/A8AyqZNprnumvcP85pG6mJ) は、claude.ai 上で動く ForgeCode です。
+Forge AI は、外部のサービスに頼らずアプリの中だけで動く AI です。
 
-- 開いた人の **claude.ai アカウント**で Claude が動きます。API キーは要らず、料金もかかりません (Claude の利用枠を使います)。最初の 1 回だけ、Claude を使ってよいかの確認が出ます。
-- 中身は GitHub Pages 版と同じアプリです (`node tools/build-artifact.mjs <出力フォルダ>` で公開用ファイルを作ります)。claude.ai の制限 (ダウンロード・eval・ワーカーなど) に合わせて自動で動き方を切り替えます: ダウンロードは claude.ai の保存確認を通し、eval が使えない場合は構文木を直接実行するエンジン (`js/luau/interp.js`) で実行します。
-- claude.ai に**ログインしたブラウザ**で開いてください (非公開のため、ログインしていないと「ページが見つかりません」になります)。
-- 安全のため、Claude が実行するコードは外部と通信しません (一度取得した loadstring のスクリプトはキャッシュから使えます)。回答に含まれる画像は自動で読み込みません。
-- 保存場所は GitHub Pages 版と別です。プロジェクトは **ZIP で保存 → ZIP を読み込む** で移せます。
-- GitHub Pages 版でも、設定で Anthropic の API キーを入れれば同じ Claude 機能を使えます (従量課金)。
+- **ことばの理解**: 依頼文から「何をしたいか」(直す・説明・作る・質問 …) と、数値・秒数・キー・色・名前を読み取ります (日本語・英語)。
+- **自動修正**: 構文エラーは「直し方の候補を試し、いちばん先まで正しく読めるもの」を選ぶ探索で直します (end・then・do・括弧の不足、`!=` `&&` `{ }` `//` などの他の言語の書き方、キーワードの打ち間違い、全角記号)。続けて、エディタのチェック (存在しないメンバー・非推奨 API・`.` と `:` の取り違え) とコードレビュー (pcall の使い方、`:Connect(f())`、`.Value` の付け忘れ …) の安全な修正を入れます。
+- **説明・コメント・型注釈**: 構文木を読み、Roblox の API の意味 (Touched・TakeDamage・TweenService …) を日本語の文にします。
+- **コード生成**: 「きっかけ」と「動作」を組み合わせて組み立てるほか、まとまった仕組み (データ保存・ショップ・ラウンド・NPC・ESP …) をレシピから作ります。生成したコードは必ず構文チェックを通します。
+- **質問への回答**: 内蔵の知識ベース (Luau・Roblox・エグゼキューター・このアプリの使い方) を BM25 で検索し、API データ (Roblox API ダンプ・標準ライブラリ) と組み合わせて答えます。
+- **続きの提案**: プロジェクトのコードと内蔵サンプルから n-gram の統計モデルを作り、行の続きを提案します。
+- **高性能モード (任意)**: [WebLLM](https://github.com/mlc-ai/web-llm) で Qwen2.5-Coder を端末内で動かします。モデルは使う人が選んだときだけ Hugging Face からダウンロードされ、ブラウザのキャッシュに残ります。モデルの実行コード (wasm) はハッシュ (SRI) を確かめてから使います。
+- AI が実行して確かめるときは、安全のため外部と通信しません (一度取得した loadstring のスクリプトはキャッシュから使えます)。
 
 ## はじめかた (GitHub Pages で無料公開)
 
@@ -122,14 +125,6 @@ ForgeCode には JavaScript で書かれた Luau 互換のエンジンが入っ�
 - **エグゼキューター API (模擬)**: 環境 (`getgenv`, `getrenv`, `getgc`, `filtergc` …)、クロージャ (`hookfunction`, `restorefunction`, `newcclosure` …)、メタテーブル (`hookmetamethod`, `getnamecallmethod`, `getrawmetatable`, `setreadonly` …)、シグナル (`getconnections`, `firesignal`, `hooksignal` …)、ファイル (`readfile` / `writefile` / `listfiles` … プロジェクトの `workspace/` フォルダに保存)、`request`, `game:HttpGet`, `crypt`, `Drawing` (ゲーム画面にリアルタイムで重ねて表示), `WebSocket`, `bit`, `cache`, `debug.*`, `syn.*` など。補完に出る関数はすべてサンドボックスにも存在します (`tests/executor.test.mjs` で確認)。
 - 無限ループは 10 秒 (設定で変更可) で自動停止します。■ でいつでも止められます。
 
-### AI (Claude) — 任意
-
-設定 → **AI (Claude)** に Anthropic の API キーを入れると使えます。
-
-- **AI チャット**: サイドバーの ✨ から、コードの説明・バグ探し・コメント追加・新しいコードの作成を頼めます。実行エラーの「AI に聞く」からも質問できます。
-- **AI のインライン候補**: 入力が止まると AI が続きを提案します (オンにした場合のみ)。
-- API キーはこの端末のブラウザにだけ保存され、Anthropic の API にのみ送信されます。利用料金は API キーの持ち主に請求されます。
-
 ## データの保存場所
 
 ファイルはブラウザ内 (IndexedDB) に保存されます。保存が終わる前の内容は下書きとして別に残るので、アプリが突然閉じられても次に開いたときに復元されます。
@@ -157,19 +152,29 @@ index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュー
     format.js / autoformat.js  整形 (空白・字下げ・空行) と、入力中の自動整形
     extlib.js                loadstring で読み込むライブラリのソース解析 (補完・ゴーストテキスト用)
     inline.js                インライン候補 (ゴーストテキスト)
-    ai.js                    Claude による続きの提案 (手動 / 自動)
+    ai.js                    AI による続きの提案 (統計モデル・コメントからコード)
     lint.js / typo.js        エラーチェック・誤字検出・自動修正
     errorlens.js             行の右に出るエラー表示
   js/app/                    画面 (ファイル一覧・タブ・実行パネル・ゲーム画面・設定・初回案内など)
     gui-preview.js           ゲーム画面 (差分の描画・タップ / ドラッグ / キー入力・全画面)
     extlibs.js / remote-ui.js  ライブラリの裏読み込み、外部スクリプトの管理・UI ライブラリのギャラリー
-    claude.js                Claude との接続 (claude.ai の sample 機能 = API キー不要 / API キー)
-    agent.js                 Claude エージェントのツール (読む・探す・編集・作成・実行・チェック・API 検索・元に戻す)
-    ai-panel.js / ai-actions.js  Claude パネル、エディタから頼む操作 (提案・修正・選択範囲の書き換え)
+    ai-host.js               Forge AI とアプリの窓口 (ファイルの読み書き・実行・変更の記録)
+    agent.js                 AI がファイルを扱う部品 (置き換え・差分・変更の取り消し・API 検索)
+    ai-panel.js / ai-actions.js  AI パネル、エディタから頼む操作 (提案・修正・選択範囲)
+  js/ai/                     Forge AI (内蔵 AI)
+    text.js                  ことばの理解 (正規化・意図・概念・値の取り出し・BM25)
+    knowledge.js             知識ベース (Luau / Roblox / エグゼキューター / アプリの使い方)
+    repair.js                構文の自動修復 (探索)・安全な自動修正・新しい書き方への置き換え
+    review.js                コードレビュー (バグ・性能・安全)
+    describe.js              日本語での説明・コメント・型注釈
+    generate.js              コード生成 (きっかけ × 動作の組み立て・レシピ)
+    complete.js              続きの提案 (n-gram)・コメントからコード
+    engine.js                依頼の振り分けと返事の組み立て
+    llm.js                   高性能モード (端末内 LLM・WebLLM)
   js/workers/                実行用の Web Worker
   js/data/                   補完用の API データ (Luau・エグゼキューター・スニペット)
 data/roblox-api.json         Roblox API ダンプ (変換済み)
-vendor/                      同梱ライブラリ (CodeMirror 6, fflate, Anthropic SDK)。ライセンスは vendor/LICENSES.txt
+vendor/                      同梱ライブラリ (CodeMirror 6, fflate, WebLLM)。ライセンスは vendor/LICENSES.txt
 sw.js                        オフライン用 Service Worker
 tests/                       テスト
 tools/                       ライブラリと API データを作り直すスクリプト
@@ -177,10 +182,9 @@ tools/                       ライブラリと API データを作り直すス�
 
 - テスト: `for f in tests/*.test.mjs; do node "$f" || break; done`
   - eval を使わないエンジンでも確認: `node --import ./tests/force-interp.mjs tests/luau-basic.test.mjs` (roblox / executor / gui / debug / extlib も同様)
-  - `agent` (Claude エージェントの置き換え・差分・API 検索) / `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論と補完の候補) / `format` (整形) / `indent` (字下げ・end) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
+  - `ai` (Forge AI: 理解・修復・レビュー・説明・生成・会話・続きの提案) / `agent` (置き換え・差分・API 検索) / `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論と補完の候補) / `format` (整形) / `indent` (字下げ・end) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
 - Roblox API データの更新: `node tools/build-roblox-api.mjs` (最新の API ダンプを取得して `data/roblox-api.json` を作り直します)
-- ライブラリの作り直し: `cd tools && npm install && npm run vendor`
-- Claude 版の公開用ファイル: `node tools/build-artifact.mjs <出力フォルダ>` (中の `files.json` が公開するファイルの一覧)
+- ライブラリの作り直し: `cd tools && npm install && npm run vendor` (端末内 LLM は `node vendor-webllm.mjs`。更新したら `js/ai/llm.js` の wasm のハッシュも更新)
 - ファイルを変更したら `node tools/build-sw.mjs` で Service Worker のキャッシュ一覧を更新してください (更新しないと古いキャッシュが使われることがあります)。
 
 Roblox は Roblox Corporation の商標です。ForgeCode は Roblox Corporation とは関係ありません。

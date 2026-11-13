@@ -321,27 +321,8 @@ export async function copyText(text) {
   }
 }
 
-// claude.ai の画面内ではページから直接ダウンロードできないので、保存の確認を出してもらう
-const SAVE_EXT = /\.(gif|png|jpe?g|webp|mp4|webm|txt|json|md|csv|html|svg|pdf|zip)$/i
-async function saveInClaude(name, blob) {
-  let dl = null
-  try { dl = await window.claude.use('downloads') } catch {}
-  if (!dl) return false
-  try {
-    await dl.save({ filename: SAVE_EXT.test(name) ? name : name + '.txt', data: blob })
-    toast('保存しました', { icon: 'check', duration: 1500 })
-  } catch (e) {
-    if (!e || e.code !== 'declined') toast('保存できませんでした' + (e && e.message ? ': ' + e.message : ''), { kind: 'error' })
-  }
-  return true
-}
-
 export function download(name, data, type = 'text/plain') {
   const blob = data instanceof Blob ? data : new Blob([data], { type: type + ';charset=utf-8' })
-  if (window.claude && typeof window.claude.use === 'function') {
-    saveInClaude(name, blob).then(done => { if (!done) anchorDownload(name, blob) })
-    return
-  }
   anchorDownload(name, blob)
 }
 function anchorDownload(name, blob) {

@@ -1,9 +1,8 @@
-// Claude エージェントの部品 (置き換え・差分・API 検索・候補の整形・JSON 読み取り):  node tests/agent.test.mjs
+// AI がファイルを扱う部品 (置き換え・差分・API 検索・候補の整形・安全):  node tests/agent.test.mjs
 import { readFileSync } from 'node:fs'
 import { applyReplace, lineDiff, minimalChange, numbered, lookupApi, cleanPath, byteLen } from '../js/app/agent.js'
 import { renderMarkdown } from '../js/app/markdown.js'
 import { cleanSuggestion } from '../js/editor/ai.js'
-import { parseJsonLoose } from '../js/app/claude.js'
 import { setRobloxApi } from '../js/editor/apidb.js'
 
 setRobloxApi(JSON.parse(readFileSync(new URL('../data/roblox-api.json', import.meta.url), 'utf8')))
@@ -67,12 +66,6 @@ eq('suggest dup line', cleanSuggestion('local x = 1', 'local x', ''), ' = 1')
 eq('suggest cut repeat', cleanSuggestion('a()\nprint(2)', 'local t = 1\n', '\nprint(2)\n'), 'a()')
 eq('suggest keep inner end', cleanSuggestion('if x then\n\treturn\nend', 'local t = 1\n', '\nend\n'), 'if x then\n\treturn\nend')
 eq('suggest cursor tag', cleanSuggestion('foo<CURSOR>', '', ''), 'foo')
-
-// ---- parseJsonLoose ----
-eq('json plain', parseJsonLoose('{"a":1}'), { a: 1 })
-eq('json fence', parseJsonLoose('Here:\n```json\n{"edits":[]}\n```'), { edits: [] })
-eq('json embedded', parseJsonLoose('結果: {"x": [1, 2]} です'), { x: [1, 2] })
-throws('json bad', () => parseJsonLoose('no json'), /読み取れません/)
 
 // ---- 安全: パス・送信サイズ・AI の回答の表示 ----
 eq('path normal', cleanPath('./src/main.lua'), 'src/main.lua')

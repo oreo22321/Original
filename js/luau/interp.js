@@ -1,5 +1,5 @@
 // Luau の構文木をそのまま実行するインタプリタ
-// eval / new Function が使えない環境 (claude.ai の埋め込み表示など、CSP で禁止されている場合) 用。
+// eval / new Function が使えない環境 (厳しい CSP で禁止されている場合など) 用。
 // compiler.js が出力する JavaScript と同じ順序・同じ補助関数で動くので、結果やエラーの位置は同じになります。
 // (速さはコンパイル版より遅くなります)
 import { parse } from './parser.js'
