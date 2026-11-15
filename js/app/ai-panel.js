@@ -62,7 +62,7 @@ export class AiView {
   build() {
     this.head = h('div', { class: 'side-head ai-head' })
     this.log = h('div', { class: 'ai-log', 'aria-live': 'polite' })
-    this.input = h('textarea', { class: 'input ai-input', rows: '2', placeholder: 'AI に頼む (例: 触れたら消えるパーツを作って / このエラーを直して)', autocapitalize: 'off', 'aria-label': 'AI への依頼' })
+    this.input = h('textarea', { class: 'input ai-input', rows: '2', placeholder: 'Forge AI に頼む…  例: このエラーを直して', autocapitalize: 'off', 'aria-label': 'AI への依頼' })
     this.input.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); this.send() } })
     this.input.addEventListener('input', () => this.autosize())
     this.sendBtn = h('button', { class: 'btn primary icon-only ai-send', 'aria-label': '送信', onclick: () => (this.busy ? this.stop() : this.send()) }, icon('send', 18))
@@ -84,11 +84,11 @@ export class AiView {
     const st = aiStatus()
     const l = st.llm
     let badge
-    if (st.llmReady) badge = h('span', { class: 'ai-badge ok', title: '内蔵 AI + 端末内の言語モデルで動いています' }, '高性能')
-    else if (st.llmKey && l.state === 'loading') badge = h('span', { class: 'ai-badge', title: l.progress.text }, `読込 ${Math.round((l.progress.value || 0) * 100)}%`)
+    if (st.llmReady) badge = h('span', { class: 'ai-badge ok', title: '内蔵 AI + 端末内の言語モデルで動いています' }, 'LLM')
+    else if (st.llmKey && l.state === 'loading') badge = h('span', { class: 'ai-badge', title: l.progress.text }, `${Math.round((l.progress.value || 0) * 100)}%`)
     else badge = h('span', { class: 'ai-badge ok', title: 'アプリ内蔵の AI (オフラインで動きます)' }, '内蔵')
     this.head.replaceChildren(
-      h('div', { class: 'side-title ai-title' }, icon('sparkle', 16), 'Forge AI', badge),
+      h('div', { class: 'side-title ai-title' }, icon('sparkle', 15), 'Forge AI', badge),
       h('div', { class: 'side-actions' },
         h('button', { class: 'icon-btn', title: 'AI の設定', 'aria-label': 'AI の設定', onclick: () => app.wb.showView('settings', 'AI') }, icon('gear', 18)),
         h('button', { class: 'icon-btn', title: '新しい会話', 'aria-label': '新しい会話', onclick: () => this.reset() }, icon('plus', 18))))
@@ -115,12 +115,12 @@ export class AiView {
   welcome() {
     const mode = getMode() === 'executor' ? 'executor' : 'studio'
     const box = h('div', { class: 'ai-welcome' },
-      h('div', { class: 'ai-empty-icon' }, icon('sparkle', 32)),
-      h('div', { class: 'ai-welcome-title' }, '何をしましょう?'),
-      h('p', { class: 'set-desc' }, 'Forge AI はアプリに内蔵された AI です。コードを直す・説明する・作る・質問に答える、をすぐに行います (インターネット不要)。変更はあとから「元に戻す」で取り消せます。'))
+      h('div', { class: 'ai-empty-icon' }, icon('sparkle', 18)),
+      h('div', { class: 'ai-welcome-title' }, 'Forge AI'),
+      h('p', { class: 'set-desc' }, 'コードの修正・説明・生成と、Luau / Roblox の質問に答えます。端末の中だけで動き、変更はいつでも元に戻せます。'))
     const grid = h('div', { class: 'ai-starters' })
     for (const s of STARTERS[mode] || STARTERS.studio) grid.append(h('button', { class: 'ai-starter', onclick: () => this.send(s.prompt) }, icon(s.icon, 18), h('span', null, s.title)))
-    box.append(grid, h('button', { class: 'btn small ghost ai-help-btn', onclick: () => this.send('何ができる?') }, icon('info', 14), 'できること一覧'))
+    box.append(grid, h('button', { class: 'btn small ghost ai-help-btn', onclick: () => this.send('何ができる?') }, 'できること一覧'))
     return box
   }
 

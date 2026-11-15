@@ -57,7 +57,7 @@ export const ghostField = StateField.define({
 
 export function hasGhost(state) { return !!state.field(ghostField, false) }
 
-// AI に続きを頼んでゴーストテキストとして出す (✨ キー / Alt+\\)
+// AI に続きを頼んでゴーストテキストとして出す (AI キー / Alt+\\)
 export async function requestAiGhost(view, aiProvider) {
   const state = view.state
   const sel = state.selection.main

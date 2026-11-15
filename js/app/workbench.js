@@ -146,6 +146,8 @@ export class Workbench {
     if (id === 'search') this.views.search.focus()
     if (id === 'outline') this.views.outline.render()
     if (id === 'ai') this.views.ai.render()
+    // AI の会話は文章が長いので、PC では少し広く表示する (ドラッグで変えた幅は変えない)
+    if (this.layout === 'desktop') this.sidebar.style.width = (id === 'ai' ? Math.max(this.sidebarWidth, 380) : this.sidebarWidth) + 'px'
     if (id === 'settings') {
       this.views.settings.render()
       if (focusText) { this.views.settings.search.value = focusText; this.views.settings.filter = focusText.toLowerCase(); this.views.settings.render() }

@@ -500,7 +500,7 @@ export function scanLoadstringUrls(text) {
 }
 const baseOfKind = k => (k === 'string' ? { k: 'string' } : k === 'number' ? { k: 'number' } : k === 'boolean' ? { k: 'bool' } : null)
 function extEntry(m, ty) {
-  const doc = [m.doc, `📚 ${ty.lib}`].filter(Boolean).join('\n')
+  const doc = [m.doc, `ライブラリ: ${ty.lib}`].filter(Boolean).join('\n')
   return m.k === 'fn' ? { kind: 'function', sig: sigOf(m), doc } : { kind: 'value', type: m.ty === 'table' ? 'table' : m.ty, doc }
 }
 function extStep(ty, st) {
@@ -975,8 +975,8 @@ function apiInfo(m, cls) {
     if (m.owner && m.owner !== cls) tags.push(m.owner + ' から継承')
     if (m.flags.includes('r')) tags.push('読み取り専用')
     if (m.flags.includes('y')) tags.push('待機あり (Yields)')
-    if (m.flags.includes('d')) tags.push('⚠ 非推奨')
-    if (m.flags.includes('s')) tags.push('🔒 権限が必要')
+    if (m.flags.includes('d')) tags.push('非推奨')
+    if (m.flags.includes('s')) tags.push('権限が必要')
     meta.textContent = tags.join(' ・ ')
     el.append(meta)
     return el
@@ -1415,7 +1415,7 @@ export function luauCompletionSource(context) {
     else if (kind === 'creatable') {
       if (!/Instance\s*\.\s*new\s*\(\s*["'][\w ]*$/.test(before)) return null
       const common = ['Part', 'Model', 'Folder', 'ScreenGui', 'Frame', 'TextLabel', 'TextButton', 'ImageLabel', 'TextBox', 'RemoteEvent', 'RemoteFunction', 'BindableEvent', 'IntValue', 'StringValue', 'BoolValue', 'NumberValue', 'ObjectValue', 'Sound', 'PointLight', 'Attachment', 'Weld', 'WeldConstraint', 'Highlight', 'BillboardGui', 'SurfaceGui', 'UICorner', 'UIStroke', 'UIListLayout', 'UIGridLayout', 'UIPadding', 'Tool', 'ProximityPrompt', 'ClickDetector', 'Animation', 'ParticleEmitter', 'Beam', 'Trail', 'MeshPart', 'UnionOperation', 'Decal', 'Texture', 'SpecialMesh', 'BodyVelocity', 'LinearVelocity', 'AlignPosition', 'VectorForce', 'Humanoid']
-      options = db.creatableClasses().map(n => ({ label: n, type: 'class', detail: db.isDeprecatedClass(n) ? '⚠ 非推奨' : 'クラス', boost: common.includes(n) ? 10 - common.indexOf(n) * 0.1 : db.isDeprecatedClass(n) ? -20 : 0 }))
+      options = db.creatableClasses().map(n => ({ label: n, type: 'class', detail: db.isDeprecatedClass(n) ? '非推奨' : 'クラス', boost: common.includes(n) ? 10 - common.indexOf(n) * 0.1 : db.isDeprecatedClass(n) ? -20 : 0 }))
     } else if (kind === 'class') options = db.allClasses().map(n => ({ label: n, type: 'class', boost: ['BasePart', 'Part', 'Model', 'Humanoid', 'Player', 'GuiObject', 'TextButton', 'Folder', 'Script', 'LocalScript', 'ModuleScript'].includes(n) ? 5 : 0 }))
     else if (kind === 'attr') options = fromFile(harvest(ctx.text).attrs, '属性 (このファイルで使用)')
     else if (kind === 'tag') options = fromFile(harvest(ctx.text).tags, 'タグ (このファイルで使用)')
@@ -1610,8 +1610,8 @@ export function describeAt(state, pos) {
       const tags = []
       if (m.flags.includes('r')) tags.push('読み取り専用')
       if (m.flags.includes('y')) tags.push('待機あり (Yields)')
-      if (m.flags.includes('d')) tags.push('⚠ 非推奨')
-      if (m.flags.includes('s')) tags.push('🔒 権限が必要 (通常のスクリプトでは使えない場合があります)')
+      if (m.flags.includes('d')) tags.push('非推奨')
+      if (m.flags.includes('s')) tags.push('権限が必要 (通常のスクリプトでは使えない場合があります)')
       meta = tags.join(' ・ ')
       doc = SERVICE_DOCS[m.name] || ''
     } else if (ent && ent.src === 'data') {

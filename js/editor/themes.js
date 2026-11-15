@@ -3,6 +3,15 @@ import { EditorView, HighlightStyle, syntaxHighlighting, tags as t } from '../..
 
 // c: 配色 { bg, fg, gutter, gutterFg, line, sel, cursor, keyword, control, string, number, comment, func, prop, type, builtin, ns, cls, bool, op, def, meta, invalid }
 export const THEMES = {
+  // ForgeCode の標準: 落ち着いたグラファイトに、彩度を抑えた色
+  'forge-dark': {
+    name: 'Forge Dark', dark: true,
+    c: { bg: '#121315', fg: '#d7d9dd', gutter: '#121315', gutterFg: '#55585f', line: '#17181b', sel: '#2b3350', cursor: '#e8e9ec', keyword: '#9ba6f5', control: '#b49cf0', string: '#a9cf9a', number: '#e3b47c', comment: '#62666e', func: '#e6d3a3', prop: '#b9c3d1', type: '#7fc4b4', builtin: '#8cc8d9', ns: '#7fc4b4', cls: '#7fc4b4', bool: '#e3b47c', op: '#9a9ea7', def: '#d7d9dd', meta: '#7d828b', invalid: '#ef6461', special: '#d8b4e2' },
+  },
+  'forge-light': {
+    name: 'Forge Light', dark: false,
+    c: { bg: '#fbfbfa', fg: '#24262b', gutter: '#fbfbfa', gutterFg: '#a2a5ab', line: '#f2f2f0', sel: '#d9e0fb', cursor: '#24262b', keyword: '#4650c8', control: '#7b4ab8', string: '#3d7a3a', number: '#a6611a', comment: '#8e9299', func: '#7a5a12', prop: '#2f4a68', type: '#21766a', builtin: '#1c6d8f', ns: '#21766a', cls: '#21766a', bool: '#a6611a', op: '#5d6169', def: '#24262b', meta: '#7d828b', invalid: '#cf2e2e', special: '#9b3f8f' },
+  },
   'dark-plus': {
     name: 'Dark+ (VS Code)', dark: true,
     c: { bg: '#1e1e1e', fg: '#d4d4d4', gutter: '#1e1e1e', gutterFg: '#858585', line: '#2a2d2e', sel: '#264f78', cursor: '#aeafad', keyword: '#569cd6', control: '#c586c0', string: '#ce9178', number: '#b5cea8', comment: '#6a9955', func: '#dcdcaa', prop: '#9cdcfe', type: '#4ec9b0', builtin: '#4fc1ff', ns: '#4ec9b0', cls: '#4ec9b0', bool: '#569cd6', op: '#d4d4d4', def: '#9cdcfe', meta: '#808080', invalid: '#f44747', special: '#d7ba7d' },
@@ -46,7 +55,7 @@ export const THEMES = {
 }
 
 export function editorTheme(id, fontFamily, fontSize, lineHeight) {
-  const th = THEMES[id] || THEMES['dark-plus']
+  const th = THEMES[id] || THEMES['forge-dark']
   const c = th.c
   const view = EditorView.theme({
     '&': { color: c.fg, backgroundColor: c.bg, fontSize: fontSize + 'px', height: '100%' },
@@ -61,9 +70,11 @@ export function editorTheme(id, fontFamily, fontSize, lineHeight) {
     '&.cm-focused .cm-matchingBracket': { backgroundColor: th.dark ? '#ffffff22' : '#00000018', outline: `1px solid ${c.gutterFg}` },
     '.cm-searchMatch': { backgroundColor: th.dark ? '#613214' : '#ffe08a', outline: '1px solid ' + (th.dark ? '#d18616' : '#e0a800') },
     '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: th.dark ? '#9e6a03' : '#ffc107' },
-    '.cm-tooltip': { backgroundColor: th.dark ? '#252526' : '#f8f8f8', color: c.fg, border: `1px solid ${th.dark ? '#454545' : '#c8c8c8'}` },
-    '.cm-tooltip-autocomplete > ul > li[aria-selected]': { backgroundColor: th.dark ? '#04395e' : '#d6ebff', color: c.fg },
-    '.cm-panels': { backgroundColor: th.dark ? '#252526' : '#f3f3f3', color: c.fg },
+    '.cm-tooltip': { backgroundColor: 'var(--elev)', color: 'var(--fg)', border: '1px solid var(--border)' },
+    '.cm-tooltip-autocomplete > ul > li[aria-selected]': { backgroundColor: 'var(--active)', color: 'var(--fg)' },
+    '.cm-panels': { backgroundColor: 'var(--panel)', color: 'var(--fg)' },
+    '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--border)' },
+    '.cm-panels.cm-panels-bottom': { borderTop: '1px solid var(--border)' },
     '.cm-foldPlaceholder': { backgroundColor: 'transparent', border: `1px solid ${c.gutterFg}`, color: c.gutterFg },
     '.cm-ghost': { color: c.gutterFg, opacity: '0.85', fontStyle: 'italic' },
     '.cm-indent-guide': { boxShadow: `inset 1px 0 0 ${th.dark ? '#ffffff14' : '#00000014'}` },
@@ -107,22 +118,32 @@ export function editorTheme(id, fontFamily, fontSize, lineHeight) {
 }
 
 // アプリ全体の UI 配色 (CSS 変数)
+// 画面の枠 (サイドバー・パネル・メニュー) は、エディタの背景色から作る落ち着いた無彩色。
+// アクセント色はテーマの文字色に合わせず固定 (テーマを変えても、画面の印象がぶれないように)
 export function uiColors(id) {
-  const th = THEMES[id] || THEMES['dark-plus']
+  const th = THEMES[id] || THEMES['forge-dark']
   const c = th.c
   if (th.dark) {
+    const base = c.bg
     return {
-      '--bg': c.bg, '--fg': c.fg, '--panel': mix(c.bg, '#ffffff', 0.04), '--panel2': mix(c.bg, '#ffffff', 0.08),
-      '--border': mix(c.bg, '#ffffff', 0.14), '--muted': c.gutterFg, '--accent': c.builtin, '--accent-fg': '#ffffff',
-      '--hover': mix(c.bg, '#ffffff', 0.1), '--active': mix(c.bg, c.builtin, 0.28), '--danger': c.invalid, '--ok': c.string === '#ce9178' ? '#89d185' : c.string,
-      '--warn': '#cca700', '--sel': c.sel, '--shadow': '0 8px 30px rgba(0,0,0,.5)', 'color-scheme': 'dark',
+      '--bg': base, '--fg': '#e6e7ea', '--muted': '#8d9097', '--faint': '#5f626a',
+      '--panel': mix(base, '#000000', 0.18), '--panel2': mix(base, '#ffffff', 0.045), '--elev': mix(base, '#ffffff', 0.06),
+      '--border': mix(base, '#ffffff', 0.085), '--border-strong': mix(base, '#ffffff', 0.15),
+      '--hover': mix(base, '#ffffff', 0.05), '--active': mix(base, '#7d8df0', 0.2),
+      '--accent': '#8d9cff', '--accent-fg': '#0d0e12', '--primary': '#ecedf0', '--primary-fg': '#0f1013',
+      '--danger': '#ef6461', '--ok': '#5fbf86', '--warn': '#e0aa4a', '--sel': c.sel,
+      '--shadow': '0 16px 40px -12px rgba(0,0,0,.65), 0 2px 8px rgba(0,0,0,.35)', '--scrim': 'rgba(4,5,7,.6)', 'color-scheme': 'dark',
     }
   }
+  const base = c.bg
   return {
-    '--bg': c.bg, '--fg': c.fg, '--panel': mix(c.bg, '#000000', 0.03), '--panel2': mix(c.bg, '#000000', 0.06),
-    '--border': mix(c.bg, '#000000', 0.13), '--muted': c.gutterFg, '--accent': c.builtin === '#7f007f' ? '#0b6bcb' : c.builtin, '--accent-fg': '#ffffff',
-    '--hover': mix(c.bg, '#000000', 0.07), '--active': mix(c.bg, '#0b6bcb', 0.18), '--danger': c.invalid, '--ok': '#1a7f37',
-    '--warn': '#9a6700', '--sel': c.sel, '--shadow': '0 8px 30px rgba(0,0,0,.18)', 'color-scheme': 'light',
+    '--bg': base, '--fg': '#1d1f23', '--muted': '#6a6e76', '--faint': '#9a9ea6',
+    '--panel': mix(base, '#000000', 0.025), '--panel2': mix(base, '#000000', 0.04), '--elev': '#ffffff',
+    '--border': mix(base, '#000000', 0.09), '--border-strong': mix(base, '#000000', 0.16),
+    '--hover': mix(base, '#000000', 0.045), '--active': mix(base, '#4458e0', 0.12),
+    '--accent': '#4458e0', '--accent-fg': '#ffffff', '--primary': '#18191c', '--primary-fg': '#ffffff',
+    '--danger': '#cf2e2e', '--ok': '#1f8a4c', '--warn': '#9a6700', '--sel': c.sel,
+    '--shadow': '0 16px 40px -14px rgba(20,22,30,.22), 0 2px 6px rgba(20,22,30,.08)', '--scrim': 'rgba(20,22,28,.28)', 'color-scheme': 'light',
   }
 }
 

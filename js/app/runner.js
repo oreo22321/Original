@@ -367,7 +367,7 @@ export class Runner {
     this.remoteShown = new Set()
     this.setRunning({ path, kind, debug: useDebug })
     this.t0 = performance.now()
-    this.append([{ kind: 'meta', text: `${useDebug ? '🐞' : '▶'} ${path}${selection ? ' (選択範囲)' : ''} — ${KIND_LABELS[kind]}${useDebug ? ' (デバッグ)' : ''}` }])
+    this.append([{ kind: 'meta', text: `${useDebug ? 'デバッグ:' : '実行:'} ${path}${selection ? ' (選択範囲)' : ''} — ${KIND_LABELS[kind]}${useDebug ? ' (デバッグ)' : ''}` }])
     this.renderTabs()
     const options = this.runOptions(kind, useDebug ? { debug: { breakpoints: bps, watches: this.debug.watches } } : {})
     if (agent) options.net = { ...options.net, agent: true }
@@ -505,7 +505,7 @@ export class Runner {
       case 'uiMode':
         if (m.interact !== undefined) { this.game.interact = m.interact; if (this.tab === 'game') this.renderGame(true) }
         this.uiMode = true
-        if (!this.waitNoted) { this.waitNoted = true; this.append([{ kind: 'meta', text: '🎮 GUI を表示しています — 「ゲーム」タブで操作できます (■ で終了)' }]) }
+        if (!this.waitNoted) { this.waitNoted = true; this.append([{ kind: 'meta', text: 'GUI を表示しています — 「ゲーム」タブで操作できます (■ で終了)' }]) }
         break
       case 'waiting':
         this.applySnapshot(m)
