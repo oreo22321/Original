@@ -15,7 +15,7 @@ class LensWidget extends WidgetType {
     const d = this.diags[0]
     const el = document.createElement('span')
     el.className = 'cm-lens cm-lens-' + d.severity
-    el.textContent = (d.severity === 'error' ? '✕ ' : d.severity === 'warning' ? '⚠ ' : 'ⓘ ') + d.message.split('\n')[0] + (this.diags.length > 1 ? `  (+${this.diags.length - 1})` : '')
+    el.textContent = (d.severity === 'error' ? '✕ ' : d.severity === 'warning' ? '△ ' : 'ⓘ ') + d.message.split('\n')[0] + (this.diags.length > 1 ? `  (+${this.diags.length - 1})` : '')
     el.setAttribute('role', 'button')
     el.title = this.diags.map(x => x.message).join('\n')
     el.diags = this.diags

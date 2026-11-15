@@ -132,7 +132,7 @@ function changeReport(fixes, max = 14) {
   return list.join('\n')
 }
 function problemList(list, max = 10) {
-  return list.slice(0, max).map(p => `- ${p.line} 行目 ${p.severity === 'error' ? '🔴' : p.severity === 'warning' ? '🟡' : '🔵'} ${p.message}`).join('\n') + (list.length > max ? `\n- …ほか ${list.length - max} 件` : '')
+  return list.slice(0, max).map(p => `- ${p.line} 行目 (${p.severity === 'error' ? 'エラー' : p.severity === 'warning' ? '警告' : '情報'}): ${p.message}`).join('\n') + (list.length > max ? `\n- …ほか ${list.length - max} 件` : '')
 }
 
 // 対象のコード (選択範囲があればそこ、なければファイル全体)
@@ -187,7 +187,7 @@ async function doFix(host, step, opts = {}) {
     step('edit', `${tg.path} を修正`, { path: tg.path })
     parts.push(`**${fixes.length} か所を直しました** (${tg.path}${tg.sel ? '・選択範囲' : ''}):\n${changeReport(fixes)}`)
   }
-  if (r.ok === false) parts.push(`⚠️ まだ構文エラーが残っています (${r.error ? r.error.line + ' 行目: ' + r.error.message : ''})。自動では直し方を決められませんでした。その行のまわりを確認してください。`)
+  if (r.ok === false) parts.push(`**注意:** まだ構文エラーが残っています (${r.error ? r.error.line + ' 行目: ' + r.error.message : ''})。自動では直し方を決められませんでした。その行のまわりを確認してください。`)
   // 残っている問題
   const remain = host.problems(tg.path, text).filter(p => p.severity === 'error' || p.severity === 'warning')
   const restReview = reviewCode(text, { executor: host.mode === 'executor' }).filter(f => !f.fix && f.severity !== 'info')
@@ -199,7 +199,7 @@ async function doFix(host, step, opts = {}) {
     const codeLine = lm ? (text.split('\n')[+lm[1] - 1] || '').trim() : ''
     parts.push(`**実行時のエラー**: \`${e.text.slice(0, 200)}\`${codeLine ? `\n\n該当の行: \`${codeLine.slice(0, 120)}\`` : ''}${ex ? `\n\n${ex.why}\n${ex.fixes.slice(0, 3).map(f => '- ' + f).join('\n')}` : ''}`)
   }
-  if (!parts.length) parts.push(`${tg.path}${tg.sel ? ' の選択範囲' : ''}に、自動で見つけられる問題はありませんでした ✅\n\n動きがおかしいときは、▶ で実行してエラーを出してから「エラーを直して」と頼むか、どう動いてほしいかを具体的に教えてください。`)
+  if (!parts.length) parts.push(`${tg.path}${tg.sel ? ' の選択範囲' : ''}に、自動で見つけられる問題はありませんでした。\n\n動きがおかしいときは、▶ で実行してエラーを出してから「エラーを直して」と頼むか、どう動いてほしいかを具体的に教えてください。`)
   return { text: parts.join('\n\n'), chips: text !== before ? ['実行して確かめて', '説明して'] : ['実行して', 'コードをチェックして'], changed: text !== before }
 }
 
@@ -218,7 +218,7 @@ async function doFormat(host, step, { tidy = false } = {}) {
     if (tidy) { const m = modernize(t, host.lintOpts(tg.path)); t = m.text; fixes = m.fixes; const h = hoistServices(t); if (h.count) { t = h.text; fixes.push({ line: 0, why: `GetService の呼び出し ${h.count} か所を、先頭の変数にまとめました` }) } }
     return { text: formatCode(t) }
   })
-  if (r.text === tg.text) return { text: `${tg.path}${tg.sel ? ' の選択範囲' : ''}は、もう${tidy ? '整理' : '整形'}されています ✅`, chips: tidy ? [] : ['整理して'] }
+  if (r.text === tg.text) return { text: `${tg.path}${tg.sel ? ' の選択範囲' : ''}は、もう${tidy ? '整理' : '整形'}されています。`, chips: tidy ? [] : ['整理して'] }
   if (checkSyntax(r.text)) return { text: '整形すると構文が壊れてしまうため、中止しました。', chips: [] }
   await host.write(tg.path, r.text, { focus: true })
   step('edit', `${tg.path} を${tidy ? '整理' : '整形'}`, { path: tg.path })
@@ -319,7 +319,7 @@ async function doOptimize(host, step) {
     parts.push(`**自動で直したところ:**\n${changeReport(fixes)}`)
   }
   if (perf.length) parts.push(`**手で直すと軽くなるところ:**\n${perf.slice(0, 8).map(f => `- ${f.line} 行目: ${f.message}`).join('\n')}`)
-  if (!parts.length) parts.push('目立って重くなる書き方は見つかりませんでした ✅\n\nさらに軽くしたいときのコツ:\n- 毎フレームの処理 (Heartbeat / RenderStepped) の中で、探す・作る処理をしない\n- 使い終わった接続は :Disconnect()、オブジェクトは :Destroy()\n- while true で見張るより、イベント (Changed・Touched) を使う')
+  if (!parts.length) parts.push('目立って重くなる書き方は見つかりませんでした。\n\nさらに軽くしたいときのコツ:\n- 毎フレームの処理 (Heartbeat / RenderStepped) の中で、探す・作る処理をしない\n- 使い終わった接続は :Disconnect()、オブジェクトは :Destroy()\n- while true で見張るより、イベント (Changed・Touched) を使う')
   return { text: parts.join('\n\n'), chips: ['説明して'], changed: text !== tg.text }
 }
 
@@ -339,7 +339,7 @@ async function doReview(host, step) {
   if (bugs.length) parts.push(`**バグ・安全面で気になるところ (${bugs.length})**\n${bugs.slice(0, 8).map(f => `- ${f.line} 行目: ${f.message}`).join('\n')}`)
   if (perf.length) parts.push(`**重くなりそうなところ (${perf.length})**\n${perf.slice(0, 6).map(f => `- ${f.line} 行目: ${f.message}`).join('\n')}`)
   if (style.length) parts.push(`**読みやすさ (${style.length})**\n${style.slice(0, 4).map(f => `- ${f.line} 行目: ${f.message}`).join('\n')}`)
-  if (!parts.length) return { text: `${tg.path} をチェックしました。問題は見つかりませんでした ✅`, chips: ['説明して', 'コメントを追加して'] }
+  if (!parts.length) return { text: `${tg.path} をチェックしました。問題は見つかりませんでした。`, chips: ['説明して', 'コメントを追加して'] }
   const fixable = errs.some(p => p.fixable) || findings.some(f => f.fix) || errs.length
   return { text: `${tg.path} をチェックしました。\n\n${parts.join('\n\n')}`, chips: fixable ? ['直して', '最適化して'] : ['最適化して'] }
 }
@@ -366,7 +366,7 @@ async function doRun(host, step, signal) {
   if (!r || !r.started) return { text: '実行を始められませんでした。プロジェクトに実行するファイルがあるか確認してください。', chips: [] }
   const out = (r.output || []).filter(o => o.kind !== 'meta').slice(-12).map(o => o.text)
   const parts = []
-  parts.push(r.errors.length ? `**エラーが ${r.errors.length} 件出ました。**` : r.stillRunning ? '**実行中です** (エラーは出ていません)。' : '**エラーなく実行できました** ✅')
+  parts.push(r.errors.length ? `**エラーが ${r.errors.length} 件出ました。**` : r.stillRunning ? '**実行中です** (エラーは出ていません)。' : '**エラーなく実行できました。**')
   if (out.length) parts.push('出力 (最後の行):\n' + fence(out.join('\n'), 'text'))
   for (const e of r.errors.slice(0, 2)) {
     const ex = explainError(e.text, {})
@@ -429,7 +429,7 @@ async function doGenerate(host, step, text, memory, { replaceFiles = null } = {}
   // 短いものはコードも見せる (長いものはファイルで)
   for (const f of gen.files) {
     if (!host.hasProject || lineCount(f.code) <= 40) parts.push(`${gen.files.length > 1 ? f.name + '\n' : ''}${fence(f.code)}`)
-    if (f.error) parts.push(`⚠️ ${f.name} に構文エラー: ${f.error}`)
+    if (f.error) parts.push(`**注意:** ${f.name} に構文エラー: ${f.error}`)
   }
   if (gen.alternatives && gen.alternatives.length) parts.push(`ほかに近いもの: ${gen.alternatives.join('、')}`)
   const chips = ['説明して', '実行して確かめて']
@@ -553,7 +553,7 @@ export async function respond({ text, history = [], host, onStep = () => {}, onT
       const rv = r.ok ? reviewCode(r.text, { executor: host.mode === 'executor' }) : []
       const text2 = rv.some(f => f.fix) ? applyReviewFixes(r.text, rv.filter(f => f.fix)) : r.text
       const fixes = [...r.fixes, ...rv.filter(f => f.fix).map(f => ({ line: f.line, why: f.message.replace(/。.*$/, '') }))]
-      return finish({ text: (fixes.length ? `**${fixes.length} か所を直しました:**\n${changeReport(fixes)}` : '自動で直せる問題は見つかりませんでした。') + '\n\n' + fence(text2) + (r.ok ? '' : `\n\n⚠️ まだ構文エラーが残っています: ${r.error && r.error.message}`), chips: ['このコードを説明して'] })
+      return finish({ text: (fixes.length ? `**${fixes.length} か所を直しました:**\n${changeReport(fixes)}` : '自動で直せる問題は見つかりませんでした。') + '\n\n' + fence(text2) + (r.ok ? '' : `\n\n**注意:** まだ構文エラーが残っています: ${r.error && r.error.message}`), chips: ['このコードを説明して'] })
     }
     if (has('format') || has('tidy')) {
       const rep = repairSyntax(pasted)
@@ -563,7 +563,7 @@ export async function respond({ text, history = [], host, onStep = () => {}, onT
     if (has('review') || has('optimize')) {
       const f = checkSyntax(pasted) ? [] : reviewCode(pasted, { executor: host.mode === 'executor' })
       const syn = checkSyntax(pasted)
-      return finish({ text: syn ? `構文エラーがあります: ${syn.line} 行目 ${syn.message}` : f.length ? f.slice(0, 10).map(x => `- ${x.line} 行目: ${x.message}`).join('\n') : '問題は見つかりませんでした ✅', chips: syn ? ['直して'] : [] })
+      return finish({ text: syn ? `構文エラーがあります: ${syn.line} 行目 ${syn.message}` : f.length ? f.slice(0, 10).map(x => `- ${x.line} 行目: ${x.message}`).join('\n') : '問題は見つかりませんでした。', chips: syn ? ['直して'] : [] })
     }
     return finish(await doExplain(host, step, pasted))
   }

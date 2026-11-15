@@ -8,7 +8,7 @@ export const isIOS = typeof navigator !== 'undefined' && (/iP(hone|ad|od)/.test(
 
 export const DEFAULTS = {
   // 見た目
-  theme: 'dark-plus',
+  theme: 'forge-dark',
   fontSize: smallScreen ? 13 : 15,
   fontFamily: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace',
   lineHeight: 1.55,
@@ -65,6 +65,7 @@ export const DEFAULTS = {
   haptics: true,
   // その他
   onboarded: false,
+  design: 2,           // デザインの版 (新しいデザインへの移行用)
   confirmDelete: true,
 }
 
@@ -75,6 +76,13 @@ try {
     const saved = JSON.parse(raw)
     // 廃止した設定は捨てる
     let dropped = false
+    // v10.1: 新しいデザイン。標準のテーマ (Dark+ / Light+) のままの人は、新しい標準テーマに
+    if (!('design' in saved)) {
+      if (saved.theme === 'dark-plus' || !saved.theme) saved.theme = 'forge-dark'
+      else if (saved.theme === 'light-plus') saved.theme = 'forge-light'
+      saved.design = 2
+      dropped = true
+    }
     // v10: AI が内蔵になり無料で動くので、続きの提案を有効にする (以前は API の利用料を抑えるため既定でオフ)
     if (!('aiLlm' in saved) && 'aiKey' in saved) saved.aiInline = true
     for (const k of Object.keys(saved)) if (!(k in DEFAULTS)) { delete saved[k]; dropped = true }

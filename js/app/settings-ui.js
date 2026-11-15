@@ -7,7 +7,7 @@ import * as vfs from './vfs.js'
 import { apiVersion } from '../editor/apidb.js'
 import { app, command, runCommand, setProjectKind } from './app.js'
 
-export const APP_VERSION = '10.0.0'
+export const APP_VERSION = '10.1.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -83,7 +83,7 @@ const SCHEMA = [
   ] },
   { group: 'AI (Forge AI)', icon: 'sparkle', items: [
     { key: 'aiAbout', type: 'custom', label: 'Forge AI について 内蔵 オフライン', render: () => aiAboutRow() },
-    { key: 'aiInline', type: 'bool', label: '入力が止まったら AI が続きを提案', desc: 'プロジェクトと内蔵サンプルから学習した統計モデルで、行の続きを薄い文字で出します (Tab で確定)。オフでも ✨ や Alt + \\ で頼めます' },
+    { key: 'aiInline', type: 'bool', label: '入力が止まったら AI が続きを提案', desc: 'プロジェクトと内蔵サンプルから学習した統計モデルで、行の続きを薄い文字で出します (Tab で確定)。オフでも AI キーや Alt + \\ で頼めます' },
     { key: 'aiDelay', type: 'range', min: 300, max: 3000, step: 100, label: '自動で提案するまでの待ち時間', unit: 'ms' },
     { key: 'aiLlm', type: 'custom', label: '高性能モード 端末内 LLM 言語モデル WebGPU', render: () => llmRow() },
   ] },
@@ -261,7 +261,7 @@ command('settings', '設定を開く', () => app.wb.showView('settings'), { icon
 function aiAboutRow() {
   return h('div', { class: 'set-row col' },
     h('div', { class: 'set-label' }, 'Forge AI (内蔵)'),
-    h('div', { class: 'set-desc' }, 'アプリに入っている AI です。インターネットも API キーも要らず、コードの内容は外に送りません。エラーの自動修正・整形・整理・説明・コメント/型注釈・コードの生成・質問への回答ができます。AI パネル (✨) で頼んでください。'))
+    h('div', { class: 'set-desc' }, 'アプリに入っている AI です。インターネットも API キーも要らず、コードの内容は外に送りません。エラーの自動修正・整形・整理・説明・コメント/型注釈・コードの生成・質問への回答ができます。サイドバーの AI パネルで頼んでください。'))
 }
 
 function llmRow() {
@@ -280,11 +280,11 @@ function llmRow() {
     acts.replaceChildren()
     bar.classList.toggle('hidden', cur.state !== 'loading')
     bar.firstChild.style.width = Math.round((cur.progress.value || 0) * 100) + '%'
-    if (cur.support && !cur.support.ok) { info.textContent = '⚠️ ' + cur.support.reason; return }
+    if (cur.support && !cur.support.ok) { info.textContent = cur.support.reason; return }
     if (!key) { info.textContent = 'オフ (内蔵 AI だけで動きます)'; return }
     if (cur.state === 'loading') info.textContent = cur.progress.text || '読み込み中…'
-    else if (cur.state === 'ready' && cur.model === key) info.textContent = '✅ 使えます (メモリに読み込み済み)'
-    else if (cur.state === 'error') info.textContent = '⚠️ ' + cur.error
+    else if (cur.state === 'ready' && cur.model === key) info.textContent = '使えます (メモリに読み込み済み)'
+    else if (cur.state === 'error') info.textContent = cur.error
     else info.textContent = 'AI パネルで必要になったときに読み込みます (初回はダウンロード)'
     if (cur.state !== 'loading') {
       if (!(cur.state === 'ready' && cur.model === key)) acts.append(h('button', { class: 'btn small primary', onclick: async () => {

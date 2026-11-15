@@ -68,7 +68,7 @@ async function load(url) {
     const count = api.shapes.reduce((n, s) => n + Object.values(s.m).filter(m => m.k === 'fn').length, 0)
     if (api.root !== null && api.root !== undefined && !announced.has(url)) {
       announced.add(url)
-      toast(`📚 ${api.lib} の補完を読み込みました (関数 ${count} 個)`, { duration: 2600 })
+      toast(`${api.lib} の補完を読み込みました (関数 ${count} 個)`, { duration: 2600 })
     }
     emit('extlib', url)
   } catch {

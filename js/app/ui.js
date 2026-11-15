@@ -118,14 +118,15 @@ export function icon(name, size = 20, cls = '') {
 }
 
 // ファイルの種類を表すアイコン (Studio の Script / LocalScript / ModuleScript と同じ色分け)
+// ファイルの種類 (色は彩度を抑えて、種類の違いが分かる程度に)
 const FILE_KINDS = {
-  server: ['server', '#3fb950', 'Script (サーバー)'],
-  client: ['device', '#58a6ff', 'LocalScript (クライアント)'],
-  module: ['cube', '#bc8cff', 'ModuleScript'],
-  executor: ['bolt', '#f0a43a', 'エグゼキュータースクリプト'],
-  json: ['braces', '#d7ba5a', 'JSON'],
-  md: ['book', '#58a6ff', 'メモ (Markdown)'],
-  text: ['text', '#8b949e', 'テキスト'],
+  server: ['server', '#6fae8a', 'Script (サーバー)'],
+  client: ['device', '#7f9fd6', 'LocalScript (クライアント)'],
+  module: ['cube', '#a493d6', 'ModuleScript'],
+  executor: ['bolt', '#c9a062', 'エグゼキュータースクリプト'],
+  json: ['braces', '#b3a36e', 'JSON'],
+  md: ['book', '#8d9097', 'メモ (Markdown)'],
+  text: ['text', '#8d9097', 'テキスト'],
 }
 export function fileKind(path) {
   const m = /\.(server|client)?\.?(luau?|json|md|markdown|txt)$/i.exec(path)
