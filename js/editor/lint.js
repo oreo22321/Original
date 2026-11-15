@@ -9,8 +9,9 @@ import { LuauSyntaxError } from '../luau/lexer.js'
 import { LUAU_GLOBALS, LUAU_LIBS, ROBLOX_DATATYPES, LUAU_KEYWORDS } from '../data/luau-api.js'
 import { EXECUTOR_GLOBALS, EXECUTOR_LIBS, DRAWING_KINDS, isExecutorOnly } from '../data/executor-api.js'
 import * as db from './apidb.js'
-import { resolveChain, parseChain, memberNamesOf, declPos, typeLabel, docText } from './luau-intel.js'
+import { resolveChain, parseChain, memberNamesOf, declPos, typeLabel, docText, intel, scanLoadstringUrls } from './luau-intel.js'
 import { diagnoseBlocks, lightTokens, scanBlocks } from './blocks.js'
+import { typeDiagnostics } from './typecheck.js'
 import { nearest, typoLimit, editDistance, fixChar, fixCode, hasSuspect, describeChar, KEYWORD_FIXES } from './typo.js'
 
 const STD_LIBS = new Set(['string', 'table', 'math', 'task', 'coroutine', 'os', 'utf8', 'bit32', 'buffer'])
@@ -43,16 +44,44 @@ function knownGlobals(executor) {
   return s
 }
 
-const replaceFix = (name, text) => ({ name, apply(view, from, to) { view.dispatch({ changes: { from, to, insert: text }, userEvent: 'input.fix' }) } })
+// ---- 直し方 ----
+// 直し方はデータで表します (ワーカーで調べた結果も、そのまま画面に渡せるように)。エディタで使うときに materialize で操作にします
+//   { name, op: 'replace', text }      診断の範囲を text に置き換える
+//   { name, op: 'string', text }       文字列リテラルの中身 (引用符の内側) を置き換える
+//   { name, op: 'wrap', pre, post }    範囲を pre と post で囲む
+//   { name, op: 'insertAtEnd', i }     範囲の後ろに i を入れる
+//   { name, op: 'fixAllChars' }        ファイル全体の全角記号を直す
+//   { name, op: 'blockMissing' | 'blockExtra' }  足りない end を足す / 余分な end を消す
+//   { name, edits: [{ a, d, i }] }     範囲の始まりから a 文字目の d 文字を i に置き換える (複数可)
+export function materialize(a) {
+  if (!a || typeof a.apply === 'function') return a
+  const run = (view, changes) => view.dispatch({ changes, userEvent: 'input.fix' })
+  let apply
+  switch (a.op) {
+    case 'replace': apply = (view, from, to) => run(view, { from, to, insert: a.text }); break
+    case 'string': apply = (view, from, to) => run(view, { from: from + 1, to: to - 1, insert: a.text }); break
+    case 'wrap': apply = (view, from, to) => run(view, [{ from, insert: a.pre }, { from: to, insert: a.post }]); break
+    case 'insertAtEnd': apply = (view, from, to) => run(view, { from: to, insert: a.i }); break
+    case 'fixAllChars': apply = view => { const t = view.state.doc.toString(); const f = fixCode(t); if (f !== t) run(view, { from: 0, to: t.length, insert: f }) }; break
+    case 'blockMissing': apply = view => { const d = diagnoseBlocks(view.state.doc.toString()).find(x => x.kind === 'missing'); if (d) run(view, { from: d.insertAt, insert: d.insertText }) }; break
+    case 'blockExtra': apply = view => { const d = diagnoseBlocks(view.state.doc.toString()).find(x => x.kind === 'extra'); if (d) run(view, { from: d.removeFrom, to: d.removeTo }) }; break
+    default:
+      if (Array.isArray(a.edits)) apply = (view, from) => run(view, a.edits.map(e => ({ from: from + e.a, to: from + e.a + e.d, insert: e.i })))
+      else return a
+  }
+  return { ...a, apply }
+}
+export const materializeDiags = diags => diags.map(d => (d.actions ? { ...d, actions: d.actions.map(materialize) } : d))
+const replaceFix = (name, text) => ({ name, op: 'replace', text })
 // 文字列リテラルの中身 (引用符の内側) を置き換える
-const stringFix = (name, text) => ({ name, apply(view, from, to) { view.dispatch({ changes: { from: from + 1, to: to - 1, insert: text }, userEvent: 'input.fix' }) } })
+const stringFix = (name, text) => ({ name, op: 'string', text })
 
 // ============================================================
 // 全角文字・スマート引用符など
 // ============================================================
 function scanChars(src) {
   const diags = []
-  const fixAllAction = { name: 'ファイル全体の全角記号を直す', apply(view) { const t = view.state.doc.toString(); const f = fixCode(t); if (f !== t) view.dispatch({ changes: { from: 0, to: t.length, insert: f }, userEvent: 'input.fix' }) } }
+  const fixAllAction = { name: 'ファイル全体の全角記号を直す', op: 'fixAllChars' }
   const toks = scanBlocks(src, true).tokens
   const add = (from, to) => {
     if (diags.length >= 40) return
@@ -61,7 +90,7 @@ function scanChars(src) {
     if (fixed !== text) {
       diags.push({ from, to, severity: 'error', source: '全角', message: `${describeChar(text[0])} が入っています。半角の ${fixed.trim() ? `'${fixed}'` : 'スペース'} に直してください`, actions: [replaceFix('半角に直す', fixed), fixAllAction] })
     } else {
-      diags.push({ from, to, severity: 'error', source: '全角', message: `コードの中に '${text.slice(0, 12)}' があります。文字として使うなら " " で囲み、メモならコメント (--) にしてください`, actions: [{ name: '" " で囲む', apply(view, f, t) { view.dispatch({ changes: [{ from: f, insert: '"' }, { from: t, insert: '"' }] }) } }, { name: 'コメントにする', apply(view, f) { view.dispatch({ changes: { from: f, insert: '-- ' } }) } }] })
+      diags.push({ from, to, severity: 'error', source: '全角', message: `コードの中に '${text.slice(0, 12)}' があります。文字として使うなら " " で囲み、メモならコメント (--) にしてください`, actions: [{ name: '" " で囲む', op: 'wrap', pre: '"', post: '"' }, { name: 'コメントにする', edits: [{ a: 0, d: 0, i: '-- ' }] }] })
     }
   }
   // 1) 記号として現れる全角・非 ASCII 文字 (連続はまとめる)
@@ -90,8 +119,8 @@ function scanChars(src) {
 // ============================================================
 function blockDiags(src) {
   return diagnoseBlocks(src).map(b => b.kind === 'missing'
-    ? { from: b.from, to: b.to, severity: 'error', source: '構文', message: b.message, actions: [{ name: `'${b.insertText.trim().split(' ')[0]}' を追加`, apply(view) { const d = diagnoseBlocks(view.state.doc.toString()).find(x => x.kind === 'missing'); if (d) view.dispatch({ changes: { from: d.insertAt, insert: d.insertText }, userEvent: 'input.fix' }) } }] }
-    : { from: b.from, to: b.to, severity: 'error', source: '構文', message: b.message, actions: [{ name: '削除', apply(view) { const d = diagnoseBlocks(view.state.doc.toString()).find(x => x.kind === 'extra'); if (d) view.dispatch({ changes: { from: d.removeFrom, to: d.removeTo }, userEvent: 'input.fix' }) } }] })
+    ? { from: b.from, to: b.to, severity: 'error', source: '構文', message: b.message, actions: [{ name: `'${b.insertText.trim().split(' ')[0]}' を追加`, op: 'blockMissing' }] }
+    : { from: b.from, to: b.to, severity: 'error', source: '構文', message: b.message, actions: [{ name: '削除', op: 'blockExtra' }] })
 }
 
 function syntaxDiags(src, e) {
@@ -115,7 +144,7 @@ function syntaxDiags(src, e) {
   else if (/文字列が閉じられていません/.test(message)) {
     const q = src[from]
     range = { from, to: lineEnd }
-    if (q === '"' || q === "'") actions.push({ name: `行末に ${q} を追加`, apply(view, f, t) { view.dispatch({ changes: { from: t, insert: q } }) } })
+    if (q === '"' || q === "'") actions.push({ name: `行末に ${q} を追加`, op: 'insertAtEnd', i: q })
   } else if (/^'(then|do)' が必要です/.test(message)) {
     const kw = /^'(then|do)'/.exec(message)[1]
     // 条件の中の '=' は比較の書き間違い
@@ -125,8 +154,8 @@ function syntaxDiags(src, e) {
     else {
       // 条件の行の終わりに then / do を足す
       const prevEnd = src.slice(0, from).replace(/\s+$/, '').length
-      actions.push({ name: `'${kw}' を追加`, apply(view) { view.dispatch({ changes: { from: prevEnd, insert: ' ' + kw }, userEvent: 'input.fix' }) } })
       range = { from: Math.max(0, prevEnd - 1), to: prevEnd }
+      actions.push({ name: `'${kw}' を追加`, op: 'insertAtEnd', i: ' ' + kw })
     }
   } else if (/^\s*(\/\/|#\s|\/\*)/.test(line) && from <= lineStart + line.search(/\S/) + 2) {
     message = 'Luau のコメントは -- で始めます'
@@ -431,7 +460,7 @@ function analyze(ast, src, opts) {
           const lineStart = src.lastIndexOf('\n', st.doTok.s) + 1
           const ind = /^[ \t]*/.exec(src.slice(lineStart))[0]
           const at = st.doTok.e
-          diags.push({ from: st.doTok.s - 0, to: st.doTok.e, severity: 'warning', message: 'この while true ループには待機 (task.wait など) がないため、実行するとフリーズします', actions: [{ name: 'task.wait() を追加', apply(view) { view.dispatch({ changes: { from: at, insert: '\n' + ind + unit + 'task.wait()' }, userEvent: 'input.fix' }) } }] })
+          diags.push({ from: st.doTok.s - 0, to: st.doTok.e, severity: 'warning', message: 'この while true ループには待機 (task.wait など) がないため、実行するとフリーズします', actions: [{ name: 'task.wait() を追加', edits: [{ a: at - st.doTok.s, d: 0, i: '\n' + ind + unit + 'task.wait()' }] }] })
         }
         block(st.body)
         break
@@ -457,6 +486,18 @@ function analyze(ast, src, opts) {
   push()
   block(ast.body, false)
   pop()
+  // 型チェック (型の間違い)。直し方はデータで返るので、エディタで使える形にする
+  if (opts.types !== false && db.apiReady()) {
+    const classOf = n => {
+      const end = typeof n.e === 'number' ? n.e : null
+      if (end === null) return null
+      const t = src.slice(n.s, end)
+      if (!t || t.length > 160 || t.includes('\n')) return null
+      const ty = typeOfText(t, n.s)
+      return ty && ty.k === 'class' ? ty.name : null
+    }
+    for (const d of typeDiagnostics(ast, { src, classOf })) diags.push(d)
+  }
   if (opts.undefinedGlobals !== false) {
     let candidates = null
     for (const n of unknownRefs) {
@@ -481,7 +522,11 @@ function analyze(ast, src, opts) {
   return diags
 }
 
-export function lintLuau(src, opts = {}) {
+// エディタ用: 直し方を操作にした診断
+export function lintLuau(src, opts = {}) { return materializeDiags(lintLuauData(src, opts)) }
+
+// 直し方をデータのまま返す (ワーカーで使う)
+export function lintLuauData(src, opts = {}) {
   const chars = hasSuspect(src) || /[^\x00-\x7f]/.test(src) ? scanChars(src) : []
   let ast, text = src
   try {
@@ -507,22 +552,103 @@ export function lintLuau(src, opts = {}) {
   }
 }
 
-// 大きなファイルは、入力が落ち着いて手が空くまで待ってから調べる (調べている間は入力が止まるため)
-// 待つ間に内容が変わったら、この回の結果は捨てられる (CodeMirror が古い結果を使わない)
-const BIG_DOC = 60000
+// ============================================================
+// エディタへの組み込み
+// ・ある程度大きなファイルは、裏のスレッド (ワーカー) で調べる。調べている間も入力は止まらない
+// ・ワーカーを使えないときや応答がないときは、手が空いたときにこの画面で調べる
+// ・調べている間に内容が変わったら、その回の結果は捨てられる (CodeMirror が古い結果を使わない)
+// ============================================================
+const WORKER_MIN = 3000      // これより小さいファイルはその場で調べる (すぐ結果が出る)
+const BIG_DOC = 60000        // ワーカーがないとき: これより大きいファイルは手が空いてから
 const idleOnce = () => new Promise(r => (typeof requestIdleCallback === 'function' ? requestIdleCallback(() => r(), { timeout: 1500 }) : setTimeout(r, 30)))
+
+let lintWorker = null, workerBroken = false, reqSeq = 0
+const waits = new Map()
+const extSent = new Map() // url → 送った解析結果 (同じものは送り直さない)
+function getWorker() {
+  if (workerBroken || typeof Worker === 'undefined') return null
+  if (lintWorker) return lintWorker
+  try {
+    lintWorker = new Worker(new URL('../workers/lint-worker.js', import.meta.url), { type: 'module' })
+  } catch { workerBroken = true; return null }
+  lintWorker.onmessage = e => {
+    const m = e.data
+    const w = waits.get(m.id)
+    if (!w) return
+    waits.delete(m.id)
+    clearTimeout(w.timer)
+    if (m.type === 'result') w.resolve(m.diags)
+    else w.reject(new Error(m.message || 'lint worker error'))
+  }
+  lintWorker.onerror = e => {
+    if (e && e.preventDefault) e.preventDefault()
+    workerBroken = true
+    for (const w of waits.values()) { clearTimeout(w.timer); w.reject(new Error('lint worker failed')) }
+    waits.clear()
+    try { lintWorker.terminate() } catch {}
+    lintWorker = null
+  }
+  return lintWorker
+}
+// require で読み込んでいるモジュールの中身 (型を調べるため)
+function moduleSources(text) {
+  const out = {}
+  if (!intel.moduleSource || !/\brequire\b/.test(text)) return out
+  const re = /\brequire\s*\(?\s*([^)\n]+)\)?/g
+  let m, n = 0
+  while ((m = re.exec(text)) && n < 40) {
+    const spec = m[1].trim()
+    const sm = /^["']([^"']+)["']$/.exec(spec)
+    const name = sm ? sm[1].replace(/\\/g, '/').split('/').pop().replace(/\.luau?$/, '') : (/([A-Za-z_]\w*)\s*$/.exec(spec.replace(/\)\s*$/, '').replace(/:WaitForChild\(\s*["'](\w+)["']\s*$/, '.$1')) || [])[1]
+    if (!name || Object.prototype.hasOwnProperty.call(out, name)) continue
+    n++
+    try { out[name] = intel.moduleSource(name) } catch { out[name] = null }
+  }
+  return out
+}
+// loadstring で読み込む外部ライブラリの解析結果
+function extApis(text) {
+  const out = {}
+  if (!intel.extLib || !/loadstring/.test(text)) return out
+  for (const url of scanLoadstringUrls(text)) {
+    const api = intel.extLib(url)
+    if (api && extSent.get(url) !== api) { out[url] = api; extSent.set(url, api) }
+  }
+  return out
+}
+function lintInWorker(text, opts) {
+  const w = getWorker()
+  if (!w) return null
+  const id = ++reqSeq
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { waits.delete(id); reject(new Error('timeout')) }, 15000)
+    waits.set(id, { resolve, reject, timer })
+    try {
+      w.postMessage({ type: 'lint', id, text, opts, executor: !!intel.executor, modules: moduleSources(text), ext: extApis(text) })
+    } catch (e) { clearTimeout(timer); waits.delete(id); extSent.clear(); reject(e) }
+  })
+}
+
 export function makeLinter(getOpts) {
   return linter(async view => {
     const opts = getOpts()
     if (!opts.enabled) return []
     const doc = view.state.doc
     if (doc.length > 400000) return []
+    const text = docText(view.state)
+    if (doc.length >= WORKER_MIN && !workerBroken) {
+      try {
+        const p = lintInWorker(text, opts)
+        if (p) return materializeDiags(await p)
+      } catch { /* ワーカーが使えない: この画面で調べる */ }
+      if (view.state.doc !== doc) return []
+    }
     if (doc.length > BIG_DOC) {
       await new Promise(r => setTimeout(r, Math.min(1400, doc.length / 200)))
       if (view.state.doc !== doc) return []
       await idleOnce()
       if (view.state.doc !== doc) return []
     }
-    return lintLuau(docText(view.state), opts)
+    return lintLuau(text, opts)
   }, { delay: 420 })
 }

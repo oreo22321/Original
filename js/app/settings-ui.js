@@ -18,7 +18,7 @@ const FONTS = [
 ]
 
 const PRESETS = [
-  { icon: 'sparkle', name: 'おまかせ (おすすめ)', desc: '補完・誤字の自動修正・エラーの解説をすべてオン', patch: { autocomplete: true, inlineSuggest: true, signatureHelp: true, lint: true, lintUndefined: true, lintUnused: true, lintTypos: true, errorLens: true, fixInput: true, autoCorrect: true, autoEnd: true, autoEndDelete: true, autoClose: true, autoSave: true, explainErrors: true } },
+  { icon: 'sparkle', name: 'おまかせ (おすすめ)', desc: '補完・誤字の自動修正・エラーの解説をすべてオン', patch: { autocomplete: true, inlineSuggest: true, signatureHelp: true, lint: true, lintUndefined: true, lintUnused: true, lintTypos: true, lintTypes: true, errorLens: true, fixInput: true, autoCorrect: true, autoEnd: true, autoEndDelete: true, autoClose: true, autoSave: true, explainErrors: true } },
   { icon: 'edit', name: '自分で書きたい', desc: '自動修正とインライン候補をオフ。チェックだけ残す', patch: { inlineSuggest: false, autoCorrect: false, fixInput: false, autoEnd: false, autoEndDelete: false, lint: true, errorLens: true } },
   { icon: 'eye', name: '大きな文字', desc: '見やすさ重視', patch: { fontSize: 18, lineHeight: 1.7, wordWrap: true } },
   { icon: 'history', name: '初期設定に戻す', desc: 'すべての設定を元に戻します', reset: true },
@@ -55,6 +55,7 @@ const SCHEMA = [
     { key: 'lintTypos', type: 'bool', label: '誤字を検出して「もしかして」を提案', desc: 'プロパティ名・サービス名・クラス名・Enum・関数名のスペルミス' },
     { key: 'autoCorrect', type: 'bool', label: 'よくある打ち間違いを自動修正', desc: 'fucntion → function、locla → local など (元に戻せます)' },
     { key: 'fixInput', type: 'bool', label: '全角記号・スマート引用符を半角に直す', desc: '（ ） ” ＝ や全角スペース、iPhone が変換した “ ” — など。文字列とコメントの中はそのまま' },
+    { key: 'lintTypes', type: 'bool', label: '型の間違いを警告 (型チェック)', desc: 'part.Transparency = "0.5" のようなプロパティへの代入、関数の引数、型注釈、文字列の + など。--!nocheck と書いたファイルは調べません' },
     { key: 'lintUndefined', type: 'bool', label: '定義されていない変数を警告' },
     { key: 'lintUnused', type: 'bool', label: '使われていない変数を薄く表示' },
     { key: 'explainErrors', type: 'bool', label: '実行エラーに日本語の解説を付ける' },

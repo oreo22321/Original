@@ -136,7 +136,7 @@ const lineAt = (text, pos) => { let n = 1; for (let i = 0; i < pos && i < text.l
 export function lintOpts(path) {
   const s = getSettings()
   const mode = getMode()
-  return { enabled: true, executor: mode === 'executor', undefinedGlobals: s.lintUndefined, unused: false, typos: s.lintTypos, scriptKind: scriptKindOf(path, mode) }
+  return { enabled: true, executor: mode === 'executor', undefinedGlobals: s.lintUndefined, unused: false, typos: s.lintTypos, types: s.lintTypes !== false, scriptKind: scriptKindOf(path, mode) }
 }
 export function problemsOf(path, text, { max = 30, warnings = true } = {}) {
   if (!/\.luau?$/i.test(path)) return []

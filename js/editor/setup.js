@@ -174,7 +174,7 @@ export function buildExtensions(ctx) {
     luau ? makeLinter(() => {
       const c = st()
       const mode = ctx.getMode()
-      return { enabled: c.lint, executor: mode === 'executor', undefinedGlobals: c.lintUndefined, unused: c.lintUnused, typos: c.lintTypos, scriptKind: scriptKindOf(ctx.path, mode) }
+      return { enabled: c.lint, executor: mode === 'executor', undefinedGlobals: c.lintUndefined, unused: c.lintUnused, typos: c.lintTypos, types: c.lintTypes !== false, scriptKind: scriptKindOf(ctx.path, mode) }
     }) : [],
     comps.extras.of(extrasExt(s, lang, ctx)),
     luau ? runErrorMarks : [],

@@ -406,10 +406,11 @@ export class Parser {
   expr(limit = 0) {
     let left
     const t = this.tok
+    const s0 = t.s
     if (t.t === 'not' || t.t === '-' || t.t === '#') {
       this.next()
       const e = this.expr(UNARY_PRI)
-      left = { t: 'Un', op: t.t, e, line: t.line }
+      left = { t: 'Un', op: t.t, e, line: t.line, s: s0, e2: this.prevEnd }
     } else {
       left = this.simpleExpr()
     }
@@ -420,7 +421,7 @@ export class Parser {
       const opTok = this.tok
       this.next()
       const right = this.expr(pri[1])
-      left = { t: 'Bin', op, l: left, r: right, line: opTok.line }
+      left = { t: 'Bin', op, l: left, r: right, line: opTok.line, s: s0, e2: this.prevEnd, opS: opTok.s }
     }
     return left
   }
@@ -429,12 +430,12 @@ export class Parser {
     const t = this.tok
     let e
     switch (t.t) {
-      case 'number': this.next(); e = { t: 'Number', v: t.v, line: t.line }; break
+      case 'number': this.next(); e = { t: 'Number', v: t.v, line: t.line, s: t.s, e: t.e }; break
       case 'string': this.next(); e = { t: 'String', v: t.v, line: t.line, s: t.s, e: t.e }; break
       case 'interp': this.next(); e = this.interp(t); break
-      case 'nil': this.next(); e = { t: 'Nil', line: t.line }; break
-      case 'true': this.next(); e = { t: 'True', line: t.line }; break
-      case 'false': this.next(); e = { t: 'False', line: t.line }; break
+      case 'nil': this.next(); e = { t: 'Nil', line: t.line, s: t.s, e: t.e }; break
+      case 'true': this.next(); e = { t: 'True', line: t.line, s: t.s, e: t.e }; break
+      case 'false': this.next(); e = { t: 'False', line: t.line, s: t.s, e: t.e }; break
       case '...':
         this.next()
         e = { t: 'Vararg', line: t.line }
@@ -472,7 +473,7 @@ export class Parser {
       if (!sub.check('eof')) sub.error('補間文字列の {} の中の式が正しくありません')
       parts.push(e)
     }
-    return { t: 'Interp', parts, line: tok.line }
+    return { t: 'Interp', parts, line: tok.line, s: tok.s, e: tok.e }
   }
 
   ifExpr() {
@@ -588,7 +589,7 @@ export class Parser {
       if (!this.accept(',') && !this.accept(';')) break
     }
     this.expect('}', 'テーブルの終わり', open)
-    return { t: 'Table', items, line }
+    return { t: 'Table', items, line, s: open.s, e: this.prevEnd }
   }
 
   exprStat() {

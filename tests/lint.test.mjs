@@ -144,5 +144,52 @@ ok('distance transposition', editDistance('pirnt', 'print') === 1)
 ok('nearest short names strict', nearest('fo', ['for', 'foo']) === null)
 ok('nearest exact → null', nearest('print', ['print', 'pint']) === null)
 
+// ---- 型チェック ----
+const typ = (src, opts) => lint(src, opts).filter(d => d.source === '型')
+const P = 'local part = Instance.new("Part")\n'
+has('type: number prop given string', P + 'part.Transparency = "0.5"', /Transparency' は number/)
+ok('type: fix removes quotes', applyFix(P + 'part.Transparency = "0.5"', {}, 0) === P + 'part.Transparency = 0.5', applyFix(P + 'part.Transparency = "0.5"', {}, 0))
+has('type: bool prop given number', P + 'part.Anchored = 1', /Anchored' は boolean/)
+ok('type: Color3 → BrickColor fix', applyFix(P + 'part.BrickColor = Color3.new(1, 0, 0)', {}, 0) === P + 'part.BrickColor = BrickColor.new(Color3.new(1, 0, 0))')
+ok('type: CFrame → Vector3 fix', applyFix(P + 'part.Position = CFrame.new(1, 2, 3)', {}, 0) === P + 'part.Position = CFrame.new(1, 2, 3).Position')
+has('type: read-only', P + 'part.ClassName = "x"', /読み取り専用/)
+has('type: enum string typo', P + 'part.Material = "Neons"', /もしかして Neon/)
+has('type: Color3.new 0-255', 'local c = Color3.new(255, 0, 0)', /Color3\.fromRGB/)
+ok('type: Color3.new fix', applyFix('local c = Color3.new(255, 0, 0)', {}, 0) === 'local c = Color3.fromRGB(255, 0, 0)')
+has('type: annotated local', 'local n: number = "a"', /'n' は number 型/)
+has('type: string +', 'local s = "hp: " + 10', /\.\. を使います/)
+ok('type: string + fix', applyFix('local s = "hp: " + 10', {}, 0) === 'local s = "hp: " .. 10')
+has('type: concat boolean', 'print("a" .. true)', /boolean は \.\. でつなげません/)
+has('type: annotated function args', 'local function f(a: number) return a end\nf("x")', /1 番目の引数は number/)
+has('type: API method args', 'local h = Instance.new("Humanoid")\nh:TakeDamage("ten")', /TakeDamage の 1 番目の引数は number/)
+has('type: nil to number prop', P + 'part.Transparency = nil', /nil は代入できません/)
+has('type: string Parent', P + 'part.Parent = "Workspace"', /Parent' は Instance/)
+// 正しいコードには出さない
+ok('type: clean', typ(P + `part.Transparency = 0.5
+part.Anchored = true
+part.Color = Color3.fromRGB(255, 0, 0)
+part.BrickColor = BrickColor.new("Bright red")
+part.Material = Enum.Material.Neon
+part.Material = "Neon"
+part.CFrame = part.CFrame * CFrame.new(0, 1, 0)
+part.Position = Vector3.new(1, 2, 3) * 2
+part.Parent = workspace
+part.Parent = nil
+part.Name = 5
+local label = Instance.new("TextLabel")
+label.Text = 10
+label.Size = UDim2.new(0, 100, 0, 50)
+local s = "5" + 1
+local n: number? = nil
+local t: {number} = {}
+local x = 0
+x = "now a string"
+print("hp: " .. 10, "ok" .. tostring(true))
+task.wait(1)
+workspace:WaitForChild("A", 5)
+`).length === 0, JSON.stringify(typ(P + 'part.Transparency = 0.5')))
+ok('type: --!nocheck', typ('--!nocheck\n' + P + 'part.Transparency = "0.5"').length === 0)
+ok('type: setting off', lint(P + 'part.Transparency = "0.5"', { types: false }).filter(d => d.source === '型').length === 0)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

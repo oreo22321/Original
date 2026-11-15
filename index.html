@@ -13,6 +13,8 @@
   <meta name="apple-mobile-web-app-title" content="ForgeCode">
   <meta name="format-detection" content="telephone=no">
   <meta name="forgecode-relay" content="">
+  <!-- 安全対策: このアプリ以外のスクリプトを動かさない (AI の回答・README のプレビューなどに紛れ込んでも実行されない) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; worker-src 'self' blob:; manifest-src 'self'; media-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'none'">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -72,6 +74,7 @@
   <link rel="modulepreload" href="js/editor/setup.js">
   <link rel="modulepreload" href="js/editor/symbols.js">
   <link rel="modulepreload" href="js/editor/themes.js">
+  <link rel="modulepreload" href="js/editor/typecheck.js">
   <link rel="modulepreload" href="js/editor/typo.js">
   <link rel="modulepreload" href="js/luau/lexer.js">
   <link rel="modulepreload" href="js/luau/parser.js">

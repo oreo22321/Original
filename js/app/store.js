@@ -38,6 +38,7 @@ export const DEFAULTS = {
   lintUndefined: true,
   lintUnused: true,
   lintTypos: true,     // スペルミスを検出して「もしかして」を提案
+  lintTypes: true,     // 型の間違い (プロパティへの代入・引数・計算) を警告
   errorLens: true,     // エラーの内容を行の右に表示
   fixInput: true,      // 全角記号・スマート引用符を自動で半角に
   autoCorrect: true,   // fucntion → function などを自動修正

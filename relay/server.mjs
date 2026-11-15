@@ -217,7 +217,8 @@ export function createRelay({ log = () => {}, serve = true } = {}) {
     }
     // アプリ本体は Service Worker がまとめて管理するので、index.html と sw.js は毎回確認させる
     const cache = /\/(index\.html|sw\.js)$/.test(p) ? 'no-cache' : 'public, max-age=300'
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Length': body.length })
+    const extra = type.startsWith('text/html') ? { 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'; object-src 'none'; base-uri 'self'" } : {}
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Length': body.length, ...extra })
     res.end(req.method === 'HEAD' ? undefined : body)
     return true
   }
