@@ -1002,3 +1002,35 @@ body[data-layout=desktop].touch.kb-open.ed-focus .keybar { display: block; }
 
 /* 動きを減らす設定の端末では、動きを止める */
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+
+/* ---- 実機連携 (エグゼキューター) ---- */
+.live-view { padding: 4px 14px 24px; }
+.lv-sec { padding: 12px 0; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 9px; }
+.lv-sec:last-child { border-bottom: 0; }
+.lv-title { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.lv-status { display: flex; align-items: center; gap: 10px; }
+.lv-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--faint); }
+.lv-dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
+.lv-dot.wait { background: var(--warn); animation: breathe 1.6s ease-in-out infinite; }
+.lv-dot.err { background: var(--danger); }
+.lv-status-text { min-width: 0; }
+.lv-state { font-size: 13.5px; font-weight: 500; }
+.lv-sub { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.lv-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.lv-label { font-size: 13px; color: var(--muted); }
+.lv-desc { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+.lv-note { margin: 0; font-size: 11.5px; color: var(--faint); line-height: 1.6; display: flex; gap: 6px; align-items: flex-start; }
+.lv-note .ico { margin-top: 2px; }
+.lv-code { display: block; padding: 9px 11px; border-radius: var(--r); background: var(--bg); border: 1px solid var(--border-strong); font-size: 12px; line-height: 1.5; word-break: break-all; white-space: pre-wrap; user-select: all; -webkit-user-select: all; }
+.lv-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.lv-steps { margin: 0; padding-left: 20px; font-size: 12.5px; color: color-mix(in srgb, var(--fg) 88%, var(--muted)); line-height: 1.8; }
+.lv-tree { display: flex; flex-direction: column; max-height: 50vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); padding: 4px; background: var(--bg); }
+.lv-node { padding-right: 2px; }
+.lv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lv-node .gt-class { margin-left: 4px; flex: none; }
+.lv-more { margin-left: auto; opacity: .6; }
+.lv-loading { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-size: 12px; color: var(--muted); }
+.lv-kids { display: flex; flex-direction: column; }
+.sb-live[data-state=online] { color: var(--ok); }
+.sb-live[data-state=waiting], .sb-live[data-state=connecting] { color: var(--warn); }
+.sb-live[data-state=error] { color: var(--danger); }

@@ -14,7 +14,7 @@ const walk = dir => {
     else if (!/\.(map|DS_Store)$/.test(name) && !LAZY.has(rel)) files.push(rel)
   }
 }
-for (const d of ['css', 'js', 'vendor', 'data', 'icons']) walk(d)
+for (const d of ['css', 'js', 'vendor', 'data', 'icons', 'live']) walk(d)
 const hash = createHash('sha1')
 for (const f of files.slice(1)) hash.update(readFileSync(path.join(root, f)))
 const version = hash.digest('hex').slice(0, 10)

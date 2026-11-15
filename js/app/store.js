@@ -55,6 +55,7 @@ export const DEFAULTS = {
   outputTime: false,   // 出力に経過時間を表示
   explainErrors: true, // 実行エラーに日本語の解説を付ける
   netProxy: '',        // 外部 URL を直接取得できないときの中継サーバー ('' / corsproxy / allorigins / 独自 URL)
+  liveRelay: '',       // 実機連携の中継サーバー (https://…)
   // AI
   aiInline: true,      // 入力が止まったら AI (内蔵の統計モデル) が続きを提案
   aiDelay: 700,

@@ -36,7 +36,7 @@ function knowledgeIndex() {
 }
 export function searchKnowledge(text, mode = 'studio', limit = 4) {
   const n = normalize(text)
-  const aboutApp = /(forgecode|このアプリ|アプリの|この画面|エディタ|エディター|保存|zip|実行ボタン|デバッ|ブレークポイント|モード|プレビュー|forge ?ai|ai で|ai の|ai に|設定)/.test(n)
+  const aboutApp = /(forgecode|このアプリ|アプリの|この画面|エディタ|エディター|保存|zip|実行ボタン|デバッ|ブレークポイント|モード|プレビュー|forge ?ai|ai で|ai の|ai に|設定|実機|delta|デルタ|つなぐ|連携)/.test(n)
   return knowledgeIndex().search(text, limit, d => {
     const e = d.ref
     if (e.mode === 'executor') return mode === 'executor' ? 0.8 : -4

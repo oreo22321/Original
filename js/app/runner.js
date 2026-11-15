@@ -5,12 +5,23 @@ import { getSettings, getMode, on, emit, isTouch } from './store.js'
 import { h, icon, toast, copyText, haptic, menu } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { scriptKindOf, KIND_LABELS, langOf } from '../editor/setup.js'
+import { live, renderLivePanel } from './live.js'
 import { explainError } from './explain.js'
 import { GuiStage, SCREENS } from './gui-preview.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
 import { proxyTemplate, remoteFailBlock, remoteActions } from './remote-ui.js'
 
 const MAX_DOM_LINES = 3000
+// 実機のエラーから「ファイル:行」を取り出す (チャンク名をファイルのパスにしているので、そのまま行へ移動できる)
+function fileLine(text) {
+  const m = /([\w./ -]*[\w-]\.luau?):(\d+):/.exec(String(text || ''))
+  return m && app.files.some(f => f.path === m[1]) ? { file: m[1], line: Number(m[2]) } : {}
+}
+function deviceTrace(text) {
+  const lines = String(text || '').split('\n').slice(1).map(l => l.trim()).filter(l => /\.luau?:\d+/.test(l))
+  return lines.length > 1 ? lines : null
+}
+
 const LINK_RE = /((?:[\w./ -]*[\w-]\.luau?)(?::| line )\d+)/
 
 export class Runner {
@@ -54,8 +65,13 @@ export class Runner {
     this.probEl = h('div', { class: 'panel-view problems hidden' })
     this.gameEl = h('div', { class: 'panel-view game-view hidden' })
     this.debugEl = h('div', { class: 'panel-view debug-view hidden' })
+    this.liveEl = h('div', { class: 'panel-view live-view hidden' })
     this.debug = new DebugPanel(this, this.debugEl)
-    this.root.append(this.head, this.outWrap, this.probEl, this.debugEl, this.gameEl)
+    this.root.append(this.head, this.outWrap, this.probEl, this.debugEl, this.gameEl, this.liveEl)
+    // 実機連携 (エグゼキューター) からの出力・エラー
+    live.onEvent(m => this.onLive(m))
+    on('live', () => { this.renderTabs(); if (this.tab === 'live') renderLivePanel(this.liveEl, this) })
+    if (live.relay) setTimeout(() => live.start(), 800)
     this.renderTabs()
     this.placeholder()
   }
@@ -70,6 +86,7 @@ export class Runner {
       t('problems', '問題', pc.error + pc.warning ? { n: pc.error + pc.warning, kind: pc.error ? 'error' : 'warn' } : null),
       t('debug', 'デバッグ', this.debug.paused ? { n: '⏸', kind: 'paused' } : bpStore.count() ? { n: bpStore.count(), kind: 'bp' } : null),
       t('game', 'ゲーム', g.gui || g.interact ? { n: '●', kind: this.waiting ? 'live' : 'dot' } : null),
+      t('live', '実機', live.relay ? { n: '●', kind: live.state === 'online' ? 'live' : 'dot' } : null),
     )
     this.actions.textContent = ''
     const btn = (ic, title, fn, on) => h('button', { class: 'icon-btn' + (on ? ' on' : ''), title, 'aria-label': title, onclick: fn }, icon(ic, 18))
@@ -98,6 +115,8 @@ export class Runner {
     this.probEl.classList.toggle('hidden', tab !== 'problems')
     this.gameEl.classList.toggle('hidden', tab !== 'game')
     this.debugEl.classList.toggle('hidden', tab !== 'debug')
+    this.liveEl.classList.toggle('hidden', tab !== 'live')
+    if (tab === 'live') renderLivePanel(this.liveEl, this)
     if (tab === 'debug') this.debug.render()
     if (tab === 'problems') this.renderProblems()
     if (tab === 'game') this.renderGame()
@@ -312,7 +331,7 @@ export class Runner {
     return { timeLimit: limit * 1000, maxRunTime: s.maxRunTime, executor: mode === 'executor', kind, touch: sc.id !== 'pc', device: sc.id, screen: [sc.w, sc.h], net: { proxy: proxyTemplate() }, ...extra }
   }
 
-  async run({ selection = false, debug = false, path: forcePath = null, agent = false } = {}) {
+  async run({ selection = false, debug = false, path: forcePath = null, agent = false, device = false } = {}) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
     let path = null, source = null
@@ -337,6 +356,8 @@ export class Runner {
       source = open ? open.state.doc.toString() : app.contents.get(path)
       if (source === undefined) source = (await vfs.readFile(app.project.id, path)) || ''
     }
+    // 実機 (エグゼキューター) で実行
+    if (!agent && !debug && (device || live.target === 'device')) { this.runOnDevice(path, source, selection); return }
     if (this.running) this.stop(true)
     // 保存は裏で行い、実行は待たせない (開いているファイルは編集中の内容を使う)
     app.editors.saveAll().catch(() => {})
@@ -404,7 +425,8 @@ export class Runner {
       h('button', { class: 'icon-btn sm', title: '実行', 'aria-label': '実行', onclick: () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) }, icon('send', 16)))
   }
 
-  evalConsole(code) {
+  evalConsole(code, { device = false } = {}) {
+    if (device || live.target === 'device') { this.evalOnDevice(code); return }
     const w = this.ensureWorker()
     if (!w) return
     this.append([{ kind: 'input', text: code }])
@@ -613,8 +635,87 @@ export class Runner {
     this.fsTimer = setTimeout(() => refreshFiles(), 250)
   }
 
+  // ============================================================
+  // 実機 (エグゼキューター) での実行
+  // ============================================================
+  async runOnDevice(path, source, selection) {
+    if (!live.relay) { runCommand('togglePanel', true); this.show('live'); toast('実機で実行するには、先に中継サーバーを設定してください'); return }
+    if (this.running) this.stop(true)
+    app.editors.saveAll().catch(() => {})
+    runCommand('togglePanel', true)
+    if (this.tab !== 'output') this.show('output')
+    if (getSettings().clearOnRun) this.clear()
+    haptic(10)
+    app.editors.clearRunErrors()
+    this.errors = 0
+    this.errorEls = new Map()
+    this.holdScroll = false
+    if (!live.running) live.start()
+    this.deviceRun = live.run(path, source)
+    this.setRunning({ path, kind: 'device', device: true })
+    this.t0 = performance.now()
+    const who = live.peer ? live.peer.executor : 'エグゼキューター'
+    this.append([{ kind: 'meta', text: `実機 (${who}) で実行: ${path}${selection ? ' (選択範囲)' : ''}` }])
+    if (live.state !== 'online') this.append([{ kind: 'meta', text: 'エグゼキューターがまだつながっていません。つながると実行されます (5 分以内)' }])
+    this.renderTabs()
+  }
+
+  evalOnDevice(code) {
+    this.append([{ kind: 'input', text: code }])
+    this.outEl.scrollTop = this.outEl.scrollHeight
+    if (!live.relay) { this.line('error', '実機につながっていません (「実機」タブで設定してください)'); return }
+    if (!live.running) live.start()
+    live.eval(code).then(r => {
+      if (r.ok) this.append((r.values && r.values.length ? r.values : ['nil']).map(v => ({ kind: 'result', text: v })))
+      else this.showError({ text: r.error, message: r.error, ...fileLine(r.error) })
+    }, e => this.line('error', e.message))
+  }
+
+  // 実機から届いたもの
+  onLive(m) {
+    switch (m.t) {
+      case 'log': {
+        const kind = m.kind === 'MessageError' ? 'error' : m.kind === 'MessageWarning' ? 'warn' : m.kind === 'MessageInfo' ? 'info' : ''
+        if (kind === 'error') this.showError({ text: m.text, message: m.text, device: true, ...fileLine(m.text) })
+        else this.append([{ kind, text: m.text }])
+        break
+      }
+      case 'started': break
+      case 'result':
+        if (m.ok) this.append([{ kind: 'meta', text: '実機: 実行しました (つないだイベントやループは、ゲームの中で動き続けます)' }])
+        else if (m.skipped) this.append([{ kind: 'meta', text: '実機: ' + m.error }])
+        else this.showError({ text: m.error.split('\n')[0], message: m.error, syntax: !!m.syntax, device: true, traceback: deviceTrace(m.error), ...fileLine(m.error) })
+        if (this.running && this.running.device && m.id === this.deviceRun) { this.setRunning(null); this.renderTabs() }
+        break
+      case 'stopped': break
+      case 'hello': this.append([{ kind: 'meta', text: `実機: ${m.executor || 'エグゼキューター'} がつながりました${m.game ? ' — ' + m.game : ''}` }]); break
+    }
+  }
+
+  // サーバーなしモード: クリップボードで受け取った結果を表示
+  showDeviceResult(r) {
+    runCommand('togglePanel', true)
+    if (this.tab !== 'output') this.show('output')
+    this.errors = 0
+    this.errorEls = new Map()
+    this.append([{ kind: 'meta', text: `実機の結果: ${r.path || ''}` }])
+    if (r.syntax) this.showError({ text: r.syntax, message: r.syntax, syntax: true, ...fileLine(r.syntax) })
+    for (const l of r.logs || []) {
+      if (l.k === 'MessageError') this.showError({ text: l.t, message: l.t, ...fileLine(l.t) })
+      else this.append([{ kind: l.k === 'MessageWarning' ? 'warn' : l.k === 'MessageInfo' ? 'info' : '', text: l.t }])
+    }
+    if (r.error) this.showError({ text: String(r.error).split('\n')[0], message: r.error, traceback: deviceTrace(r.error), ...fileLine(r.error) })
+    if (!r.syntax && !r.error && !(r.logs || []).length) this.append([{ kind: 'meta', text: '(出力はありませんでした)' }])
+  }
+
   stop(silent) {
     if (!this.running) return
+    if (this.running.device) {
+      live.stopRuns()
+      if (!silent) this.finished('stopped')
+      else this.setRunning(null)
+      return
+    }
     this.debug.onFinished()
     this.resetWorker()
     if (!silent) this.finished('stopped')

@@ -56,6 +56,39 @@ Forge AI は、外部のサービスに頼らずアプリの中だけで動く A
 - **高性能モード (任意)**: [WebLLM](https://github.com/mlc-ai/web-llm) で Qwen2.5-Coder を端末内で動かします。モデルは使う人が選んだときだけ Hugging Face からダウンロードされ、ブラウザのキャッシュに残ります。モデルの実行コード (wasm) はハッシュ (SRI) を確かめてから使います。
 - AI が実行して確かめるときは、安全のため外部と通信しません (一度取得した loadstring のスクリプトはキャッシュから使えます)。
 
+## 実機連携 (Delta などのエグゼキューター)
+
+ForgeCode とエグゼキューターをつなぐと、▶ で **実際のゲームの中で** スクリプトを実行し、出力・エラーを ForgeCode に表示できます。
+
+- ▶ の実行先を「実機」にすると、開いているファイルをゲームの中で実行。`print` / `warn`、エラー (イベントの中で起きたものも) が出力パネルに届き、「◯ 行目へ」「AI で直す」もそのまま使えます
+- コンソールの式をゲームの中で評価 (`workspace:GetChildren()` など)
+- 「実機」タブで、ゲームの中のオブジェクトを一覧 (パスのコピー・エディタへの挿入)
+- iPhone 1 台でも使えます: ▶ を押してから Roblox に切り替えると実行され、戻ると出力が届いています (中継サーバーが 15 分ほど預かります)
+- サーバーなしの「コピー & 貼り付け」モード: 「実機用にコピー」→ エグゼキューターで実行 → 数秒後に「結果を貼り付け」
+
+### つなぎ方
+
+1. 中継サーバーを用意します (ブラウザの ForgeCode は外からの接続を待てないため、間に置きます)。
+   - [render.com](https://render.com) に GitHub のアカウントでログイン →「New」→「Blueprint」→ このリポジトリを選んで作成すると、`render.yaml` の `forgecode-live` (無料プラン) ができます
+   - 自分のパソコンなどで動かす場合: `node relay/server.mjs` (Node.js 18 以上・依存なし。ForgeCode を https で開く場合は、中継サーバーも https が必要です)
+2. ForgeCode の出力パネル →「実機」タブに、中継サーバーの URL (`https://〜.onrender.com`) を貼って保存
+3. 表示された 1 行 (`loadstring(game:HttpGet("…/c/…"))()`) をエグゼキューターで実行。autoexec フォルダに入れておくと、毎回自動でつながります
+4. 「▶ の実行先」を「実機」に
+
+### 安全のしくみ
+
+- 中継サーバーはデータを保存せず、メモリの中だけで中継します
+- エグゼキューターへコードを送れるのは、部屋を開いた ForgeCode の鍵 (この端末だけに保存) を持つ側だけです。エグゼキューターに貼る 1 行に鍵は入っていません
+- 1 行は他の人に見せないでください。心配なときは「実機」タブの「接続コードを作り直す」
+- 公開ゲームでのエグゼキューターの使用は Roblox の利用規約違反になり、アカウントが処分されることがあります。自分のゲームで試しましょう
+
+### 制限
+
+- 実機では 1 つのファイルとして実行します (プロジェクトの他のファイルの `require` は使えません)
+- ブレークポイントで止めるデバッグは、エミュレーターだけです
+- エグゼキューターが `request` (HTTP) に対応している必要があります
+- 無料の中継サーバーは、しばらく使わないと止まり、次の接続に 1 分ほどかかることがあります
+
 ## はじめかた (GitHub Pages で無料公開)
 
 1. GitHub のリポジトリ画面で **Settings → Pages** を開きます。
@@ -178,11 +211,13 @@ vendor/                      同梱ライブラリ (CodeMirror 6, fflate, WebLLM
 sw.js                        オフライン用 Service Worker
 tests/                       テスト
 tools/                       ライブラリと API データを作り直すスクリプト
+relay/server.mjs             実機連携の中継サーバー (依存なし)
+live/connector.lua           エグゼキューターで動くコネクター (中継サーバーが配ります)
 ```
 
 - テスト: `for f in tests/*.test.mjs; do node "$f" || break; done`
   - eval を使わないエンジンでも確認: `node --import ./tests/force-interp.mjs tests/luau-basic.test.mjs` (roblox / executor / gui / debug / extlib も同様)
-  - `ai` (Forge AI: 理解・修復・レビュー・説明・生成・会話・続きの提案) / `agent` (置き換え・差分・API 検索) / `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論と補完の候補) / `format` (整形) / `indent` (字下げ・end) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
+  - `relay` (実機連携の中継サーバー) / `ai` (Forge AI: 理解・修復・レビュー・説明・生成・会話・続きの提案) / `agent` (置き換え・差分・API 検索) / `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論と補完の候補) / `format` (整形) / `indent` (字下げ・end) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
 - Roblox API データの更新: `node tools/build-roblox-api.mjs` (最新の API ダンプを取得して `data/roblox-api.json` を作り直します)
 - ライブラリの作り直し: `cd tools && npm install && npm run vendor` (端末内 LLM は `node vendor-webllm.mjs`。更新したら `js/ai/llm.js` の wasm のハッシュも更新)
 - ファイルを変更したら `node tools/build-sw.mjs` で Service Worker のキャッシュ一覧を更新してください (更新しないと古いキャッシュが使われることがあります)。
