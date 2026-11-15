@@ -307,9 +307,10 @@ export class Workbench {
     const runner = app.runner
     const pc = runner ? runner.problemCount : { error: 0, warning: 0 }
     const lv = live.status()
-    this.sb.live.classList.toggle('hidden', !lv.relay)
+    const showLive = !!lv.relay && lv.active
+    this.sb.live.classList.toggle('hidden', !showLive)
     this.sb.live.dataset.state = lv.state
-    this.sbSet('live', lv.relay ? lv.state + lv.target + lv.device : '', () => (lv.relay ? [h('span', { class: 'sb-dot' }), lv.device ? '実機' : '実機連携'] : null))
+    this.sbSet('live', showLive ? lv.state + lv.target + lv.device : '', () => (showLive ? [h('span', { class: 'sb-dot' }), lv.device ? '実機' : '実機連携'] : null))
     const mode = getMode()
     const s = getSettings()
     this.sb.mode.className = 'sb-item sb-mode k-' + mode

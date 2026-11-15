@@ -71,7 +71,7 @@ export class Runner {
     // 実機連携 (エグゼキューター) からの出力・エラー
     live.onEvent(m => this.onLive(m))
     on('live', () => { this.renderTabs(); if (this.tab === 'live') renderLivePanel(this.liveEl, this) })
-    if (live.relay) setTimeout(() => live.start(), 800)
+    if (live.relay && live.active) setTimeout(() => live.start(), 800)
     this.renderTabs()
     this.placeholder()
   }

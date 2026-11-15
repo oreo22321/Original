@@ -27,6 +27,7 @@ class LiveLink {
     this.room = roomOf(this.key)
     this.target = TARGETS.has(saved.target) ? saved.target : 'auto'
     this.allLogs = !!saved.allLogs
+    this.used = !!saved.used   // エグゼキューター用の 1 行をコピーしたことがある (= 実機連携を使う人)
     this.save()
     this.state = 'off'      // off | connecting | waiting (相手待ち) | online | error
     this.error = ''
@@ -50,14 +51,17 @@ class LiveLink {
     setTimeout(() => this.detect(), 0)
   }
 
-  // 中継サーバー: 設定 → アプリに組み込んだ既定 → 同じ場所 (自動) の順
-  get relay() { return normRelay(getSettings().liveRelay) || normRelay(DEFAULT_RELAY) || this.autoRelay }
-  get relaySource() { return normRelay(getSettings().liveRelay) ? 'custom' : normRelay(DEFAULT_RELAY) ? 'default' : this.autoRelay ? 'same' : '' }
-  save() { try { localStorage.setItem(STORE, JSON.stringify({ key: this.key, target: this.target, allLogs: this.allLogs })) } catch {} }
+  // 中継サーバー: 設定 → 同じ場所 (中継サーバーから開いたとき) → アプリに組み込んだ既定 の順
+  get relay() { return normRelay(getSettings().liveRelay) || this.autoRelay || normRelay(DEFAULT_RELAY) }
+  get relaySource() { return normRelay(getSettings().liveRelay) ? 'custom' : this.autoRelay ? 'same' : normRelay(DEFAULT_RELAY) ? 'default' : '' }
+  save() { try { localStorage.setItem(STORE, JSON.stringify({ key: this.key, target: this.target, allLogs: this.allLogs, used: this.used })) } catch {} }
+  // 起動時から自動でつなぐか: 実機連携を使ったことがある人だけ (使わない人は中継サーバーと通信しない)
+  get active() { return this.used || this.relaySource === 'custom' || this.target === 'device' }
+  markUsed() { if (!this.used) { this.used = true; this.save() } if (this.relay) this.start() }
   onEvent(fn) { this.handlers.add(fn); return () => this.handlers.delete(fn) }
   fire(m) { for (const f of this.handlers) { try { f(m) } catch {} } }
   setState(s, err = '') { const changed = s !== this.state || err !== this.error; this.state = s; this.error = err; if (changed) emit('live', this.status()) }
-  status() { return { state: this.state, error: this.error, peer: this.peer, online: this.peerOnline, target: this.target, relay: this.relay, source: this.relaySource, device: this.runsOnDevice() } }
+  status() { return { state: this.state, error: this.error, peer: this.peer, online: this.peerOnline, target: this.target, relay: this.relay, source: this.relaySource, device: this.runsOnDevice(), active: this.active || !!this.running } }
   oneLiner() { return `loadstring(game:HttpGet("${this.relay}/c/${this.room}"))()` }
   // ▶ をゲームの中で実行するか (自動: エグゼキューターがつながっていれば実機)
   runsOnDevice() { return this.target === 'device' || (this.target === 'auto' && !!this.relay && this.peerOnline && this.state === 'online') }
@@ -70,7 +74,7 @@ class LiveLink {
   detect() {
     const meta = document.querySelector('meta[name="forgecode-relay"]')
     if (meta && meta.content === 'same' && /^https?:$/.test(location.protocol)) { this.autoRelay = location.origin; emit('live', this.status()) }
-    if (this.relay) this.start()
+    if (this.relay && this.active) this.start()
   }
 
   async regenerate() {
@@ -94,7 +98,7 @@ class LiveLink {
 
   // 止まっていそうなら、すぐにつなぎ直す
   kick() {
-    if (!this.relay) return
+    if (!this.relay || !this.active) return
     if (!this.running) { this.start(); return }
     if (Date.now() - this.lastOk > 26000 && this.recvCtrl) { try { this.recvCtrl.abort() } catch {} }
   }
@@ -309,6 +313,7 @@ export function renderLivePanel(el, runner) {
   const targetNote = st.target === 'auto' ? (st.device ? 'いまはゲームの中で実行します' : 'エグゼキューターがつながると、自動でゲームの中で実行します') : st.target === 'device' ? 'いつもゲームの中で実行します' : 'いつもエミュレーターで実行します'
   el.append(sec(null, head, h('div', { class: 'lv-row' }, h('span', { class: 'lv-label' }, '▶ の実行先'), seg), h('div', { class: 'lv-desc lv-target-note' }, targetNote)))
 
+  if (st.relay && !live.running) live.start()
   if (!st.relay) {
     el.append(setupSection(el, runner))
   } else {
@@ -321,7 +326,7 @@ export function renderLivePanel(el, runner) {
         h('li', null, 'ゲームを開くと自動でつながります。あとはコードを書いて ▶ を押すだけです')),
       code,
       h('div', { class: 'lv-acts' },
-        h('button', { class: 'btn small primary', onclick: () => copyText(live.oneLiner()).then(() => toast('1 行をコピーしました。エグゼキューターの autoexec に貼り付けてください', { icon: 'copy' })) }, icon('copy', 14), '1 行をコピー'),
+        h('button', { class: 'btn small primary', onclick: () => { live.markUsed(); copyText(live.oneLiner()).then(() => toast('1 行をコピーしました。エグゼキューターの autoexec に貼り付けてください', { icon: 'copy' })) } }, icon('copy', 14), '1 行をコピー'),
         h('button', { class: 'btn small ghost', onclick: () => fullConnector() }, 'スクリプト全体をコピー'),
         h('button', { class: 'btn small ghost', title: 'その他', 'aria-label': 'その他', onclick: () => menu([
           { label: 'つなぎ直す', icon: 'refresh', run: () => live.restart() },
@@ -376,6 +381,7 @@ function setupSection(el, runner) {
 }
 
 async function fullConnector() {
+  live.markUsed()
   try {
     const src = await fetch('live/connector.lua').then(r => { if (!r.ok) throw new Error(); return r.text() })
     await copyText(src.replace('{{RELAY}}', live.relay).replace('{{ROOM}}', live.room))
@@ -454,12 +460,12 @@ function nodeMenu(anchor, p, it) {
 // ステータスバー用
 export function liveBadge() {
   const st = live.status()
-  if (!st.relay) return null
+  if (!st.relay || !st.active) return null
   return { on: st.state === 'online', text: st.device ? '実機' : '実機連携', state: st.state }
 }
 
 command('liveOpen', '実機連携 (エグゼキューター) を開く', () => { runCommand('togglePanel', true); app.runner.show('live') }, { icon: 'device' })
 command('liveRun', '実機で実行', () => app.runner.run({ device: true }), { icon: 'play' })
-command('liveCopyLine', '実機連携: エグゼキューター用の 1 行をコピー', () => { if (!live.relay) { runCommand('liveOpen'); return } copyText(live.oneLiner()).then(() => toast('1 行をコピーしました', { icon: 'copy' })) }, { icon: 'copy' })
+command('liveCopyLine', '実機連携: エグゼキューター用の 1 行をコピー', () => { if (!live.relay) { runCommand('liveOpen'); return } live.markUsed(); copyText(live.oneLiner()).then(() => toast('1 行をコピーしました', { icon: 'copy' })) }, { icon: 'copy' })
 command('liveCopyForDevice', '実機用にコピー (結果をクリップボードで受け取る)', () => copyForDevice(), { icon: 'copy' })
 command('livePasteResult', '実機の結果を貼り付け', () => pasteResult(app.runner), { icon: 'paste' })
