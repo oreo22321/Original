@@ -7,7 +7,7 @@ import * as vfs from './vfs.js'
 import { apiVersion } from '../editor/apidb.js'
 import { app, command, runCommand, setProjectKind } from './app.js'
 
-export const APP_VERSION = '10.2.0'
+export const APP_VERSION = '10.3.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -79,7 +79,7 @@ const SCHEMA = [
     { key: 'timeLimit', type: 'range', min: 1, max: 60, label: '連続実行の上限 (無限ループ対策)', unit: '秒' },
     { key: 'maxRunTime', type: 'range', min: 0, max: 600, step: 10, label: '最大実行時間', unit: '秒', desc: '0 で無制限。GUI やボタンの操作待ちの間は数えません' },
     { key: 'netProxy', type: 'select', label: '外部スクリプトの中継サーバー', desc: 'game:HttpGet で読み込む URL が、ブラウザの制限 (CORS) で直接取れないときだけ使います。使うと、その URL が中継サーバーの運営者に送られます (ヘッダーや本文を付けた request は中継しません)', options: [['', '使わない'], ['corsproxy', 'corsproxy.io'], ['allorigins', 'allorigins.win']] },
-    { key: 'liveRelay', type: 'text', label: '実機連携の中継サーバー', desc: 'Delta などのエグゼキューターとつなぐための中継サーバーの URL (https://…)。出力パネルの「実機」タブで、つなぎ方を確認できます' },
+    { key: 'liveRelay', type: 'text', label: '実機連携の中継サーバー', desc: 'Delta などのエグゼキューターとつなぐための中継サーバーの URL (https://…)。空のときは、アプリに組み込まれた中継サーバーか、中継サーバーと同じ場所から開いたときはその場所を自動で使います。つなぎ方は出力パネルの「実機」タブで確認できます' },
     { key: 'liveOpen', type: 'action', label: '実機連携 (エグゼキューター)', desc: '▶ のスクリプトを実際のゲームの中で実行し、出力・エラーを ForgeCode に表示します', button: '開く', run: () => runCommand('liveOpen') },
     { key: 'remoteScripts', type: 'action', label: '取得した外部スクリプト', desc: 'loadstring で読み込んだスクリプトはこの端末に保存され、オフラインでも動きます', button: '一覧を開く', run: () => runCommand('remoteScripts') },
   ] },

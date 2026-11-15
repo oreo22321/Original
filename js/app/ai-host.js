@@ -6,7 +6,6 @@ import { app, refreshFiles } from './app.js'
 import { getSettings, getMode, emit } from './store.js'
 import * as vfs from './vfs.js'
 import { fileText, writeText, isFile, cleanPath, lintOpts, problemsOf, finishChanges, revertChanges, serial } from './agent.js'
-import { respond } from '../ai/engine.js'
 import * as llm from '../ai/llm.js'
 import { setProjectCorpus } from '../ai/complete.js'
 
@@ -91,6 +90,12 @@ function llmBridge(session) {
 // ============================================================
 // 依頼を実行
 // ============================================================
+// AI の本体 (知識ベース・コード生成・解説) は大きいので、はじめて使うとき (か、手が空いたとき) に読み込む
+let enginePromise = null
+export function loadEngine() {
+  if (!enginePromise) enginePromise = import('../ai/engine.js').catch(e => { enginePromise = null; throw e })
+  return enginePromise
+}
 let memory = {}
 export function resetMemory() { memory = {} }
 
@@ -99,6 +104,7 @@ export async function askAi({ text, history = [], onStep = () => {}, onText, onP
   const host = makeHost(session)
   let r
   try {
+    const { respond } = await loadEngine()
     r = await respond({ text, history, host, onStep, onText, signal, memory })
   } catch (e) {
     try { e.changes = await finishChanges(session) } catch { e.changes = [] }
@@ -116,9 +122,9 @@ export function refreshCorpus() {
   clearTimeout(corpusTimer)
   corpusTimer = setTimeout(() => {
     try {
-      const texts = []
-      for (const f of app.files) if (!f.dir && /\.luau?$/i.test(f.path)) { const t = app.contents.get(f.path); if (t) texts.push(t) }
-      setProjectCorpus(texts)
+      const files = []
+      for (const f of app.files) if (!f.dir && /\.luau?$/i.test(f.path)) { const t = app.contents.get(f.path); if (t) files.push({ path: f.path, text: t }) }
+      setProjectCorpus(files).catch(() => {})
     } catch {}
-  }, 1500)
+  }, 3000)
 }

@@ -8,7 +8,7 @@ import { reviewCode, applyReviewFixes } from '../js/ai/review.js'
 import { explainCode, addComments, addTypes } from '../js/ai/describe.js'
 import { generateCode } from '../js/ai/generate.js'
 import { respond, hoistServices, verifyLlmCode, searchKnowledge } from '../js/ai/engine.js'
-import { completeLine, codeFromComment, setProjectCorpus } from '../js/ai/complete.js'
+import { completeLine, codeFromComment, setProjectCorpus, warmComplete } from '../js/ai/complete.js'
 import { checkSyntax } from '../js/luau/parser.js'
 import { lintLuau } from '../js/editor/lint.js'
 
@@ -215,16 +215,23 @@ const v = verifyLlmCode('こうします\n```lua\nif x != 1 then\nwait(1)\nend\n
 ok('verify llm code', /~= 1/.test(v.text) && /task\.wait\(1\)/.test(v.text) && v.notes.length > 0, v.text)
 
 // ---- 続きの提案 ----
-setProjectCorpus(['local myRemote = game.ReplicatedStorage:WaitForChild("MyRemote")\nmyRemote:FireServer("hello")\nmyRemote:FireServer("hello")\n'])
+await setProjectCorpus(['local myRemote = game.ReplicatedStorage:WaitForChild("MyRemote")\nmyRemote:FireServer("hello")\nmyRemote:FireServer("hello")\n'])
+await warmComplete()
 eq('complete service', completeLine('local Players = game:Get'), 'Service(')
 eq('complete localplayer', completeLine('local player = Players.Loc'), 'alPlayer')
 eq('complete character', completeLine('local character = player.Character or '), 'player.CharacterAdded:Wait()')
 eq('complete project word', completeLine('myRemote:Fi'), 'reServer("hello")')
 eq('complete nothing in comment', completeLine('-- local x = game:Get'), '')
 eq('complete no = in if', /=/.test(completeLine('if not humanoid ').replace(/[~=<>]=/g, '')), false)
-const cc = codeFromComment('-- 触れたら死ぬ\n', 'studio')
+const cc = await codeFromComment('-- 触れたら死ぬ\n', 'studio')
 ok('comment to code', cc && /Health = 0/.test(cc.code) && !checkSyntax(cc.code), cc && cc.code)
-eq('comment to code: not a request', codeFromComment('-- hello\n', 'studio'), null)
+eq('comment to code: not a request', await codeFromComment('-- hello\n', 'studio'), null)
+// 変わったファイルだけ学習し直す: 古い内容は忘れ、新しい内容を覚える
+await setProjectCorpus([{ path: 'a.lua', text: 'local zork = 1\nzorkTarget:Fire("aa")\nzorkTarget:Fire("aa")\n' }, { path: 'b.lua', text: 'local q = 1\n'.repeat(40) }])
+eq('corpus learns', completeLine('zorkTarget:Fi'), 're("aa")')
+await setProjectCorpus([{ path: 'a.lua', text: 'local zork = 1\nzorkOther:Kick("bb")\nzorkOther:Kick("bb")\n' }, { path: 'b.lua', text: 'local q = 1\n'.repeat(40) }])
+ok('corpus forgets old', completeLine('zorkTarget:Fi') !== 're("aa")', completeLine('zorkTarget:Fi'))
+eq('corpus learns new', completeLine('zorkOther:Ki'), 'ck("bb")')
 
 console.log(`ai: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

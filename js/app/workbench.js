@@ -234,8 +234,8 @@ export class Workbench {
     } else {
       const pinned = target && (!doc || doc.path !== target)
       const bps = runner && runner.debug ? bpStoreCount() : 0
-      a.append(h('button', { class: 'run-btn' + (bps ? ' has-bp' : ''), title: live.target === 'device' ? '実機で実行 (エグゼキューター)' : (target ? `${target} を実行` : '実行') + (bps ? ' — ブレークポイントで止まります' : '') + ' (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') },
-        icon(live.target === 'device' ? 'device' : bps ? 'bug' : 'play', 18), h('span', null, live.target === 'device' ? '実機で実行' : pinned ? vfs.basename(target).replace(/\.(server|client)?\.?luau?$/, '') : '実行')))
+      a.append(h('button', { class: 'run-btn' + (bps ? ' has-bp' : ''), title: live.runsOnDevice() ? '実機で実行 (エグゼキューター)' : (target ? `${target} を実行` : '実行') + (bps ? ' — ブレークポイントで止まります' : '') + ' (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') },
+        icon(live.runsOnDevice() ? 'device' : bps ? 'bug' : 'play', 18), h('span', null, live.runsOnDevice() ? '実機で実行' : pinned ? vfs.basename(target).replace(/\.(server|client)?\.?luau?$/, '') : '実行')))
     }
     a.append(btn('more', 'その他', e => this.moreMenu(e.currentTarget)))
   }
@@ -309,7 +309,7 @@ export class Workbench {
     const lv = live.status()
     this.sb.live.classList.toggle('hidden', !lv.relay)
     this.sb.live.dataset.state = lv.state
-    this.sbSet('live', lv.relay ? lv.state + lv.target : '', () => (lv.relay ? [h('span', { class: 'sb-dot' }), lv.target === 'device' ? '実機' : '実機連携'] : null))
+    this.sbSet('live', lv.relay ? lv.state + lv.target + lv.device : '', () => (lv.relay ? [h('span', { class: 'sb-dot' }), lv.device ? '実機' : '実機連携'] : null))
     const mode = getMode()
     const s = getSettings()
     this.sb.mode.className = 'sb-item sb-mode k-' + mode

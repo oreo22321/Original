@@ -1,6 +1,6 @@
 # Render の設定 (Blueprint)
 #  forgecode-live: 実機連携の中継サーバー (Delta などのエグゼキューターと ForgeCode をつなぐ)。無料プランで動きます
-#  forgecode     : ForgeCode 本体を Render で公開したい場合の静的サイト (GitHub Pages で使うなら不要)
+#                  ForgeCode 本体も同じ場所で配信するので、その URL を開けば設定なしで実機とつながります
 services:
   - type: web
     name: forgecode-live
@@ -12,15 +12,3 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
-  - type: web
-    name: forgecode
-    runtime: static
-    buildCommand: echo "ビルドは不要です"
-    staticPublishPath: .
-    headers:
-      - path: /sw.js
-        name: Cache-Control
-        value: no-cache
-      - path: /index.html
-        name: Cache-Control
-        value: no-cache

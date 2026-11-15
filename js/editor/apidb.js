@@ -2,7 +2,7 @@
 let api = null
 let loading = null
 const memberCache = new Map()
-let serviceList = null, creatableList = null, classList = null
+let serviceList = null, creatableList = null, classList = null, enumList = null
 
 export function loadRobloxApi(url = 'data/roblox-api.json') {
   if (!loading) {
@@ -12,14 +12,14 @@ export function loadRobloxApi(url = 'data/roblox-api.json') {
     }).then(d => {
       api = d
       memberCache.clear()
-      serviceList = creatableList = classList = null
+      serviceList = creatableList = classList = enumList = null
       return d
     }).catch(e => { loading = null; throw e })
   }
   return loading
 }
 
-export function setRobloxApi(d) { api = d; memberCache.clear(); serviceList = creatableList = classList = null; loading = Promise.resolve(d) }
+export function setRobloxApi(d) { api = d; memberCache.clear(); serviceList = creatableList = classList = enumList = null; loading = Promise.resolve(d) }
 export const apiReady = () => !!api
 export const apiVersion = () => api ? api.v : '?'
 
@@ -68,7 +68,12 @@ export function allClasses() {
 }
 export function isDeprecatedClass(name) { return !!(api && api.c[name] && (api.c[name].t || '').includes('D')) }
 
-export function enumNames() { return api ? Object.keys(api.e).sort() : [] }
+// 呼ばれるたびに並べ替えない (誤字チェックなどで何度も使うので)
+export function enumNames() {
+  if (!api) return []
+  if (!enumList) enumList = Object.keys(api.e).sort()
+  return enumList
+}
 export function enumItems(name) { return api && api.e[name] ? api.e[name] : null }
 
 // "(a: T, b: U): R" → 戻り値の型

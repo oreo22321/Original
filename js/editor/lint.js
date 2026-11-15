@@ -10,7 +10,7 @@ import { LUAU_GLOBALS, LUAU_LIBS, ROBLOX_DATATYPES, LUAU_KEYWORDS } from '../dat
 import { EXECUTOR_GLOBALS, EXECUTOR_LIBS, DRAWING_KINDS, isExecutorOnly } from '../data/executor-api.js'
 import * as db from './apidb.js'
 import { resolveChain, parseChain, memberNamesOf, declPos, typeLabel, docText } from './luau-intel.js'
-import { diagnoseBlocks, lightTokens } from './blocks.js'
+import { diagnoseBlocks, lightTokens, scanBlocks } from './blocks.js'
 import { nearest, typoLimit, editDistance, fixChar, fixCode, hasSuspect, describeChar, KEYWORD_FIXES } from './typo.js'
 
 const STD_LIBS = new Set(['string', 'table', 'math', 'task', 'coroutine', 'os', 'utf8', 'bit32', 'buffer'])
@@ -53,7 +53,7 @@ const stringFix = (name, text) => ({ name, apply(view, from, to) { view.dispatch
 function scanChars(src) {
   const diags = []
   const fixAllAction = { name: 'ファイル全体の全角記号を直す', apply(view) { const t = view.state.doc.toString(); const f = fixCode(t); if (f !== t) view.dispatch({ changes: { from: 0, to: t.length, insert: f }, userEvent: 'input.fix' }) } }
-  const toks = lightTokens(src, true)
+  const toks = scanBlocks(src, true).tokens
   const add = (from, to) => {
     if (diags.length >= 40) return
     const text = src.slice(from, to)
@@ -203,6 +203,19 @@ function analyze(ast, src, opts) {
   }
   const objTextOf = e => (e.s !== undefined && e.keyS !== undefined ? src.slice(e.s, e.keyS).replace(/\s*[.:]\s*$/, '') : null)
 
+  // 型ごとのメンバー一覧と「もしかして」の結果を使い回す (大きなファイルで同じ型・同じ名前が何度も出るため)
+  const memberCache = new Map()
+  const suggCache = new Map()
+  function membersOf(ty, op) {
+    const k = ty.k + '|' + (ty.name || '') + '|' + op
+    let m = memberCache.get(k)
+    if (m === undefined) {
+      const names = memberNamesOf(ty, op)
+      m = names ? { k, names, set: new Set(names) } : null
+      memberCache.set(k, m)
+    }
+    return m
+  }
   function checkMember(e, op) {
     const key = op === ':' ? e.name : e.key.v
     if (!typos || typeof key !== 'string' || key.length < 3 || e.keyS === undefined) return null
@@ -210,12 +223,18 @@ function analyze(ast, src, opts) {
     if (!objText || objText.length > 160 || objText.includes('\n')) return null
     const ty = typeOfText(objText, e.s)
     if (!ty) return null
-    const names = memberNamesOf(ty, op)
-    if (!names || names.includes(key)) return ty
+    const mem = membersOf(ty, op)
+    if (!mem || mem.set.has(key)) return ty
+    const names = mem.names
     const from = e.keyS, to = e.keyS + key.length
     const closed = ty.k === 'enumRoot' || ty.k === 'enum' || ty.k === 'dtlib' || (ty.k === 'lib' && STD_LIBS.has(ty.name))
     // Instance の '.' は子オブジェクトの名前かもしれないので、よく似た名前があるときだけ指摘する
-    const sugg = closed ? nearest(key, names, Math.max(1, typoLimit(key.length))) : nearest(key, names)
+    const sk = mem.k + '|' + key
+    let sugg = suggCache.get(sk)
+    if (sugg === undefined) {
+      sugg = closed ? nearest(key, names, Math.max(1, typoLimit(key.length))) : nearest(key, names)
+      suggCache.set(sk, sugg)
+    }
     if (!sugg && !closed) return ty
     const label = typeLabel(ty)
     const what = ty.k === 'lib' ? `${label} ライブラリ` : label
@@ -488,11 +507,22 @@ export function lintLuau(src, opts = {}) {
   }
 }
 
+// 大きなファイルは、入力が落ち着いて手が空くまで待ってから調べる (調べている間は入力が止まるため)
+// 待つ間に内容が変わったら、この回の結果は捨てられる (CodeMirror が古い結果を使わない)
+const BIG_DOC = 60000
+const idleOnce = () => new Promise(r => (typeof requestIdleCallback === 'function' ? requestIdleCallback(() => r(), { timeout: 1500 }) : setTimeout(r, 30)))
 export function makeLinter(getOpts) {
-  return linter(view => {
+  return linter(async view => {
     const opts = getOpts()
     if (!opts.enabled) return []
-    if (view.state.doc.length > 400000) return []
+    const doc = view.state.doc
+    if (doc.length > 400000) return []
+    if (doc.length > BIG_DOC) {
+      await new Promise(r => setTimeout(r, Math.min(1400, doc.length / 200)))
+      if (view.state.doc !== doc) return []
+      await idleOnce()
+      if (view.state.doc !== doc) return []
+    }
     return lintLuau(docText(view.state), opts)
   }, { delay: 420 })
 }

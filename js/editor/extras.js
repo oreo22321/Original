@@ -107,8 +107,16 @@ export const indentGuides = ViewPlugin.fromClass(class {
 // ============================================================
 const BRACKET_NODES = new Set(['(', ')', '[', ']', '{', '}', 'paren', 'brace', 'squareBracket'])
 export const rainbowBrackets = ViewPlugin.fromClass(class {
-  constructor(view) { this.decorations = this.build(view) }
-  update(u) { if (u.docChanged || u.viewportChanged || syntaxTree(u.startState) !== syntaxTree(u.state)) this.decorations = this.build(u.view) }
+  constructor(view) { this.cps = []; this.decorations = this.build(view) }
+  update(u) {
+    if (u.docChanged) {
+      // 変更より前の目印 (その位置での括弧の深さ) はそのまま使える。後ろは捨てる
+      let minA = Infinity
+      u.changes.iterChangedRanges(fromA => { if (fromA < minA) minA = fromA })
+      this.cps = this.cps.filter(c => c.pos <= minA)
+    }
+    if (u.docChanged || u.viewportChanged || syntaxTree(u.startState) !== syntaxTree(u.state)) this.decorations = this.build(u.view)
+  }
   build(view) {
     const b = new RangeSetBuilder()
     const { state } = view
@@ -116,13 +124,20 @@ export const rainbowBrackets = ViewPlugin.fromClass(class {
     const end = view.viewport.to
     const start = view.viewport.from
     if (end > 300000) return b.finish()
-    let depth = 0
+    // 画面より前で、いちばん近い目印から数え始める (毎回ファイルの先頭から数えない)
+    let cp = { pos: 0, depth: 0 }
+    for (const c of this.cps) if (c.pos <= start && c.pos > cp.pos) cp = c
+    let depth = cp.depth
+    const from0 = cp.pos
+    let nextCp = from0 + 4000
+    const cps = this.cps
     const marks = [0, 1, 2].map(i => Decoration.mark({ class: 'cm-rb' + i }))
     tree.iterate({
-      from: 0, to: end,
+      from: from0, to: end,
       enter(node) {
         if (!BRACKET_NODES.has(node.name)) return
-        for (let p = node.from; p < node.to; p++) {
+        if (node.from >= nextCp && node.from <= start) { cps.push({ pos: node.from, depth }); nextCp = node.from + 4000 }
+        for (let p = Math.max(node.from, from0); p < node.to; p++) {
           const ch = state.doc.sliceString(p, p + 1)
           if ('([{'.includes(ch)) {
             if (p >= start) b.add(p, p + 1, marks[depth % 3])
@@ -134,6 +149,7 @@ export const rainbowBrackets = ViewPlugin.fromClass(class {
         }
       },
     })
+    if (cps.length > 400) this.cps = cps.slice(-200)
     return b.finish()
   }
 }, { decorations: v => v.decorations })

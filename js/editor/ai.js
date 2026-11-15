@@ -1,7 +1,7 @@
 // エディタの AI 候補 (ゴーストテキスト)
 // ・統計モデル: プロジェクトと内蔵サンプルから学習し、行の続きを提案 (すぐに出る・オフライン)
 // ・コメントからコード: 「-- 触れたら死ぬ」と書いて次の行で AI キー (Alt + \) を押すと、コードを組み立てて提案
-import { completeLine, codeFromComment } from '../ai/complete.js'
+import { completeLine, codeFromComment, warmComplete } from '../ai/complete.js'
 
 // 返ってきた候補を整える (重複・前後のゴミを除く)
 export function cleanSuggestion(text, before, after) {
@@ -33,9 +33,10 @@ export function makeAiProvider(getFile) {
     const restOfLine = after.split('\n')[0]
     if (restOfLine.trim() && !/^[)\]}"']*\s*$/.test(restOfLine)) return ''
     if (manual) {
-      const gen = codeFromComment(before, file.mode)
+      const gen = await codeFromComment(before, file.mode)
       if (gen) return gen.code
     }
+    await warmComplete()
     return cleanSuggestion(completeLine(before), before, after)
   }
 }
