@@ -5,11 +5,11 @@
 // 元に戻すと自分の入力だけが戻ります。整形した行は一瞬だけ色が付きます。
 import { ViewPlugin, StateField, StateEffect, Decoration, EditorView, Transaction, completionStatus, hasNextSnippetField, indentUnit } from '../../vendor/codemirror.js'
 import { formatLuau, formatLineSpacing, detectIndentUnit } from './format.js'
-import { parse } from '../luau/parser.js'
+import { syntaxOk } from '../luau/parser.js'
 import { ghostField } from './inline.js'
 import { inStringOrComment } from './typo.js'
 
-const IDLE_LIMIT = 200000 // これより大きいファイルは全体の自動整形をしない
+const IDLE_LIMIT = 100000 // これより大きいファイルは、入力が止まったときの全体の自動整形をしない (整形の間は入力が止まるため。手動の整形はできます)
 
 // ---- 整形した行を一瞬だけ光らせる ----
 const flash = StateEffect.define()
@@ -123,7 +123,7 @@ export function autoFormat(getOpts, onFormatted) {
       const { state } = view
       const text = state.sliceDoc(0)
       if (text.length > IDLE_LIMIT || !text.trim()) return
-      try { parse(text) } catch { return }
+      try { if (!syntaxOk(text)) return } catch { return }
       const unit = detectIndentUnit(text) || state.facet(indentUnit)
       let next
       try { next = formatLuau(text, unit, { finalNewline: /\n$/.test(text) }) } catch { return }

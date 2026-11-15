@@ -785,7 +785,7 @@ button.sb-item:hover { background: var(--hover); color: var(--fg); }
 .menu-overlay.sheet .menu-note { font-size: 14.5px; padding: 10px 12px; }
 
 /* ---- モーダル ---- */
-.modal-overlay { position: fixed; inset: 0; z-index: 70; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px; opacity: 0; transition: opacity var(--t-slow) var(--ease); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+.modal-overlay { position: fixed; inset: 0; z-index: 70; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px; opacity: 0; transition: opacity var(--t-slow) var(--ease); }
 .modal-overlay.show { opacity: 1; }
 .modal { width: min(460px, 100%); max-height: calc(var(--app-h) - 32px); display: flex; flex-direction: column; background: var(--elev); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; transform: translateY(6px) scale(.985); transition: transform var(--t-slow) var(--ease); }
 .modal-overlay.show .modal { transform: none; }
@@ -1024,6 +1024,7 @@ body[data-layout=desktop].touch.kb-open.ed-focus .keybar { display: block; }
 .lv-code { display: block; padding: 9px 11px; border-radius: var(--r); background: var(--bg); border: 1px solid var(--border-strong); font-size: 12px; line-height: 1.5; word-break: break-all; white-space: pre-wrap; user-select: all; -webkit-user-select: all; }
 .lv-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .lv-steps { margin: 0; padding-left: 20px; font-size: 12.5px; color: color-mix(in srgb, var(--fg) 88%, var(--muted)); line-height: 1.8; }
+.lv-target-note { margin-top: 6px; }
 .lv-tree { display: flex; flex-direction: column; max-height: 50vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--r); padding: 4px; background: var(--bg); }
 .lv-node { padding-right: 2px; }
 .lv-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

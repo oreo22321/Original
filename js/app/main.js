@@ -13,7 +13,8 @@ import { APP_VERSION } from './settings-ui.js'
 import { showWhatsNew } from './views.js'
 import './palette.js'
 import './ai-actions.js'
-import { refreshCorpus } from './ai-host.js'
+import { refreshCorpus, loadEngine } from './ai-host.js'
+import { warmComplete } from '../ai/complete.js'
 import './code-nav.js'
 import './remote-ui.js'
 import './extlibs.js'
@@ -164,6 +165,13 @@ async function boot() {
 
 
   document.getElementById('boot') && document.getElementById('boot').remove()
+
+  // 手が空いたら AI の本体を読み込んでおく (起動を軽くするため後回しにしている。はじめて使うときに待たないように)
+  setTimeout(() => {
+    const go = () => { loadEngine().catch(() => {}); warmComplete() }
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 10000 })
+    else go()
+  }, 3500)
 
   // バージョンアップ後に 1 度だけ変更点を表示
   try {

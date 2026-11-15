@@ -65,9 +65,27 @@ export function makeLineInfo(text, tabSize = 4) {
 //   extra: 対応するブロックがない end / until
 // 各トークンには role が付きます:
 //   'open' (ブロック開始) / 'close' (end・until) / 'mid' (文の else・elseif) / 'expr' (if 式の一部)
+// 同じ内容を何度も調べ直さない (補完・エラーチェック・整形・固定表示が、入力のたびに同じ文書を調べるため)
+// 結果は共有されます。トークンに付ける印 (role など) は内容だけで決まるので、共有しても変わりません
+const scanMemo = []
 export function scanBlocks(text, keepComments = false, opts = null) {
-  const tokens = lightTokens(text, keepComments)
   const strictDo = !!(opts && opts.strictDo)
+  if (text.length < 4000) return scanBlocksRaw(text, keepComments, strictDo)
+  for (let i = 0; i < scanMemo.length; i++) {
+    const m = scanMemo[i]
+    if (m.keep === keepComments && m.strict === strictDo && m.text === text) {
+      if (i) { scanMemo.splice(i, 1); scanMemo.unshift(m) }
+      return m.r
+    }
+  }
+  const r = scanBlocksRaw(text, keepComments, strictDo)
+  scanMemo.unshift({ text, keep: keepComments, strict: strictDo, r })
+  if (scanMemo.length > 4) scanMemo.pop()
+  return r
+}
+
+function scanBlocksRaw(text, keepComments, strictDo) {
+  const tokens = lightTokens(text, keepComments)
   const blocks = []
   const stack = []
   const extra = []

@@ -3,9 +3,22 @@
 //   (プロジェクトのコードを優先するので、自分の書き方・変数名を覚えて提案します)
 // ・コメントからコード: 「-- 触れたら死ぬ」のようなコメントの次の行で頼むと、コードを組み立てて提案
 import { lightTokens } from '../editor/blocks.js'
-import { KNOWLEDGE } from './knowledge.js'
-import { generateCode } from './generate.js'
-import { detectIntents, concepts } from './text.js'
+
+// 知識ベース・コード生成は大きいので、起動時には読み込まない (はじめて使うとき・手が空いたときに読み込む)
+let heavy = null
+function loadHeavy() {
+  if (!heavy) {
+    heavy = Promise.all([import('./knowledge.js'), import('./generate.js'), import('./text.js')])
+      .then(([k, g, t]) => ({ KNOWLEDGE: k.KNOWLEDGE, generateCode: g.generateCode, detectIntents: t.detectIntents, concepts: t.concepts }))
+      .catch(e => { heavy = null; throw e })
+  }
+  return heavy
+}
+
+// 手が空いたときまで待つ (重い学習を少しずつ進めて、入力を止めないため)
+const idle = () => new Promise(r => (typeof requestIdleCallback === 'function' ? requestIdleCallback(() => r(), { timeout: 400 }) : setTimeout(r, 16)))
+const SLICE_MS = 8
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
 
 const NL = '\n'
 const MAX_STR = 40
@@ -23,28 +36,37 @@ function toTokens(text) {
   return out
 }
 
+const SEP = '\u0001'
 class Ngram {
   constructor() { this.maps = [null, new Map(), new Map(), new Map(), new Map()]; this.size = 0 }
-  train(text, weight = 1) {
-    const toks = toTokens(text)
-    for (let i = 1; i < toks.length; i++) {
+  // toks の from〜to 番目を学習 (文脈のキーは配列を作らず、後ろから 1 トークンずつ伸ばして作る)
+  trainTokens(toks, weight = 1, from = 1, to = toks.length) {
+    const maps = this.maps
+    for (let i = Math.max(1, from); i < to; i++) {
       const next = toks[i]
       if (next === null) continue
+      let key = ''
       for (let k = 1; k <= 4 && i - k >= 0; k++) {
-        const ctx = toks.slice(i - k, i)
-        if (ctx.includes(null)) break
-        const key = ctx.join('\u0001')
-        let m = this.maps[k].get(key)
-        if (!m) { m = new Map(); this.maps[k].set(key, m) }
-        m.set(next, (m.get(next) || 0) + weight)
+        const t = toks[i - k]
+        if (t === null) break
+        key = k === 1 ? t : t + SEP + key
+        let m = maps[k].get(key)
+        if (!m) { if (weight < 0) continue; m = new Map(); maps[k].set(key, m) }
+        const n = (m.get(next) || 0) + weight
+        if (n > 0) m.set(next, n)
+        else { m.delete(next); if (!m.size) maps[k].delete(key) }
       }
     }
+  }
+  train(text, weight = 1) {
+    const toks = toTokens(text)
+    this.trainTokens(toks, weight)
     this.size += toks.length
   }
   // ctx: 直前のトークン。prefix: 書きかけの単語。文脈の長さ k を指定して、その長さで一致したものだけ
   nextAt(ctx, k, prefix = '') {
     if (ctx.length < k) return null
-    const m = this.maps[k].get(ctx.slice(-k).join('\u0001'))
+    const m = this.maps[k].get(ctx.slice(-k).join(SEP))
     if (!m) return null
     let total = 0, best = null, bestN = 0
     for (const [tok, n] of m) {
@@ -56,15 +78,47 @@ class Ngram {
   }
 }
 
+// 少しずつ学習する (SLICE_MS ごとに手を離す)。cancelled() が true になったら途中でやめる
+async function trainSliced(model, text, weight, cancelled) {
+  const toks = toTokens(text)
+  if (cancelled()) return false
+  await idle()
+  const STEP = 400
+  let t0 = now()
+  for (let i = 1; i < toks.length; i += STEP) {
+    model.trainTokens(toks, weight, i, Math.min(toks.length, i + STEP))
+    if (now() - t0 > SLICE_MS) {
+      await idle()
+      if (cancelled()) return false
+      t0 = now()
+    }
+  }
+  model.size += toks.length
+  return true
+}
+
 let base = null
+let baseLoading = null
 let project = null
-let projectKey = ''
-function baseModel() {
-  if (base) return base
-  base = new Ngram()
-  for (const e of KNOWLEDGE) if (e.c) base.train(e.c)
-  // よく使う形を少し足す
-  base.train(`local Players = game:GetService("Players")
+// 内蔵サンプルからの学習 (はじめて使うときに 1 回だけ)
+function ensureBase() {
+  if (base) return Promise.resolve(base)
+  if (!baseLoading) {
+    baseLoading = loadHeavy().then(async ({ KNOWLEDGE }) => {
+      const m = new Ngram()
+      for (const e of KNOWLEDGE) if (e.c) { m.train(e.c); await idle() }
+      m.train(COMMON, 2)
+      base = m
+      return m
+    }).catch(e => { baseLoading = null; throw e })
+  }
+  return baseLoading
+}
+// AI の候補を出す前に呼ぶ (読み込み済みならすぐ終わる)
+export function warmComplete() { return ensureBase().then(() => {}, () => {}) }
+
+// よく使う形
+const COMMON = `local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -81,18 +135,56 @@ for i = 1, 10 do
 end
 script.Parent.Touched:Connect(function(hit)
 end)
-`, 2)
-  return base
+`
+
+// プロジェクトのコードを学習 (変わったファイルだけ学習し直す。少しずつ進めるので入力は止まらない)
+// files: [{ path, text }] (文字列の配列も可)
+let trainedFiles = new Map()   // path → 学習済みの内容
+let pendingFiles = null
+let corpusRun = null
+const CORPUS_BUDGET = 400000
+export function setProjectCorpus(files) {
+  pendingFiles = files.map((f, i) => (typeof f === 'string' ? { path: '#' + i, text: f } : f))
+  if (!corpusRun) corpusRun = runCorpus().finally(() => { corpusRun = null })
+  return corpusRun
 }
-// プロジェクトのコードを学習 (内容が変わったときだけ作り直す)
-export function setProjectCorpus(texts) {
-  const key = texts.map(t => t.length).join(',') + ':' + texts.reduce((a, t) => a + (t.charCodeAt(t.length >> 1) || 0), 0)
-  if (key === projectKey) return
-  projectKey = key
-  const m = new Ngram()
-  let budget = 400000
-  for (const t of texts) { if (budget <= 0) break; m.train(t.slice(0, budget), 1); budget -= t.length }
-  project = m
+async function runCorpus() {
+  while (pendingFiles) {
+    const list = pendingFiles
+    pendingFiles = null
+    const want = new Map()
+    let budget = CORPUS_BUDGET
+    for (const f of list) {
+      if (budget <= 0) break
+      const t = String(f.text || '').slice(0, budget)
+      budget -= t.length
+      want.set(f.path, t)
+    }
+    let changed = 0, total = 0
+    for (const [p, t] of want) { total += t.length; const old = trainedFiles.get(p); if (old !== t) changed += t.length + (old ? old.length : 0) }
+    for (const [p, t] of trainedFiles) if (!want.has(p)) changed += t.length
+    if (!changed) continue
+    // 新しい内容が来たら、作り直しは途中でやめて新しい方から (作り直しは別のモデルなので、やめても壊れない)
+    const stale = () => pendingFiles !== null
+    if (!project || changed >= total) {
+      const m = new Ngram()
+      let ok = true
+      for (const t of want.values()) if (!(await trainSliced(m, t, 1, stale))) { ok = false; break }
+      if (!ok) continue
+      project = m
+    } else {
+      // 変わったファイルだけ: 古い内容を引いて、新しい内容を足す (途中でやめると数が合わなくなるので、最後まで)
+      const never = () => false
+      for (const [p, old] of trainedFiles) {
+        const t = want.get(p)
+        if (t === old) continue
+        await trainSliced(project, old, -1, never)
+        if (t !== undefined) await trainSliced(project, t, 1, never)
+      }
+      for (const [p, t] of want) if (!trainedFiles.has(p)) await trainSliced(project, t, 1, never)
+    }
+    trainedFiles = want
+  }
 }
 
 const WORDY = /^[A-Za-z_0-9"'`[]/
@@ -122,7 +214,8 @@ export function completeLine(before, { maxTokens = 12 } = {}) {
   const partialM = /[A-Za-z_]\w*$/.exec(line)
   let prefix = ''
   if (partialM) { prefix = partialM[0]; toks = toks.slice(0, -1) }
-  const models = [project, baseModel()].filter(Boolean)
+  const models = [project, base].filter(Boolean)
+  if (!base) ensureBase().catch(() => {})
   const out = []
   let firstSuffix = ''
   for (let i = 0; i < maxTokens; i++) {
@@ -162,7 +255,7 @@ export function completeLine(before, { maxTokens = 12 } = {}) {
 }
 
 // コメントからコード: カーソルが空の行で、直前の行が「作ってほしいもの」のコメントなら、コードを組み立てる
-export function codeFromComment(before, mode = 'studio') {
+export async function codeFromComment(before, mode = 'studio') {
   const lines = before.split('\n')
   const cur = lines[lines.length - 1]
   if (cur.trim()) return null
@@ -173,6 +266,7 @@ export function codeFromComment(before, mode = 'studio') {
   if (!m) return null
   const req = m[1].trim()
   if (req.length < 4) return null
+  const { detectIntents, concepts, generateCode } = await loadHeavy()
   const ints = detectIntents(req)
   const cs = concepts(req)
   if (!cs.size || (ints.length && !['generate', 'question'].includes(ints[0].id) && !cs.size)) return null

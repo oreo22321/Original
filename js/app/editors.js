@@ -240,7 +240,7 @@ export class EditorManager {
     doc.draftTimer = setTimeout(() => {
       doc.draftTimer = null
       if (doc.dirty && app.project && this.docs.get(doc.path) === doc) vfs.putDraft(app.project.id, doc.path, doc.state.doc.toString())
-    }, 350)
+    }, doc.state && doc.state.doc.length > 50000 ? 1500 : 500)
   }
 
   // 画面が隠れる・閉じる直前に呼ぶ。未保存の内容をすべて下書きへ (同期処理)

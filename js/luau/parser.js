@@ -733,8 +733,27 @@ export class Parser {
   }
 }
 
+// 直前に調べた内容が構文的に正しいか (同じ内容を何度も解析し直さないため。lint と自動整形で共有)
+const syntaxMemo = []
+function rememberSyntax(src, ok) {
+  if (typeof src !== 'string' || src.length < 2000) return
+  syntaxMemo.unshift({ src, ok })
+  if (syntaxMemo.length > 3) syntaxMemo.pop()
+}
 export function parse(src, opts) {
-  return new Parser(src, opts).parseChunk()
+  try {
+    const ast = new Parser(src, opts).parseChunk()
+    if (!opts) rememberSyntax(src, true)
+    return ast
+  } catch (e) {
+    if (!opts && e instanceof LuauSyntaxError) rememberSyntax(src, false)
+    throw e
+  }
+}
+// 構文が正しいか (覚えていれば解析しない)
+export function syntaxOk(src) {
+  for (const m of syntaxMemo) if (m.src === src) return m.ok
+  try { parse(src); return true } catch (e) { if (e instanceof LuauSyntaxError) return false; throw e }
 }
 
 // 構文チェックのみ。成功なら null、失敗なら { message, line, col, pos }

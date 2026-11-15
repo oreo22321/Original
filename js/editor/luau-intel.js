@@ -293,10 +293,24 @@ export function fnReturnType(text, fnPos, depth = 0) {
 }
 
 // ---- if x:IsA("BasePart") then ... の中では x は BasePart ----
+// 名前ごとの正規表現を作り直さない
+const narrowRe = new Map()
+function narrowRegexes(name) {
+  let r = narrowRe.get(name)
+  if (!r) {
+    if (narrowRe.size > 500) narrowRe.clear()
+    r = {
+      isA: new RegExp(`(?:^|[^\\w.:])(not\\s+)?${name}\\s*:\\s*IsA\\s*\\(\\s*["'](\\w+)["']\\s*\\)|(?:^|[^\\w.:])${name}\\s*\\.\\s*ClassName\\s*==\\s*["'](\\w+)["']`),
+      guard: new RegExp(`\\bif\\s+not\\s+${name}\\s*:\\s*IsA\\s*\\(\\s*["'](\\w+)["']\\s*\\)\\s*then\\s+(?:return|continue|break)\\b`, 'g'),
+    }
+    narrowRe.set(name, r)
+  }
+  return r
+}
 function narrowed(text, name, pos) {
   const ix = textIndex(text)
   if (!ix.hasIsA || !/^[A-Za-z_]\w*$/.test(name)) return null
-  const isA = new RegExp(`(?:^|[^\\w.:])(not\\s+)?${name}\\s*:\\s*IsA\\s*\\(\\s*["'](\\w+)["']\\s*\\)|(?:^|[^\\w.:])${name}\\s*\\.\\s*ClassName\\s*==\\s*["'](\\w+)["']`)
+  const { isA, guard } = narrowRegexes(name)
   for (const b of ix.enclosing(pos, 12, 400)) {
     if (b.kind !== 'if' || b.headerEnd === undefined || pos < b.headerEnd) continue
     if (b.mids && b.mids.some(m => m > b.headerEnd && m < pos)) continue
@@ -311,7 +325,8 @@ function narrowed(text, name, pos) {
   const from = Math.max(scope ? scope.s : 0, pos - 20000)
   const seg = text.slice(from, pos)
   if (!seg.includes('IsA')) return null
-  const gre = new RegExp(`\\bif\\s+not\\s+${name}\\s*:\\s*IsA\\s*\\(\\s*["'](\\w+)["']\\s*\\)\\s*then\\s+(?:return|continue|break)\\b`, 'g')
+  const gre = guard
+  gre.lastIndex = 0
   let g, last = null
   while ((g = gre.exec(seg))) last = g
   return last && db.isClass(last[1]) ? { k: 'class', name: last[1] } : null

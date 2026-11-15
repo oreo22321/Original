@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = 'ebda70d3e2'
+const VERSION = '2206992517'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -30,6 +30,7 @@ const PRECACHE = [
   "js/app/extlibs.js",
   "js/app/gui-preview.js",
   "js/app/keybar.js",
+  "js/app/live-config.js",
   "js/app/live.js",
   "js/app/main.js",
   "js/app/markdown.js",
@@ -39,6 +40,7 @@ const PRECACHE = [
   "js/app/runner.js",
   "js/app/safe-storage.js",
   "js/app/settings-ui.js",
+  "js/app/sha256.js",
   "js/app/store.js",
   "js/app/templates.js",
   "js/app/ui.js",
@@ -107,6 +109,9 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return
   const url = new URL(req.url)
   if (url.origin !== location.origin) return
+  // 実機連携の中継サーバーが同じ場所にあるとき (Render などで本体ごと公開したとき): 通信はキャッシュしない
+  const rel = url.pathname.slice(new URL(self.registration.scope).pathname.length)
+  if (/^(r|c)\//.test(rel) || rel === 'health') return
   // アプリ本体は、このバージョン用にまとめて保存したものだけを返す
   // (ファイルごとに新旧が混ざると動かなくなるため、裏での個別更新はしない。新しい版は sw.js の更新で一括して切り替わる)
   e.respondWith(caches.open(CACHE).then(async c => {

@@ -4,11 +4,12 @@
 --   ・ゲームの出力・エラーを ForgeCode に表示 (ファイルの行へ移動・AI で直す)
 --   ・ForgeCode のコンソールから、ゲームの中で式を評価
 --   ・ゲームのオブジェクトを ForgeCode で一覧
+-- ・ForgeCode が閉じていても待ち続け、開いたら自動でつながります。テレポートしてもつながったまま
 -- 止めるとき: getgenv().ForgeCodeLive.stop()
 -- 安全のため、コードを送れるのは鍵を持つ ForgeCode だけです (このスクリプトに鍵は入っていません)
 local RELAY = "{{RELAY}}"
 local ROOM = "{{ROOM}}"
-local VERSION = 1
+local VERSION = 2
 
 local env = (getgenv and getgenv()) or _G
 if env.ForgeCodeLive and env.ForgeCodeLive.stop then
@@ -202,6 +203,26 @@ local function children(m)
 	push({ t = "tree", id = m.id, ok = ok, items = list })
 end
 
+local function hello()
+	local gameName = ""
+	pcall(function()
+		gameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
+	end)
+	local executor = "?"
+	pcall(function()
+		executor = (identifyexecutor and identifyexecutor()) or (getexecutorname and getexecutorname()) or "?"
+	end)
+	push({
+		t = "hello",
+		v = VERSION,
+		executor = tostring(executor),
+		placeId = game.PlaceId,
+		game = gameName,
+		player = Players.LocalPlayer and Players.LocalPlayer.Name or "",
+		logs = hasLog,
+	})
+end
+
 local function handle(item)
 	local m = item.m
 	if type(m) ~= "table" then
@@ -224,27 +245,9 @@ local function handle(item)
 		allLogs = m.allLogs == true
 	elseif m.t == "ping" then
 		push({ t = "pong" })
+	elseif m.t == "who" then
+		hello()
 	end
-end
-
-local function hello()
-	local gameName = ""
-	pcall(function()
-		gameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
-	end)
-	local executor = "?"
-	pcall(function()
-		executor = (identifyexecutor and identifyexecutor()) or (getexecutorname and getexecutorname()) or "?"
-	end)
-	push({
-		t = "hello",
-		v = VERSION,
-		executor = tostring(executor),
-		placeId = game.PlaceId,
-		game = gameName,
-		player = Players.LocalPlayer and Players.LocalPlayer.Name or "",
-		logs = hasLog,
-	})
 end
 
 -- 送信 (まとめて送る)
@@ -262,27 +265,50 @@ task.spawn(function()
 		if #outbox > 0 then
 			local batch = outbox
 			outbox = {}
-			local ok = pcall(httpRequest, {
+			local ok, res = pcall(httpRequest, {
 				Url = base .. "/send?as=exec",
 				Method = "POST",
 				Headers = { ["Content-Type"] = "application/json" },
 				Body = encode({ msgs = batch }),
 			})
-			if not ok then
-				task.wait(1)
+			if not ok or not res or res.StatusCode ~= 200 then
+				-- 送れなかった: 順番どおりに戻して、少し待ってから送り直す (多すぎるときは古いものを捨てる)
+				for i = 1, #outbox do
+					batch[#batch + 1] = outbox[i]
+				end
+				outbox = batch
+				while #outbox > 800 do
+					table.remove(outbox, 1)
+				end
+				task.wait(2)
 			end
 		end
 		task.wait(0.25)
 	end
 end)
 
--- 受信 (ForgeCode からの依頼を待つ)
+-- ForgeCode がつながったことを知らせる (アプリの切り替えのたびに出ないよう、10 分に 1 回まで)
+local lastNotice = -1e9
+local editorOnline = false
+local function onPeer(peer)
+	local online = type(peer) == "table" and peer.online == true
+	if online and not editorOnline and os.clock() - lastNotice > 600 then
+		lastNotice = os.clock()
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", { Title = "ForgeCode", Text = "ForgeCode とつながりました", Duration = 4 })
+		end)
+	end
+	editorOnline = online
+end
+
+-- 受信 (ForgeCode からの依頼を待つ)。ForgeCode が閉じていても待ち続け、切れても自動でつなぎ直す
 task.spawn(function()
 	local after = -1
+	local gen = ""
 	local fails = 0
 	while alive do
 		local ok, res = pcall(httpRequest, {
-			Url = base .. "/recv?as=exec&wait=20&after=" .. after,
+			Url = base .. "/recv?as=exec&wait=20&after=" .. after .. "&gen=" .. gen,
 			Method = "GET",
 		})
 		if not alive then
@@ -294,7 +320,15 @@ task.spawn(function()
 				return HttpService:JSONDecode(res.Body)
 			end)
 			if okj and type(data) == "table" then
+				if type(data.gen) == "string" and data.gen ~= gen then
+					-- 中継サーバーが再起動した: もう一度名乗る
+					if gen ~= "" then
+						hello()
+					end
+					gen = data.gen
+				end
 				after = data.seq or after
+				onPeer(data.peer)
 				for _, item in ipairs(data.msgs or {}) do
 					local okh, err = pcall(handle, item)
 					if not okh then
@@ -302,14 +336,19 @@ task.spawn(function()
 					end
 				end
 			end
-		elseif ok and res and (res.StatusCode == 404 or res.StatusCode == 403) then
-			warn("ForgeCode Live: 接続コードが無効になりました。ForgeCode で新しい 1 行をコピーしてください")
-			alive = false
-			break
 		else
+			-- 中継サーバーが止まっている・起動中 (無料のサーバーは 1 分ほどかかる) など: 少し待ってやり直す
 			fails += 1
-			task.wait(math.min(10, fails * 1.5))
+			task.wait(math.min(30, 2 + fails * 2))
 		end
+	end
+end)
+
+-- テレポートしても、移動先でまたつながるように
+pcall(function()
+	local queue = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+	if queue then
+		queue('loadstring(game:HttpGet("' .. RELAY .. '/c/' .. ROOM .. '"))()')
 	end
 end)
 
@@ -331,7 +370,4 @@ env.ForgeCodeLive = {
 }
 
 hello()
-pcall(function()
-	game:GetService("StarterGui"):SetCore("SendNotification", { Title = "ForgeCode", Text = "ForgeCode とつながりました", Duration = 4 })
-end)
-print("ForgeCode Live: 接続しました")
+print("ForgeCode Live: 開始しました (ForgeCode を開くと自動でつながります)")

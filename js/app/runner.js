@@ -71,7 +71,7 @@ export class Runner {
     // 実機連携 (エグゼキューター) からの出力・エラー
     live.onEvent(m => this.onLive(m))
     on('live', () => { this.renderTabs(); if (this.tab === 'live') renderLivePanel(this.liveEl, this) })
-    if (live.relay) setTimeout(() => live.start(), 800)
+    if (live.relay && live.active) setTimeout(() => live.start(), 800)
     this.renderTabs()
     this.placeholder()
   }
@@ -357,7 +357,9 @@ export class Runner {
       if (source === undefined) source = (await vfs.readFile(app.project.id, path)) || ''
     }
     // 実機 (エグゼキューター) で実行
-    if (!agent && !debug && (device || live.target === 'device')) { this.runOnDevice(path, source, selection); return }
+    // 実機で実行 (自動のときは、ブレークポイントがあればエミュレーターでデバッグ)
+    const autoDevice = live.runsOnDevice() && !(live.target === 'auto' && Object.keys(bpStore.forRun()).length)
+    if (!agent && !debug && (device || autoDevice)) { this.runOnDevice(path, source, selection); return }
     if (this.running) this.stop(true)
     // 保存は裏で行い、実行は待たせない (開いているファイルは編集中の内容を使う)
     app.editors.saveAll().catch(() => {})
@@ -426,7 +428,7 @@ export class Runner {
   }
 
   evalConsole(code, { device = false } = {}) {
-    if (device || live.target === 'device') { this.evalOnDevice(code); return }
+    if (device || live.runsOnDevice()) { this.evalOnDevice(code); return }
     const w = this.ensureWorker()
     if (!w) return
     this.append([{ kind: 'input', text: code }])
