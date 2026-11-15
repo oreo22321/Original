@@ -1,4 +1,5 @@
 // 画面全体のレイアウト (スマホ / タブレット・PC 両対応)
+import { live } from './live.js'
 import { app, command, runCommand, setProjectKind, setRunTarget } from './app.js'
 import { getSettings, setSettings, getMode, on, isTouch, MODE_LABELS } from './store.js'
 import { h, icon, menu, toast, copyText, shareFile, haptic, promptDialog } from './ui.js'
@@ -41,6 +42,7 @@ export class Workbench {
     on('cursor', () => this.scheduleCursor())
     on('problems', () => this.updateStatus())
     on('running', () => { this.updateTop(); this.updateStatus() })
+    on('live', () => { this.updateTop(); this.updateStatus() })
     on('breakpoints', () => { if (!(app.runner && app.runner.running)) this.updateTop() })
     on('project', () => { this.updateTop(); this.updateStatus() })
     on('mode', () => { this.updateTop(); this.updateStatus() })
@@ -232,8 +234,8 @@ export class Workbench {
     } else {
       const pinned = target && (!doc || doc.path !== target)
       const bps = runner && runner.debug ? bpStoreCount() : 0
-      a.append(h('button', { class: 'run-btn' + (bps ? ' has-bp' : ''), title: (target ? `${target} を実行` : '実行') + (bps ? ' — ブレークポイントで止まります' : '') + ' (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') },
-        icon(bps ? 'bug' : 'play', 18), h('span', null, pinned ? vfs.basename(target).replace(/\.(server|client)?\.?luau?$/, '') : '実行')))
+      a.append(h('button', { class: 'run-btn' + (bps ? ' has-bp' : ''), title: live.target === 'device' ? '実機で実行 (エグゼキューター)' : (target ? `${target} を実行` : '実行') + (bps ? ' — ブレークポイントで止まります' : '') + ' (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') },
+        icon(live.target === 'device' ? 'device' : bps ? 'bug' : 'play', 18), h('span', null, live.target === 'device' ? '実機で実行' : pinned ? vfs.basename(target).replace(/\.(server|client)?\.?luau?$/, '') : '実行')))
     }
     a.append(btn('more', 'その他', e => this.moreMenu(e.currentTarget)))
   }
@@ -280,11 +282,12 @@ export class Workbench {
       problems: item('sb-problems', () => { this.togglePanel(true); app.runner.show('problems') }, '問題を表示'),
       save: item('sb-save', () => runCommand('save'), '保存の状態'),
       run: item('sb-run running hidden'),
+      live: item('sb-live hidden', () => runCommand('liveOpen'), '実機連携 (エグゼキューター)'),
       cursor: item('sb-cursor', () => runCommand('gotoLine'), '行へ移動'),
       indent: item('sb-indent hide-mobile', () => setSettings({ insertSpaces: !getSettings().insertSpaces }), 'タブ / スペースを切り替え'),
       kind: item('sb-kind'),
     }
-    this.status = h('footer', { class: 'statusbar' }, this.sb.mode, this.sb.project, this.sb.problems, this.sb.save, this.sb.run, h('span', { class: 'sb-spacer' }), this.sb.cursor, this.sb.indent, this.sb.kind)
+    this.status = h('footer', { class: 'statusbar' }, this.sb.mode, this.sb.project, this.sb.problems, this.sb.save, this.sb.run, this.sb.live, h('span', { class: 'sb-spacer' }), this.sb.cursor, this.sb.indent, this.sb.kind)
     this.sbCache = {}
   }
 
@@ -303,6 +306,10 @@ export class Workbench {
     const doc = app.editors && app.editors.activeDoc()
     const runner = app.runner
     const pc = runner ? runner.problemCount : { error: 0, warning: 0 }
+    const lv = live.status()
+    this.sb.live.classList.toggle('hidden', !lv.relay)
+    this.sb.live.dataset.state = lv.state
+    this.sbSet('live', lv.relay ? lv.state + lv.target : '', () => (lv.relay ? [h('span', { class: 'sb-dot' }), lv.target === 'device' ? '実機' : '実機連携'] : null))
     const mode = getMode()
     const s = getSettings()
     this.sb.mode.className = 'sb-item sb-mode k-' + mode
