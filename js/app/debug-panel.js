@@ -4,6 +4,7 @@ import { app, runCommand, command } from './app.js'
 import { emit, on } from './store.js'
 import { h, icon, toast, promptDialog, haptic, menu } from './ui.js'
 import { toggleBreakpoint, setBreakpointList, debugLineEffect, breakpointsOf, bpEffect } from '../editor/breakpoints.js'
+import { live } from './live.js'
 
 // ============================================================
 // ブレークポイントの保存 (プロジェクトごと・localStorage)
@@ -120,10 +121,15 @@ export class DebugPanel {
     for (const v of app.editors.views) if (v) v.dispatch({ effects: debugLineEffect.of(null) })
   }
 
+  get device() { return !!(this.runner.running && this.runner.running.device) }
+
   send(action) {
-    if (!this.runner.worker || !this.runner.running) return
+    if (!this.runner.running) return
     haptic(6)
     if (action !== 'pause' && !this.paused) return
+    // 実機: 続行 / 次の行へ (ステップはどれも「次に実行される行で止まる」) / 一時停止
+    if (this.device) { live.dbg(this.runner.deviceRun, action === 'continue' ? 'continue' : action === 'pause' ? 'pause' : 'step'); return }
+    if (!this.runner.worker) return
     this.runner.worker.postMessage({ type: 'debug', action })
   }
 
@@ -147,6 +153,7 @@ export class DebugPanel {
   }
 
   expand(ref) {
+    if (this.device) return live.expand(ref).then(r => r.items || [], () => [])
     return new Promise(resolve => {
       if (!this.runner.worker) return resolve([])
       const id = ++this.reqSeed
@@ -162,7 +169,8 @@ export class DebugPanel {
   setWatches(list) {
     this.watches = list
     try { localStorage.setItem(WATCH_KEY, JSON.stringify(list)) } catch {}
-    if (this.runner.worker && this.runner.running && this.runner.running.debug) this.runner.worker.postMessage({ type: 'watches', list })
+    if (this.device && this.paused) live.watch(this.runner.deviceRun, list).then(r => this.onWatchValues({ watches: r.watches || [] }), () => this.render())
+    else if (this.runner.worker && this.runner.running && this.runner.running.debug && !this.device) this.runner.worker.postMessage({ type: 'watches', list })
     else this.render()
   }
   onWatchValues(m) {
@@ -181,9 +189,9 @@ export class DebugPanel {
     if (this.paused) {
       f.append(
         b('debugContinue', '続行 (F5)', 'continue', 'go'),
-        b('stepOver', 'ステップオーバー (F10): 次の行へ', 'over'),
-        b('stepInto', 'ステップイン (F11): 関数の中へ', 'in'),
-        b('stepOut', 'ステップアウト (⇧F11): 関数の外へ', 'out'))
+        b('stepOver', this.paused.device ? '次の行へ' : 'ステップオーバー (F10): 次の行へ', 'over'))
+      // 実機では「次に実行される行で止まる」だけ (関数の中へ / 外へ はエミュレーターのみ)
+      if (!this.paused.device) f.append(b('stepInto', 'ステップイン (F11): 関数の中へ', 'in'), b('stepOut', 'ステップアウト (⇧F11): 関数の外へ', 'out'))
     } else f.append(b('pause', '一時停止', 'pause'))
     f.append(h('button', { class: 'df-btn stop', title: '停止 (⇧F5)', 'aria-label': '停止', onclick: () => runCommand('stop') }, icon('stop', 16)))
     f.classList.toggle('is-paused', !!this.paused)
@@ -197,7 +205,7 @@ export class DebugPanel {
     // 状態と操作
     const bar = h('div', { class: 'dbg-bar' })
     if (p) {
-      bar.append(h('div', { class: 'dbg-state paused' }, icon('pause', 14), h('span', null, `${p.file.split('/').pop()} の ${p.line} 行目で停止中`), h('span', { class: 'dbg-reason' }, REASONS[p.reason && p.reason.kind] || '')))
+      bar.append(h('div', { class: 'dbg-state paused' }, icon('pause', 14), h('span', null, `${p.device ? '実機: ' : ''}${p.file.split('/').pop()} の ${p.line} 行目で停止中`), h('span', { class: 'dbg-reason' }, REASONS[p.reason && p.reason.kind] || '')))
       if (p.reason && p.reason.kind === 'condError') bar.append(h('div', { class: 'dbg-warn' }, `条件式「${p.reason.error}」`))
     } else if (this.debugging) bar.append(h('div', { class: 'dbg-state running' }, h('span', { class: 'pulse' }), 'デバッグ実行中 — ブレークポイントで止まります'))
     else bar.append(h('div', { class: 'dbg-state' }, icon('bug', 14), 'デバッグしていません'))
@@ -206,9 +214,8 @@ export class DebugPanel {
     if (p) {
       btns.append(
         b('debugContinue', '続行', () => this.send('continue'), 'primary'),
-        b('stepOver', 'ステップ', () => this.send('over')),
-        b('stepInto', '中へ', () => this.send('in')),
-        b('stepOut', '外へ', () => this.send('out')),
+        b('stepOver', p.device ? '次の行へ' : 'ステップ', () => this.send('over')),
+        ...(p.device ? [] : [b('stepInto', '中へ', () => this.send('in')), b('stepOut', '外へ', () => this.send('out'))]),
         b('stop', '停止', () => runCommand('stop'), 'danger'))
     } else if (this.debugging) btns.append(b('pause', '一時停止', () => this.send('pause')), b('stop', '停止', () => runCommand('stop'), 'danger'))
     else btns.append(b('bug', 'デバッグ実行', () => runCommand('debugRun'), 'primary'))

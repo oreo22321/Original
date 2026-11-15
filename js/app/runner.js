@@ -6,6 +6,8 @@ import { h, icon, toast, copyText, haptic, menu } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { scriptKindOf, KIND_LABELS, langOf } from '../editor/setup.js'
 import { live, renderLivePanel } from './live.js'
+import { instrumentForDevice } from './live-instrument.js'
+import { syntaxOk } from '../luau/parser.js'
 import { explainError } from './explain.js'
 import { GuiStage, SCREENS } from './gui-preview.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
@@ -71,6 +73,24 @@ export class Runner {
     // 実機連携 (エグゼキューター) からの出力・エラー
     live.onEvent(m => this.onLive(m))
     on('live', () => { this.renderTabs(); if (this.tab === 'live') renderLivePanel(this.liveEl, this) })
+    // 保存したら実機に自動で反映 (実機で最後に実行したファイル。構文エラーがあるうちは送らない)
+    let reloadTimer = 0
+    on('saved', doc => {
+      if (!live.hotReload || !doc || doc.path !== this.lastDevicePath || !live.runsOnDevice() || !live.peerOnline) return
+      if (this.debug.paused) return
+      clearTimeout(reloadTimer)
+      reloadTimer = setTimeout(() => {
+        const text = doc.state.doc.toString()
+        let ok = false
+        try { ok = syntaxOk(text) } catch {}
+        if (ok) this.runOnDevice(doc.path, text, false, { quiet: true })
+      }, 400)
+    })
+    // デバッグ中にブレークポイントを変えたら、実機にも伝える
+    on('breakpoints', () => {
+      if (!this.running || !this.running.device || !this.running.debug) return
+      live.sendBps(Object.fromEntries(Object.entries(bpStore.forRun()).map(([p, list]) => [p, list.map(b => b.line)])))
+    })
     if (live.relay && live.active) setTimeout(() => live.start(), 800)
     this.renderTabs()
     this.placeholder()
@@ -640,24 +660,29 @@ export class Runner {
   // ============================================================
   // 実機 (エグゼキューター) での実行
   // ============================================================
-  async runOnDevice(path, source, selection) {
+  async runOnDevice(path, source, selection, { quiet = false } = {}) {
     if (!live.relay) { runCommand('togglePanel', true); this.show('live'); toast('実機で実行するには、先に中継サーバーを設定してください'); return }
     if (this.running) this.stop(true)
-    app.editors.saveAll().catch(() => {})
-    runCommand('togglePanel', true)
-    if (this.tab !== 'output') this.show('output')
-    if (getSettings().clearOnRun) this.clear()
+    if (!quiet) {
+      app.editors.saveAll().catch(() => {})
+      runCommand('togglePanel', true)
+      if (this.tab !== 'output') this.show('output')
+    }
+    if (getSettings().clearOnRun && !quiet) this.clear()
     haptic(10)
     app.editors.clearRunErrors()
     this.errors = 0
     this.errorEls = new Map()
     this.holdScroll = false
     if (!live.running) live.start()
-    this.deviceRun = live.run(path, source)
-    this.setRunning({ path, kind: 'device', device: true })
+    const payload = this.devicePayload(path, source, selection)
+    this.deviceRun = live.run(path, payload.code, payload.extra)
+    this.lastDevicePath = selection ? null : path
+    this.setRunning({ path, kind: 'device', device: true, debug: payload.debug })
     this.t0 = performance.now()
-    const who = live.peer ? live.peer.executor : 'エグゼキューター'
-    this.append([{ kind: 'meta', text: `実機 (${who}) で実行: ${path}${selection ? ' (選択範囲)' : ''}` }])
+    const who = live.peer && live.peer.executor && live.peer.executor !== '?' ? live.peer.executor : 'エグゼキューター'
+    const notes = [payload.modules ? `ファイル ${payload.modules} 個` : '', payload.debug ? 'デバッグ (ブレークポイントで止まります)' : ''].filter(Boolean).join('・')
+    this.append([{ kind: 'meta', text: `${quiet ? '保存したので実機に反映' : '実機 (' + who + ') で実行'}: ${path}${selection ? ' (選択範囲)' : ''}${notes ? ' — ' + notes : ''}` }])
     if (live.state !== 'online') this.append([{ kind: 'meta', text: 'エグゼキューターがまだつながっていません。つながると実行されます (5 分以内)' }])
     this.renderTabs()
   }
@@ -674,8 +699,42 @@ export class Runner {
   }
 
   // 実機から届いたもの
+  // 実機に送る内容: プロジェクトの他のファイル (require 用)・片付けの印・ブレークポイント
+  devicePayload(path, source, selection) {
+    const track = live.cleanupRuns
+    const all = {}
+    if (!selection) {
+      const { files } = this.filesPayload()
+      for (const [p, code] of Object.entries(files)) if (/\.luau?$/i.test(p)) all[p] = code
+    }
+    all[path] = source
+    const bps = selection ? {} : bpStore.forRun()
+    const debug = Object.keys(bps).some(p => p in all)
+    const prep = code => instrumentForDevice(code, { track, debug }).code
+    const extra = { cleanup: track }
+    let modules = 0
+    const others = Object.keys(all).filter(p => p !== path)
+    // 大きすぎるときは開いているファイルだけ (中継サーバーが受け取れる大きさに)
+    const size = Object.values(all).reduce((n, c) => n + c.length, 0)
+    if (others.length && size < 1500000) {
+      extra.modules = {}
+      for (const p of Object.keys(all)) extra.modules[p] = prep(all[p])
+      modules = others.length + 1
+    } else if (others.length) this.append([{ kind: 'warn', text: 'プロジェクトが大きいため、開いているファイルだけを実機に送ります (require は使えません)' }])
+    if (debug) extra.bps = Object.fromEntries(Object.entries(bps).filter(([p]) => p in all).map(([p, list]) => [p, list.map(b => b.line)]))
+    return { code: extra.modules ? extra.modules[path] : prep(source), extra, debug, modules }
+  }
+
   onLive(m) {
     switch (m.t) {
+      case 'paused': {
+        if (!this.running || !this.running.device || m.run !== this.deviceRun) break
+        const name = String(m.file || '').split('/').pop()
+        this.debug.onPaused({ device: true, file: m.file, line: m.line, reason: { kind: m.reason === 'step' ? 'step' : 'breakpoint' }, locals: m.locals || [], globals: [], stack: [{ name, file: m.file, line: m.line }], watches: [] })
+        if (this.debug.watches.length) live.watch(m.run, this.debug.watches).then(r => this.debug.onWatchValues({ watches: r.watches || [] })).catch(() => {})
+        break
+      }
+      case 'resumed': if (this.running && this.running.device && m.run === this.deviceRun) this.debug.onResumed(); break
       case 'log': {
         const kind = m.kind === 'MessageError' ? 'error' : m.kind === 'MessageWarning' ? 'warn' : m.kind === 'MessageInfo' ? 'info' : ''
         if (kind === 'error') this.showError({ text: m.text, message: m.text, device: true, ...fileLine(m.text) })
@@ -687,7 +746,10 @@ export class Runner {
         if (m.ok) this.append([{ kind: 'meta', text: '実機: 実行しました (つないだイベントやループは、ゲームの中で動き続けます)' }])
         else if (m.skipped) this.append([{ kind: 'meta', text: '実機: ' + m.error }])
         else this.showError({ text: m.error.split('\n')[0], message: m.error, syntax: !!m.syntax, device: true, traceback: deviceTrace(m.error), ...fileLine(m.error) })
-        if (this.running && this.running.device && m.id === this.deviceRun) { this.setRunning(null); this.renderTabs() }
+        if (this.running && this.running.device && m.id === this.deviceRun) {
+          // デバッグ中は、つないだイベントでまた止まることがあるので、止めるまで続ける
+          if (!this.running.debug) { this.setRunning(null); this.renderTabs() }
+        }
         break
       case 'stopped': break
       case 'hello': this.append([{ kind: 'meta', text: `実機: ${m.executor || 'エグゼキューター'} がつながりました${m.game ? ' — ' + m.game : ''}` }]); break
@@ -713,7 +775,8 @@ export class Runner {
   stop(silent) {
     if (!this.running) return
     if (this.running.device) {
-      live.stopRuns()
+      live.stopRuns(live.cleanupRuns)
+      this.debug.onFinished()
       if (!silent) this.finished('stopped')
       else this.setRunning(null)
       return

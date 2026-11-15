@@ -77,12 +77,15 @@ export class Parser {
   block() {
     const stats = []
     while (!BLOCK_END.has(this.tok.t)) {
+      const s0 = this.tok.s
       if (this.check('return')) {
-        stats.push(this.returnStat())
+        const r = this.returnStat()
+        r.s = s0
+        stats.push(r)
         break
       }
       const st = this.statement()
-      if (st) stats.push(st)
+      if (st) { if (st.s === undefined) st.s = s0; stats.push(st) }
     }
     return stats
   }
