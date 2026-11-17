@@ -14,7 +14,7 @@ xcrun clang++ -std=c++20 -Wall -Wextra -Werror -Isrc tests/value_rules_test.cpp 
 xcrun --sdk iphoneos clang++ -target arm64-apple-ios14.0 -isysroot "$SDK" \
     -std=c++20 -fobjc-arc -O2 -Wall -Wextra -Wno-unused-parameter \
     -dynamiclib -install_name "@executable_path/Frameworks/TsumMod.dylib" \
-    -framework Foundation -framework UIKit -framework QuartzCore \
+    -framework Foundation -framework UIKit -framework QuartzCore -framework CoreGraphics \
     src/ChainSolver.cpp src/AutoPlay.cpp src/Runtime.mm src/Features.mm src/Menu.mm src/Entry.mm \
     -o build/TsumMod.dylib
 
