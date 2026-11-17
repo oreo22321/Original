@@ -2,3 +2,5 @@ node_modules/
 tools/node_modules/
 .DS_Store
 *.log
+tsumtsum-ios/tweak/build/
+__pycache__/

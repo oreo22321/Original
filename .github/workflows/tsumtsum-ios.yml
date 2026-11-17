@@ -1,0 +1,33 @@
+name: tsumtsum-ios
+
+on:
+  push:
+    paths:
+      - "tsumtsum-ios/**"
+      - ".github/workflows/tsumtsum-ios.yml"
+  workflow_dispatch:
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tool tests
+        run: python3 -m unittest discover -s tsumtsum-ios/tools/tests -v
+      - name: Logic tests (sanitizers)
+        working-directory: tsumtsum-ios/tweak
+        run: |
+          c++ -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/chain_solver_test.cpp src/ChainSolver.cpp -o cst && ./cst
+          c++ -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/value_rules_test.cpp src/AutoPlay.cpp src/ChainSolver.cpp -o vrt && ./vrt
+
+  dylib:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build TsumMod.dylib
+        run: sh tsumtsum-ios/tweak/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TsumMod-dylib
+          path: tsumtsum-ios/tweak/build/TsumMod.dylib
+          if-no-files-found: error

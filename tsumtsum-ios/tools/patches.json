@@ -1,0 +1,7 @@
+{
+  "_comment": "Static byte patches applied by build_ipa.py. EMPTY: no game patch is known yet. vmaddr = unslid address as shown in IDA/Ghidra (default base). expect = original bytes, replace = new bytes, same length. The build aborts if expect does not match.",
+  "build": {
+    "uuid": ""
+  },
+  "patches": []
+}
