@@ -21,7 +21,7 @@ jobs:
           c++ -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc tests/value_rules_test.cpp src/AutoPlay.cpp src/ChainSolver.cpp -o vrt && ./vrt
 
   dylib:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build TsumMod.dylib
