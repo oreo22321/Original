@@ -63,7 +63,11 @@ ForgeCode とエグゼキューターをつなぐと、▶ で **実際のゲー
 - 一度つないでおけば、あとは自動です。ゲームを開くとつながり、▶ はゲームの中で実行されます (「▶ の実行先」が「自動」のとき。つながっていなければエミュレーター)
 - `print` / `warn`、エラー (イベントの中で起きたものも) が出力パネルに届き、「◯ 行目へ」「AI で直す」もそのまま使えます
 - コンソールの式をゲームの中で評価 (`workspace:GetChildren()` など)
-- 「実機」タブで、ゲームの中のオブジェクトを一覧 (パスのコピー・エディタへの挿入)
+- `require` でプロジェクトの他のファイルも使えます (`require(script.Parent.Util)` / `require("src/shared/Util")`)
+- ブレークポイントを付けて実行すると、ゲームの中でもその行で止まり、変数を見ながら 1 行ずつ進められます (デバッグ)
+- もう一度実行する前に、前回の実行で作ったもの (イベントの接続・オブジェクト・`task.spawn` のスレッド) を自動で片付けます (UI が重ならない)
+- 「保存したら実機に自動で反映」をオンにすると、保存するたびにゲームの中で実行し直します
+- 「実機」タブで、ゲームの中のオブジェクトを一覧し、プロパティを見たり、その場で変えたりできます (パスのコピー・エディタへの挿入も)
 - iPhone 1 台でも使えます: ▶ を押してから Roblox に切り替えると実行され、戻ると出力が届いています (中継サーバーが 15 分ほど預かります)
 - ForgeCode を閉じていてもエグゼキューター側は待ち続け、開いたらつながります。テレポートしてもつながったまま。中継サーバーが再起動しても自動でつなぎ直します
 - サーバーなしの「コピー & 貼り付け」モード: 「実機用にコピー」→ エグゼキューターで実行 → 数秒後に「結果を貼り付け」
@@ -96,8 +100,8 @@ ForgeCode とエグゼキューターをつなぐと、▶ で **実際のゲー
 
 ### 制限
 
-- 実機では 1 つのファイルとして実行します (プロジェクトの他のファイルの `require` は使えません)
-- ブレークポイントで止めるデバッグは、エミュレーターだけです (「自動」のときは、ブレークポイントがあればエミュレーターで実行します)
+- 実機のデバッグは「次の行へ」と「続行」です (関数の中へ / 外へ はエミュレーターのみ)。条件付きブレークポイント・ログポイントはエミュレーターのみ
+- `require` で使えるのはプロジェクトの中のファイルと、ゲームの中にある本物の ModuleScript です
 - エグゼキューターが `request` (HTTP) に対応している必要があります
 - 無料の中継サーバーは、しばらく使わないと止まり、次の接続に 1 分ほどかかることがあります (その間も自動でやり直します)
 
@@ -170,6 +174,19 @@ ForgeCode には JavaScript で書かれた Luau 互換のエンジンが入っ�
 - **エグゼキューター API (模擬)**: 環境 (`getgenv`, `getrenv`, `getgc`, `filtergc` …)、クロージャ (`hookfunction`, `restorefunction`, `newcclosure` …)、メタテーブル (`hookmetamethod`, `getnamecallmethod`, `getrawmetatable`, `setreadonly` …)、シグナル (`getconnections`, `firesignal`, `hooksignal` …)、ファイル (`readfile` / `writefile` / `listfiles` … プロジェクトの `workspace/` フォルダに保存)、`request`, `game:HttpGet`, `crypt`, `Drawing` (ゲーム画面にリアルタイムで重ねて表示), `WebSocket`, `bit`, `cache`, `debug.*`, `syn.*` など。補完に出る関数はすべてサンドボックスにも存在します (`tests/executor.test.mjs` で確認)。
 - 無限ループは 10 秒 (設定で変更可) で自動停止します。■ でいつでも止められます。
 
+## GitHub と同期 (自動バックアップ)
+
+設定 → GitHub と同期 で、プロジェクトを GitHub のリポジトリに自動で保存できます。
+
+1. GitHub で保存用のリポジトリを作る (非公開でも可)
+2. Settings → Developer settings → Fine-grained tokens で、そのリポジトリだけ・Contents を「Read and write」にしたトークンを作る
+3. ForgeCode にトークンとリポジトリ名を入れて「保存して確認」
+
+- 保存すると少し後に、1 回につき 1 コミットで保存します。プロジェクトを開いたとき・アプリに戻ったときに GitHub 側の変更を取り込みます
+- 同じファイルを両方で変更していたら「衝突」として知らせ、どちらを残すか選べます (残さなかった方はこの端末の履歴から戻せます)
+- 「GitHub から開く」で、別の端末で作ったプロジェクトを開けます
+- トークンはこの端末にだけ保存します
+
 ## データの保存場所
 
 ファイルはブラウザ内 (IndexedDB) に保存されます。保存が終わる前の内容は下書きとして別に残るので、アプリが突然閉じられても次に開いたときに復元されます。
@@ -179,7 +196,9 @@ iPhone / iPad では、ホーム画面に追加して使うとデータが消え
 ## 開発者向け
 
 ```
-index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュール)
+index.html, boot.js          入口 (boot.js が dist/app/main.js を読みます。index.html?src で開くと js/ のソースのまま動きます)
+dist/                        配信用にまとめて圧縮したファイル (node tools/build.mjs で作ります。直接編集しない)
+css/, js/                    アプリ本体のソース (ES モジュール)
   js/luau/                   Luau 互換エンジン (字句解析・構文解析・JS へのコンパイル・実行時ライブラリ・Roblox / エグゼキューター模擬)
     debug.js                 デバッガー (ブレークポイント・ステップ実行・変数の表示・式の評価)
     gui.js                   GUI エンジン (レイアウト計算・入力の再現・画面への差分送信)
@@ -198,7 +217,8 @@ index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュー
     extlib.js                loadstring で読み込むライブラリのソース解析 (補完・ゴーストテキスト用)
     inline.js                インライン候補 (ゴーストテキスト)
     ai.js                    AI による続きの提案 (統計モデル・コメントからコード)
-    lint.js / typo.js        エラーチェック・誤字検出・自動修正
+    lint.js / typo.js        エラーチェック・誤字検出・自動修正 (直し方はデータで返し、大きなファイルはワーカーで調べる)
+    typecheck.js             型チェック (プロパティへの代入・引数・型注釈・計算と連結)
     errorlens.js             行の右に出るエラー表示
   js/app/                    画面 (ファイル一覧・タブ・実行パネル・ゲーム画面・設定・初回案内など)
     gui-preview.js           ゲーム画面 (差分の描画・タップ / ドラッグ / キー入力・全画面)
@@ -206,6 +226,9 @@ index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュー
     ai-host.js               Forge AI とアプリの窓口 (ファイルの読み書き・実行・変更の記録)
     agent.js                 AI がファイルを扱う部品 (置き換え・差分・変更の取り消し・API 検索)
     ai-panel.js / ai-actions.js  AI パネル、エディタから頼む操作 (提案・修正・選択範囲)
+    github-core.js / github-sync.js  GitHub との同期 (Git Data API・3 者比較・衝突) と、その画面
+    live.js / live-instrument.js     実機連携と、実機で動かすコードの下ごしらえ (片付け・デバッグの印。行番号は変えない)
+    i18n.js / i18n-en.js     表示の言語 (英語の辞書)
   js/ai/                     Forge AI (内蔵 AI)
     text.js                  ことばの理解 (正規化・意図・概念・値の取り出し・BM25)
     knowledge.js             知識ベース (Luau / Roblox / エグゼキューター / アプリの使い方)
@@ -216,7 +239,7 @@ index.html, css/, js/        アプリ本体 (ビルド不要の ES モジュー
     complete.js              続きの提案 (n-gram)・コメントからコード
     engine.js                依頼の振り分けと返事の組み立て
     llm.js                   高性能モード (端末内 LLM・WebLLM)
-  js/workers/                実行用の Web Worker
+  js/workers/                Web Worker (実行・エラーチェック・端末内 LLM)
   js/data/                   補完用の API データ (Luau・エグゼキューター・スニペット)
 data/roblox-api.json         Roblox API ダンプ (変換済み)
 vendor/                      同梱ライブラリ (CodeMirror 6, fflate, WebLLM)。ライセンスは vendor/LICENSES.txt
@@ -228,11 +251,14 @@ js/app/live.js               実機連携 (ForgeCode 側)。既定の中継サ�
 live/connector.lua           エグゼキューターで動くコネクター (中継サーバーが配ります)
 ```
 
-- テスト: `for f in tests/*.test.mjs; do node "$f" || break; done`
+- テスト: `node tests/run-all.mjs` (すべてのユニットテスト)
+  - ブラウザでの通し確認: `node tests/e2e/run.mjs` (`cd tools && npm ci && npx playwright install chromium` が必要)
   - eval を使わないエンジンでも確認: `node --import ./tests/force-interp.mjs tests/luau-basic.test.mjs` (roblox / executor / gui / debug / extlib も同様)
-  - `relay` (実機連携の中継サーバー) / `ai` (Forge AI: 理解・修復・レビュー・説明・生成・会話・続きの提案) / `agent` (置き換え・差分・API 検索) / `luau-basic` (言語) / `roblox` (Roblox 模擬) / `executor` (エグゼキューター API の網羅) / `gui` (GUI のレイアウト・入力・描画データ) / `extlib` (ライブラリの解析と補完) / `intel` (型推論と補完の候補) / `format` (整形) / `indent` (字下げ・end) / `lint` (エラーチェック・誤字) / `inline` (インライン候補) / `autoend` / `debug` / `symbols`
+  - `relay` (中継サーバー) / `github` (GitHub 同期。偽の GitHub `tests/mock-github.mjs` を相手に) / `ai` / `agent` / `luau-basic` / `roblox` / `executor` / `gui` / `extlib` / `intel` / `format` / `indent` / `lint` (エラーチェック・誤字・型チェック) / `inline` / `autoend` / `debug` / `symbols`
+  - GitHub Actions (`.github/workflows/test.yml`) が、main へのプッシュとプルリクエストのたびに、ユニットテスト・配信用ファイルが最新か・ブラウザでの通し確認を行います
+- **ファイルを変更したら `node tools/build.mjs`** を実行してください (dist/ のまとめ直し・index.html の先読み・Service Worker のキャッシュ一覧を更新します。CI は dist/ が最新でないと失敗します)
+- 開発中は `index.html?src` で開くと、まとめ直さずにソースのまま確認できます
 - Roblox API データの更新: `node tools/build-roblox-api.mjs` (最新の API ダンプを取得して `data/roblox-api.json` を作り直します)
 - ライブラリの作り直し: `cd tools && npm install && npm run vendor` (端末内 LLM は `node vendor-webllm.mjs`。更新したら `js/ai/llm.js` の wasm のハッシュも更新)
-- ファイルを変更したら `node tools/build-sw.mjs` で Service Worker のキャッシュ一覧を更新してください (更新しないと古いキャッシュが使われることがあります)。
 
 Roblox は Roblox Corporation の商標です。ForgeCode は Roblox Corporation とは関係ありません。

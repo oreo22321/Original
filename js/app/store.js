@@ -9,6 +9,7 @@ export const isIOS = typeof navigator !== 'undefined' && (/iP(hone|ad|od)/.test(
 export const DEFAULTS = {
   // 見た目
   theme: 'forge-dark',
+  language: 'ja',      // 表示の言語: ja / en / auto (端末に合わせる)
   fontSize: smallScreen ? 13 : 15,
   fontFamily: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace',
   lineHeight: 1.55,

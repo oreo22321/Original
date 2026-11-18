@@ -20,6 +20,7 @@ import './remote-ui.js'
 import './extlibs.js'
 import './github-sync.js'
 import { toast } from './ui.js'
+import { startI18n } from './i18n.js'
 
 function applyTheme(s) {
   const vars = uiColors(s.theme)
@@ -86,6 +87,7 @@ function registerServiceWorker() {
 
 async function boot() {
   const s = getSettings()
+  startI18n()
   applyTheme(s)
   setupErrorHandling()
   const root = document.getElementById('app')
@@ -115,6 +117,7 @@ async function boot() {
     app.editors.reconfigureAll()
     if (ns.lint !== prev.lint || ns.lintTypos !== prev.lintTypos || ns.lintUndefined !== prev.lintUndefined || ns.lintUnused !== prev.lintUnused) app.editors.relint()
     if (ns.layout !== prev.layout) app.wb.applyLayout()
+    if (ns.language !== prev.language) toast(ns.language === 'en' || (ns.language === 'auto' && !/^ja/i.test(navigator.language)) ? 'Reload to switch the language' : '再読み込みすると切り替わります', { action: { label: ns.language === 'ja' ? '再読み込み' : 'Reload', run: () => { app.editors.flushDrafts(); location.reload() } }, duration: 8000 })
     emit('settings', ns)
     app.wb.updateStatus()
   })

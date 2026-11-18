@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = 'a6ea4ad7b8'
+const VERSION = 'c0e2f1f4f5'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -10,14 +10,14 @@ const PRECACHE = [
   "boot.js",
   "css/app.css",
   "dist/app/main.js",
-  "dist/chunks/app-ZI6UCTFQ.js",
+  "dist/chunks/app-ZDCZYPRL.js",
+  "dist/chunks/chunk-AGAI5N3Q.js",
   "dist/chunks/chunk-AIN4TSBF.js",
-  "dist/chunks/chunk-GZBEBVPB.js",
+  "dist/chunks/chunk-EVFZTEP2.js",
   "dist/chunks/chunk-L52IZ56K.js",
   "dist/chunks/chunk-M4YAIX4P.js",
   "dist/chunks/chunk-OOBI3R4X.js",
   "dist/chunks/chunk-P24KNEGM.js",
-  "dist/chunks/chunk-RHAKUTQ2.js",
   "dist/chunks/chunk-TRSZNM54.js",
   "dist/chunks/chunk-UCLDEFRU.js",
   "dist/chunks/chunk-VC46IEJQ.js",
@@ -26,7 +26,7 @@ const PRECACHE = [
   "dist/chunks/generate-4METK36Z.js",
   "dist/chunks/knowledge-FVOLELZE.js",
   "dist/chunks/text-FPRMIC2R.js",
-  "dist/chunks/ui-3TVMSVNX.js",
+  "dist/chunks/ui-LUH3YI46.js",
   "dist/workers/lint-worker.js",
   "dist/workers/luau-worker.js",
   "data/roblox-api.json",

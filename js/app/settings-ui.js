@@ -7,7 +7,7 @@ import * as vfs from './vfs.js'
 import { apiVersion } from '../editor/apidb.js'
 import { app, command, runCommand, setProjectKind } from './app.js'
 
-export const APP_VERSION = '10.3.0'
+export const APP_VERSION = '11.0.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -26,6 +26,7 @@ const PRESETS = [
 
 const SCHEMA = [
   { group: '見た目', icon: 'sun', items: [
+    { key: 'language', type: 'select', label: '表示の言語', desc: 'English は画面の主な文言だけです (AI の回答・使い方は日本語)。再読み込みすると切り替わります', options: [['ja', '日本語'], ['en', 'English'], ['auto', '端末に合わせる']] },
     { key: 'theme', type: 'theme', label: 'テーマ' },
     { key: 'fontSize', type: 'range', min: 10, max: 28, label: '文字の大きさ', unit: 'px', desc: '2 本指でピンチしても変えられます' },
     { key: 'fontFamily', type: 'select', label: 'フォント', options: FONTS },
