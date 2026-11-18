@@ -32,6 +32,7 @@ export class Runner {
     this.build()
     on('docchange', () => this.scheduleProblems())
     on('active', () => this.scheduleProblems(120))
+    on('diagnostics', doc => { if (doc && doc.path === app.editors.active) this.scheduleProblems(60) })
     // ▶ を押してすぐ実行できるよう、手が空いたら Python を準備しておく
     setTimeout(() => this.ensureWorker(), 1500)
   }
@@ -150,6 +151,16 @@ export class Runner {
     for (const it of items) {
       const kind = it.kind === 'error-text' ? 'stderr' : it.kind
       const last = this.last
+      // 改行のない行 (input の案内・end="" の print) の続きは、同じ行につなげる (入力した文字も、案内の横に)
+      if (last && last.partial && last.el.isConnected && (kind === 'input-echo' || kind === last.kind)) {
+        const body = last.el.querySelector('.out-text')
+        if (kind === 'input-echo') body.append(h('span', { class: 'out-echo' }, it.text))
+        else this.linkify(body, it.text)
+        last.text += it.text
+        last.el.dataset.text = last.text
+        last.partial = kind === 'input-echo' ? false : !!it.partial
+        continue
+      }
       if (group && last && last.kind === kind && last.text === it.text && !it.partial) {
         last.n++
         if (!last.badge) { last.badge = h('span', { class: 'out-count' }); last.el.append(last.badge) }
@@ -160,7 +171,7 @@ export class Runner {
       if (items.length > 20) el.classList.add('no-anim')
       frag.append(el)
       this.lineCount++
-      this.last = { kind, text: it.text, el, n: 1, badge: null }
+      this.last = { kind, text: it.text, el, n: 1, badge: null, partial: !!it.partial }
     }
     // 入力欄があれば、その手前に入れる
     if (this.inputRow && this.inputRow.parentElement === out) out.insertBefore(frag, this.inputRow)

@@ -226,8 +226,15 @@ export class DebugPanel {
     el.append(bar)
 
     if (p) {
-      el.append(this.section('locals', `変数 (${p.locals.length})`, () => this.varList(p.locals, 'ローカル変数はありません')))
-      el.append(this.section('globals', `グローバル (${p.globals.length})`, () => this.varList(p.globals, 'プログラムが作ったグローバル変数はありません')))
+      // 関数の外 (モジュール) で止まっているときは、グローバル変数がその場所の変数
+      const atModule = p.stack.length && p.stack[0].name === '(モジュール)'
+      if (atModule) {
+        const vars = [...p.locals, ...p.globals]
+        el.append(this.section('locals', `変数 (${p.globals.length})`, () => this.varList(vars, 'まだ変数はありません')))
+      } else {
+        el.append(this.section('locals', `変数 (${p.locals.length})`, () => this.varList(p.locals, 'ローカル変数はありません')))
+        el.append(this.section('globals', `グローバル (${p.globals.length})`, () => this.varList(p.globals, 'プログラムが作ったグローバル変数はありません')))
+      }
     }
     el.append(this.section('watches', `ウォッチ (${this.watches.length})`, () => this.watchList(), h('button', { class: 'icon-btn sm', title: '式を追加', 'aria-label': '式を追加', onclick: e => { e.stopPropagation(); this.addWatch() } }, icon('plus', 16))))
     if (p) el.append(this.section('stack', '呼び出し履歴', () => h('div', { class: 'dbg-list' }, p.stack.map((f, i) => h('button', { class: 'dbg-frame' + (i === 0 ? ' top' : ''), onclick: () => { if (app.files.some(x => x.path === f.file)) app.editors.open(f.file, { line: f.line }) } }, h('span', { class: 'fr-name' }, f.name), h('span', { class: 'fr-loc' }, `${f.file}:${f.line}`))))))

@@ -339,7 +339,7 @@ body[data-layout=mobile] .debug-float { top: auto; bottom: 12px; right: auto; le
 .out-input > .ico { color: var(--accent); flex: none; }
 .out-input-field { flex: 1; min-width: 0; height: 30px; font-family: var(--editor-font); font-size: 13px; }
 body.touch .out-input-field { font-size: 16px; }
-.out-line.input-echo { color: var(--accent); }
+.out-line.input-echo, .out-echo { color: var(--accent); }
 .out-line.input-echo .out-text::before { content: '› '; opacity: .7; }
 .out-figure { margin: 8px 0; }
 .out-image { display: block; max-width: min(100%, 560px); height: auto; border-radius: var(--r); border: 1px solid var(--border); background: #fff; cursor: zoom-in; }

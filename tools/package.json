@@ -2,10 +2,11 @@
   "name": "forgecode-tools",
   "private": true,
   "type": "module",
-  "description": "Build tools for vendoring CodeMirror and generating API data. Not needed to run the app.",
+  "description": "Build tools (bundling, vendoring CodeMirror, local server, tests). Not needed to run the app.",
   "scripts": {
     "vendor": "node build-vendor.mjs",
-    "roblox-api": "node build-roblox-api.mjs"
+    "serve": "node serve.mjs",
+    "build": "node build.mjs"
   },
   "devDependencies": {
     "@codemirror/autocomplete": "^6.20.4",

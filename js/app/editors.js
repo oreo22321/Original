@@ -11,6 +11,13 @@ import { h, icon, fileIcon, toast, menu, onLongPress, confirmDialog, copyText, m
 import { renderMarkdown } from './markdown.js'
 import { bpStore } from './debug-panel.js'
 
+// 診断 (エラー・警告) の中身が変わったか見分けるための印
+function diagSignature(state) {
+  let sig = ''
+  forEachDiagnostic(state, (d, from) => { if (sig.length < 4000) sig += d.severity[0] + from + ':' + d.message.length + ';' })
+  return sig
+}
+
 const MAX_WAIT = 4000 // 打ち続けていても、この間隔では必ず保存する
 
 export class EditorManager {
@@ -213,6 +220,11 @@ export class EditorManager {
       if (this.preview && doc.path === this.active) this.schedulePreview()
     }
     if (u.selectionSet || u.docChanged) emit('cursor', doc, u.state)
+    // エラーチェック (Python のワーカー) の結果は遅れて届くので、届いたら問題の一覧と数を更新
+    if (!u.docChanged && u.transactions.some(tr => tr.effects.length)) {
+      const sig = diagSignature(u.state)
+      if (sig !== doc.diagSig) { doc.diagSig = sig; emit('diagnostics', doc) }
+    }
   }
 
   // ---- 保存 ----

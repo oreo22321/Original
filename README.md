@@ -1,109 +1,60 @@
-# ForgeCode — スマホ・iPad で使える Roblox 専用 Luau エディタ
+# ForgeCode — スマホ・iPad で使える Python エディタ
 
-スマホ・iPad・PC のブラウザで動く、**Roblox の Luau 専用**のコードエディタです。
-インストール不要で、ホーム画面に追加すればアプリのように全画面・オフラインで使えます。
-**自前の AI (Forge AI) を内蔵**しており、インターネットも API キーも使わずに、コードの自動修正・整形・説明・生成・質問への回答をアプリの中だけで行います。
+ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタです。インストールは要りません。
+本物の Python (CPython 3.14 を WebAssembly にした [Pyodide](https://pyodide.org/)) が端末の中で動くので、書いたコードをその場で実行できます。コードはサーバーに送りません。
 
-![アイコン](icons/icon-192.png)
-
-## 2 つのモード
-
-| モード | 用途 | 特徴 |
-| --- | --- | --- |
-| **Studio** | Roblox Studio に貼り付けるスクリプト | Roblox の API だけを補完。`〜.server.luau` は Script、`〜.client.luau` は LocalScript、それ以外は ModuleScript として扱い、サーバーとクライアントの取り違えを指摘します |
-| **Executor** | エグゼキューター用のスクリプト | `getgenv`・`writefile`・`hookmetamethod`・`Drawing` など 180 以上の関数を補完し、模擬的に実行できます |
-
-モードはプロジェクトごとに決まり、画面下の左端 (Studio / Executor) をタップするといつでも切り替えられます。
+- **書く**: 補完 (jedi)・引数のヒント・説明・エラーチェック (pyflakes)・ワンタップの修正・整形 (autopep8)・打ち間違いの自動修正
+- **動かす**: `print` / `input()` / ■ で停止 / いくつものファイルの `import` / ファイルの読み書き / matplotlib のグラフ
+- **調べる**: ブレークポイント・ステップ実行・変数とウォッチ・コンソール
+- **頼む**: 内蔵の AI (Forge AI) が、直す・説明する・コメントや型ヒントを付ける・コードを作る・質問に答える
 
 ## できること
 
-| 機能 | 内容 |
-| --- | --- |
-| 💡 補完 | **Roblox の全 API** (950 クラス・8000 メンバー・662 Enum)、Luau 標準ライブラリ、**エグゼキューター API (UNC / sUNC + 別名・syn・bit など)**。自分で作ったテーブルや、`require` したモジュールの中身も候補に出ます |
-| 🧠 型を推論 | `local Players = game:GetService("Players")` → `Players.` で Players のメンバー。`PlayerAdded:Connect(function(player)` の `player` は Player 型。**スコープを正しく見分け**、自分で作った**関数の戻り値**・**クラス** (`setmetatable` と `self.X`)・**`type` 定義**・`if x:IsA("Part") then` での**絞り込み**・`camera:WorldToViewportPoint` のような複数の戻り値まで推論します |
-| 🎯 場面に合う候補 | `part.Material = ` で Enum の一覧、`humanoid:ChangeState(` で引数の Enum、`frame.Size = UD` で `UDim2.new(...)`、`TweenService:Create(part, info, {` でアニメーションできるプロパティ、`GetAttribute("` で使った属性名。見えている変数は**型付きで近いものから**並び、よく使うメンバーほど上に出ます |
-| 👻 インライン候補 | 薄い文字で続きを提案し、**Tab** (スマホはキーボードバーの **✓**) で確定。`PlayerAdded:Connect(` → `function(player) … end)` のように引数名まで入り、`frame.Parent = ` では親にふさわしい変数、`Instance.new("TextLabel")` の次の行では**次に設定するプロパティ**、`mt.__namecall = ` ではフックのひな形を提案。同じような行をくり返すと**次の行を予測**します |
-| 🧹 自動整形 | 書き終えた行の空白 (`x=1+2` → `x = 1 + 2`) を整え、入力が止まったときにエラーがなければファイル全体の字下げ・空行も**裏で自動で直します**。カーソルの行には触れず、整形の前後で字句が同じことを確認するのでコードの意味は変わりません |
-| ✍️ 誤字対策 | `GetServise`・`"Playrs"`・`part.Tranparency`・`Enum.KeyCode.Sapce` などのスペルミスに**「もしかして」**を提案。`fucntion` → `function` などの打ち間違い、全角の `（）＝”` や全角スペース、iPhone が変換した `“ ”` は**自動で修正** (文字列・コメントの中はそのまま) |
-| ⚠️ エラーチェック | 構文エラー (どの `if` / `function` の `end` が足りないかまで特定)、未定義の変数、`.` と `:` の間違い、非推奨 API、待機のない無限ループ、サーバーで `LocalPlayer` を使うなどの間違い |
-| 🔧 ワンタップ修正 | 行の右に出る説明をタップ (PC は ⌘/Ctrl + `.`、スマホは 💡 キー) して直し方を選べます。「誤字をまとめて直す」も可能 |
-| 🔁 字下げと end | `if ... then` / `for ... do` / `function()` を**書いた時点で `end` を自動で追加**、`if` や `function` を消すと**対の `end` も自動で削除**。自分で `end` を書いても二重になりません。字下げは前の行を基準に決めるので、`Connect(function()` の中でもずれません |
-| ▶ 実行 | ブラウザ内の Luau 互換エンジンで実行。Roblox API とエグゼキューター API を模擬し、エラーには**日本語の解説と直し方**を表示します |
-| 🐞 デバッガー | 行番号の左をタップして**ブレークポイント**。止まった場所の変数・テーブルの中身・呼び出し履歴を確認し、**ステップ実行** (次の行へ / 関数の中へ / 外へ)。条件付きブレークポイント、ログポイント、ウォッチ式にも対応 |
-| ⌨️ コンソール | 出力の下の欄で、式やコードをその場で実行。実行後もスクリプトの変数や作ったオブジェクトを調べられます |
-| 🧭 コードの移動 | **定義へ移動** (F12)、**参照を検索** (⇧F12)、スコープを考慮した**名前の一括変更** (F2)、同じ変数のハイライト、**スティッキースクロール** |
-| 🎮 ゲーム画面 | スクリプトが作った ScreenGui を、**Roblox と同じ規則で大きさ・位置を計算**して表示 (UIListLayout / UIGridLayout / UIPadding / UIScale / AutomaticSize / ScrollingFrame / UIFlexItem / UICorner / UIStroke / UIGradient / リッチテキスト)。**タップ・ドラッグ・スクロール・文字入力・キー入力**がそのままスクリプトに届きます (スライダーやウィンドウの移動も可)。スマホ / タブレット / PC の画面に切り替え、全画面表示 (スマホは自動で横向き) にも対応 |
-| 📦 loadstring | `loadstring(game:HttpGet(URL))()` をそのまま実行。**Obsidian・LinoriaLib・Orion・Kavo・WindUI などの UI ライブラリが実際に表示・操作できます**。取得した中身は端末に保存され、オフラインでも動きます。CORS で読めないサイトは「中継」か「中身を登録」で対応 |
-| 📚 ライブラリの補完 | loadstring の行があると、裏でライブラリのソースを読み取り、補完・ゴーストテキスト・ヒントに追加。`local Window = ` → `Library:CreateWindow({...})`、`Groupbox:AddToggle(` → `Text` / `Default` / `Callback` の雛形、`Toggles.MyToggle:` → `OnChanged` など |
-| 📑 タブ・分割 | 複数ファイルをタブで開く、並べ替え、iPad / PC では左右分割 |
-| 💾 保存 | 入力が止まるとすぐ自動保存。保存が終わる前にアプリが閉じられても、**下書きから復元**します。変更履歴、ZIP の書き出し / 読み込み、共有シートにも対応 |
-| 🔍 検索 | ファイル内の検索・置換 (正規表現対応)、全ファイル検索・一括置換、ファイル名検索 (⌘P)、関数・変数へ移動 |
-| 📱 スマホ向け | 記号・矢印・Tab のキーボードバー、選択モード、ピンチで文字サイズ変更、長押しメニュー、画面キーボードに合わせたレイアウト |
-| ✨ Forge AI (内蔵) | 「AI」パネルで日本語で頼むと、**構文エラー・打ち間違い・非推奨 API・よくあるバグの自動修正**、整形・整理・最適化、コードの説明 (1 行ずつも)、コメント・型注釈の追加、**コードの生成** (「触れたら死ぬブロック」「E キーでドアが開く」「ショップの UI」…)、Luau / Roblox の質問への回答をすぐに行います。変更は差分で確認でき、まとめて元に戻せます。オフラインで動き、コードを外に送りません |
-| ✨ エディタの AI | ✨ キー (Alt + `\`) で続きを提案 (プロジェクトから学習)、`-- 触れたら死ぬ` のようなコメントの次の行ではコードを組み立てて提案。範囲を選んで ✨ (⌘/Ctrl + I) で直す・整理・整形・コメント・型注釈・説明。エラーのメニューと実行エラーに「AI で直す」 |
-| 🚀 高性能モード (任意) | 設定 → AI で端末内の言語モデル (Qwen2.5-Coder 0.5B / 1.5B / 3B) をオンにすると、決まった型に当てはまらない自由な依頼にも答えます。WebGPU で端末の中だけで動き、答えのコードは内蔵 AI が構文チェック・自動修正してから表示します |
+### エディタ
 
-## Forge AI (内蔵 AI) のしくみ
+- **補完**: 変数・関数・クラス・モジュールの中身 (`math.`・`"abc".`・自分のクラスのメソッド・ほかのファイルの関数) を、型を推論して候補に出します (jedi)。
+- **引数のヒント・説明**: `(` の中で引数を表示。名前を長押し (PC はマウスを乗せる) で docstring を表示します。
+- **エラーチェック**: 構文エラーと、定義されていない名前・使っていない import などを、書いている間に日本語で表示します (pyflakes)。「もしかして `print`?」のように近い名前も提案します。
+- **ワンタップの修正**: `:` の付け忘れ・import 忘れ・字下げ・全角記号・打ち間違い・`is` と `==` など。行の右の説明をタップ (PC は ⌘/Ctrl + .) すると直し方を選べます。
+- **自動修正**: 全角の `（）：＝”` や全角スペース、iPhone が変える `“ ”`、`pirnt` → `print` のような打ち間違いを、入力した時点で直します (文字列とコメントの中はそのまま。設定でオフにできます)。
+- **整形**: PEP 8 に合わせて空白・字下げ・空行をそろえます (Shift + Alt + F、保存時に整形も可)。
+- **定義へ移動・参照を検索・名前の変更**: ほかのファイルもまとめて扱います (F12 / Shift + F12 / F2)。
+- **その他**: アウトライン、スティッキースクロール、同じ単語の強調、マルチカーソル、全ファイル検索・置換、ファイルの履歴、ZIP の読み込み・保存、GitHub と同期。
 
-Forge AI は、外部のサービスに頼らずアプリの中だけで動く AI です。
+### 実行
 
-- **ことばの理解**: 依頼文から「何をしたいか」(直す・説明・作る・質問 …) と、数値・秒数・キー・色・名前を読み取ります (日本語・英語)。
-- **自動修正**: 構文エラーは「直し方の候補を試し、いちばん先まで正しく読めるもの」を選ぶ探索で直します (end・then・do・括弧の不足、`!=` `&&` `{ }` `//` などの他の言語の書き方、キーワードの打ち間違い、全角記号)。続けて、エディタのチェック (存在しないメンバー・非推奨 API・`.` と `:` の取り違え) とコードレビュー (pcall の使い方、`:Connect(f())`、`.Value` の付け忘れ …) の安全な修正を入れます。
-- **説明・コメント・型注釈**: 構文木を読み、Roblox の API の意味 (Touched・TakeDamage・TweenService …) を日本語の文にします。
-- **コード生成**: 「きっかけ」と「動作」を組み合わせて組み立てるほか、まとまった仕組み (データ保存・ショップ・ラウンド・NPC・ESP …) をレシピから作ります。生成したコードは必ず構文チェックを通します。
-- **質問への回答**: 内蔵の知識ベース (Luau・Roblox・エグゼキューター・このアプリの使い方) を BM25 で検索し、API データ (Roblox API ダンプ・標準ライブラリ) と組み合わせて答えます。
-- **続きの提案**: プロジェクトのコードと内蔵サンプルから n-gram の統計モデルを作り、行の続きを提案します。
-- **高性能モード (任意)**: [WebLLM](https://github.com/mlc-ai/web-llm) で Qwen2.5-Coder を端末内で動かします。モデルは使う人が選んだときだけ Hugging Face からダウンロードされ、ブラウザのキャッシュに残ります。モデルの実行コード (wasm) はハッシュ (SRI) を確かめてから使います。
-- AI が実行して確かめるときは、安全のため外部と通信しません (一度取得した loadstring のスクリプトはキャッシュから使えます)。
+- ▶ で実行します。結果は下の「出力」に表示されます。エラーには日本語の原因と直し方が付き、`ファイル名:行` をタップするとその行へ移動します。
+- **input()**: 入力を待つと、出力の下に入力欄が出ます。
+- **停止**: ■ でいつでも止められます (`KeyboardInterrupt`)。設定 → 実行 で最大実行時間も決められます。
+- **いくつものファイル**: 同じプロジェクトの `.py` は `import` できます。`open("data.csv")` でプロジェクトのファイルを読め、プログラムが書いたファイルはファイル一覧に入ります。
+- **ライブラリ**: 標準ライブラリはほぼすべて (オフラインでも)。numpy・pandas・matplotlib・scipy・sympy・scikit-learn・pillow・beautifulsoup4 など Pyodide が用意しているものは `import` するだけで使えます (はじめて使うときだけインターネットから読み込み、あとは端末に保存)。`plt.show()` の図は出力に表示されます。
+- **コンソール**: 出力の一番下の欄で、式やコードをその場で試せます。実行が終わった後の変数も使えます。
+- 使えないもの: `tkinter` / `turtle` (画面を開くもの)、`pip install`、`subprocess`、ふつうのネットワーク通信 (`socket` / `requests`)。
 
-## 実機連携 (Delta などのエグゼキューター)
+### デバッガー
 
-ForgeCode とエグゼキューターをつなぐと、▶ で **実際のゲームの中で** スクリプトを実行し、出力・エラーを ForgeCode に表示できます。
+- 行番号の左をタップするとブレークポイント (F9)。▶ で実行すると、その行の手前で止まります。コードに `breakpoint()` と書いても止まります。
+- 止まっている間は、変数 (リスト・辞書・オブジェクトはタップで中身を開ける)・呼び出し履歴・ウォッチ式を確認できます。
+- ステップ (F10)・中へ (F11)・外へ (Shift + F11)・続行 (F5)・実行中の一時停止。
+- 赤い点を長押しすると、条件付きブレークポイント (`i == 10` のときだけ止まる) やログポイント (止めずに `{変数}` の値を出力) にできます。
+- 止まっている場所の変数で、コンソールから式を評価できます。
+- しくみ: Python 3.12 からの `sys.monitoring` を使う `bdb` (`backend="monitoring"`) で、ブレークポイントがあっても速く動きます。画面との受け渡しは SharedArrayBuffer で行います。
 
-- 一度つないでおけば、あとは自動です。ゲームを開くとつながり、▶ はゲームの中で実行されます (「▶ の実行先」が「自動」のとき。つながっていなければエミュレーター)
-- `print` / `warn`、エラー (イベントの中で起きたものも) が出力パネルに届き、「◯ 行目へ」「AI で直す」もそのまま使えます
-- コンソールの式をゲームの中で評価 (`workspace:GetChildren()` など)
-- `require` でプロジェクトの他のファイルも使えます (`require(script.Parent.Util)` / `require("src/shared/Util")`)
-- ブレークポイントを付けて実行すると、ゲームの中でもその行で止まり、変数を見ながら 1 行ずつ進められます (デバッグ)
-- もう一度実行する前に、前回の実行で作ったもの (イベントの接続・オブジェクト・`task.spawn` のスレッド) を自動で片付けます (UI が重ならない)
-- 「保存したら実機に自動で反映」をオンにすると、保存するたびにゲームの中で実行し直します
-- 「実機」タブで、ゲームの中のオブジェクトを一覧し、プロパティを見たり、その場で変えたりできます (パスのコピー・エディタへの挿入も)
-- iPhone 1 台でも使えます: ▶ を押してから Roblox に切り替えると実行され、戻ると出力が届いています (中継サーバーが 15 分ほど預かります)
-- ForgeCode を閉じていてもエグゼキューター側は待ち続け、開いたらつながります。テレポートしてもつながったまま。中継サーバーが再起動しても自動でつなぎ直します
-- サーバーなしの「コピー & 貼り付け」モード: 「実機用にコピー」→ エグゼキューターで実行 → 数秒後に「結果を貼り付け」
+## Forge AI (内蔵 AI)
 
-### 使う人がすること (最初の 1 回だけ)
+アプリに入っている AI です。インターネットも API キーも要らず、コードを外に送りません。
 
-1. 出力パネルの「実機」タブで「1 行をコピー」(`loadstring(game:HttpGet("…/c/…"))()`)
-2. エグゼキューターの autoexec (自動実行) に貼り付けて保存
+- **直す**: 「直して」— 構文エラー (`:` 忘れ・字下げ・括弧・閉じていない文字列・全角記号・他の言語の書き方)、打ち間違い、import 忘れ、`== None`・何でも受ける `except:`・変更できる既定値 (`def f(x=[])`) などのよくあるバグ。実行エラーの「AI で直す」からも。
+- **整える**: 「整形して」「整理して」(`"a" + name` → f-string など新しい書き方に)、「最適化して」。
+- **説明する**: 「説明して」でファイルの概要と流れを日本語で。範囲を選ぶと 1 行ずつ。「コメントを追加して」「型ヒントを付けて」(既定値と return から推測)。
+- **確かめる**: 「レビューして」— バグになりそうなところ・遅くなる書き方・読みやすさを指摘し、自動で直せるものは「直して」で直します。
+- **作る**: 「数当てゲームを作って」「CSV を読んでグラフにして」「1 から 100 まで足すプログラム」など。「10 回にして」のような手直しもできます。
+- **答える**: 「リストと辞書の違いは?」「for 文の使い方」「enumerate とは」「TypeError って何?」に、例のコード付きで答えます。
+- **続きの提案**: 入力が止まると、プロジェクトと内蔵サンプルから学んだ続きを薄い文字で出します (Tab で確定)。`# 1 から 10 まで表示する` のようなコメントの次の行で AI キー (Alt + \\) を押すと、コードを組み立てます。
+- **高性能モード (任意)**: 設定 → AI で端末内の言語モデル (Qwen2.5-Coder、WebGPU) を使うと、決まった型に当てはまらない依頼にも答えます。答えのコードは Forge AI が構文と打ち間違いを確かめてから表示します。
+- AI が変えたファイルは「差分」で確認でき、「すべて元に戻す」で取り消せます。
 
-あとはコードを書いて ▶ を押すだけです。
-
-### 中継サーバー (公開する人が 1 回だけ用意)
-
-ブラウザの ForgeCode は外からの接続を待てないため、間に小さな中継サーバー (`relay/server.mjs`、依存なし) を置きます。
-
-1. [Render で作る](https://render.com/deploy?repo=https://github.com/oreo22321/Original) (GitHub のアカウントでログインし「Apply」)。`render.yaml` の `forgecode-live` (無料プラン) ができます
-2. どちらかで、使う人の設定を不要にします
-   - できた URL (`https://〜.onrender.com`) をそのまま開く: 中継サーバーは ForgeCode 本体も配信するので、その場所で開けば自動でつながります
-   - GitHub Pages 版でも自動にする: `js/app/live-config.js` の `DEFAULT_RELAY` に URL を入れる
-3. (または、使う人が「実機」タブで URL を貼り付けて保存)
-
-自分のパソコンなどで動かす場合: `node relay/server.mjs` (Node.js 18 以上。ForgeCode を https で開く場合は、中継サーバーも https が必要です)
-
-### 安全のしくみ
-
-- 中継サーバーはデータを保存せず、メモリの中だけで中継します
-- エグゼキューターへコードを送れるのは、鍵 (この端末だけに保存) を持つ ForgeCode だけです。接続コード (部屋) は鍵から計算するので、中継サーバーが再起動しても他の人に乗っ取られません。エグゼキューターに貼る 1 行に鍵は入っていません
-- 1 行は他の人に見せないでください。心配なときは「実機」タブの「接続コードを作り直す」
-- 公開ゲームでのエグゼキューターの使用は Roblox の利用規約違反になり、アカウントが処分されることがあります。自分のゲームで試しましょう
-
-### 制限
-
-- 実機のデバッグは「次の行へ」と「続行」です (関数の中へ / 外へ はエミュレーターのみ)。条件付きブレークポイント・ログポイントはエミュレーターのみ
-- `require` で使えるのはプロジェクトの中のファイルと、ゲームの中にある本物の ModuleScript です
-- エグゼキューターが `request` (HTTP) に対応している必要があります
-- 無料の中継サーバーは、しばらく使わないと止まり、次の接続に 1 分ほどかかることがあります (その間も自動でやり直します)
+しくみ: ことばの理解 (日本語の正規化・意図・概念) → 処理の選択 → Python の解析 (pytools ワーカーの ast / pyflakes / jedi / autopep8) で直し方を決め、結果を必ず構文チェックしてから書き込みます。
 
 ## はじめかた (GitHub Pages で無料公開)
 
@@ -111,26 +62,28 @@ ForgeCode とエグゼキューターをつなぐと、▶ で **実際のゲー
 2. **Source** を「Deploy from a branch」、**Branch** を `main` / `/(root)` にして **Save** を押します。
 3. 1〜2 分待つと、`https://<ユーザー名>.github.io/<リポジトリ名>/` (このリポジトリなら `https://oreo22321.github.io/Original/`) で使えるようになります。
 
-ビルド作業は不要です。ファイルをそのまま置くだけで動きます。
+ビルド作業は不要です。ファイルをそのまま置くだけで動きます (サーバーは要りません)。
+`input()`・■ での停止・デバッガーに必要なヘッダー (cross-origin isolation) は、GitHub Pages では付けられないため、Service Worker (`sw.js`) が付けます。はじめて開いたときに 1 回だけ自動で再読み込みされます。
+
 既に開いたことがある端末では、起動時に「新しいバージョンがあります」と出たら **更新** を押すと最新版になります (設定 → 情報 → アプリを最新版に更新 でも可)。
 
 ### iPhone / iPad でアプリのように使う
 
 1. Safari で上の URL を開きます。
 2. 共有ボタン (□↑) → **ホーム画面に追加** を選びます。
-3. ホーム画面のアイコンから開くと、全画面で使えます。一度開けばオフラインでも動きます。
+3. ホーム画面のアイコンから開くと、全画面で使えます。一度開けばオフラインでも動きます (追加のライブラリは、一度使ったものだけ)。
 
 ### 自分のパソコンで試す
 
-このフォルダで `python3 -m http.server 8000` を実行し、ブラウザで `http://localhost:8000` を開きます (ファイルを直接ダブルクリックで開くと動きません)。
+このフォルダで `node tools/serve.mjs` を実行し、ブラウザで `http://localhost:8080` を開きます (必要なヘッダーを付けて配信します)。
+ファイルを直接ダブルクリックで開くと動きません。
 
 ## 使い方
 
 - 左上の **☰** (iPad / PC では左端のアイコン) でファイル一覧を開き、ファイルをタップして開きます。
-- **▶** で実行します。結果は下の「出力」、作った GUI は「ゲーム」タブに表示されます。エラーの `ファイル名:行` をタップするとその行へ移動します。
+- **▶** で実行します。ファイルを長押し → **▶ で常にこのファイルを実行** を選ぶと、別のファイル (モジュールなど) を編集中でも、そのファイルを実行します。範囲を選んで「選択範囲を実行」もできます。
 - ファイルやタブを **長押し** (PC は右クリック) すると、名前の変更・削除・複製・共有などのメニューが出ます。
-- ファイルを長押し → **▶ で常にこのファイルを実行** を選ぶと、別のファイル (モジュールなど) を編集中でも、そのファイルを実行します。
-- 右上の **コピー** ボタンでコード全体をコピーできます (Studio やエグゼキューターに貼り付けるときに便利)。Executor モードでは「loadstring の 1 行を作る」も使えます。
+- 画面下の **Python 3.14** をタップすると、Python の再起動や使えるライブラリの一覧があります。
 - 詳しい使い方はアプリ内の **使い方** (本のアイコン / ⋯ メニュー) で見られます。
 
 ### キーボードショートカット (iPad / PC)
@@ -156,24 +109,6 @@ ForgeCode とエグゼキューターをつなぐと、▶ で **実際のゲー
 | ⌘/Ctrl + B / J | サイドバー / パネルの表示切り替え |
 | Tab / ⌘/Ctrl + → | インライン候補を確定 / 1 単語だけ確定 |
 
-## 実行環境について
-
-ForgeCode には JavaScript で書かれた Luau 互換のエンジンが入っていて、ブラウザ内でそのまま実行できます。
-
-- **Luau の文法**: 型注釈、`+=` などの複合代入、`continue`、補間文字列 `` `x = {x}` ``、if 式、汎用反復 (`for k, v in t do`) に対応。`getfenv` / `setfenv` (関数ごとの環境)、`string.pack` / `unpack` も使えます。
-- **標準ライブラリ**: `string` (Lua パターン・`string.format` を含む) / `table` / `math` / `os` / `coroutine` / `task` / `utf8` / `bit32` / `buffer` / `debug`
-- **Roblox API (模擬)**: `game`, `workspace`, `script`, `Instance.new`, すべてのクラスのプロパティ・メソッド・イベント、`Vector3`, `CFrame`, `Color3`, `UDim2`, `TweenInfo`, `Enum` などのデータ型。
-  - `Players.PlayerAdded` / `CharacterAdded` は実行後に自動で発火するので、サーバースクリプトの動作確認ができます。
-  - `RunService.Heartbeat`, `TweenService` (実際に時間をかけて補間), `DataStoreService` (メモリ上に保存), `HttpService:JSONEncode/JSONDecode`, `RemoteEvent` (同じ実行内でサーバー ⇄ クライアントがつながります), `require` (プロジェクト内のモジュール) などは実際に動きます。
-  - サーバースクリプト (`.server.luau`) では、本物と同じく `Players.LocalPlayer` が nil になります。
-  - ボタンなどのイベントに関数を接続していると、実行は終了せず「操作待ち」になります。「ゲーム」タブで操作でき、■ で終了します。
-  - GUI は `AbsoluteSize` / `AbsolutePosition` / `TextBounds` / `AbsoluteContentSize` が実際の値になり、変化すると `GetPropertyChangedSignal` も発火します。`UserInputService.InputBegan/InputChanged/InputEnded`、`Mouse.X/Y`、`GetMouseLocation`、`IsMouseButtonPressed`、`TextBox:CaptureFocus` なども画面の操作と連動します。
-  - `game:GetObjects` (Roblox のアセット) は読み込めないため、空の Model を返します (Rayfield のように UI をアセットから読み込むライブラリは表示できません)。
-  - `workspace:Raycast` / `Spherecast` / `GetPartBoundsInBox` / `GetPartBoundsInRadius` / `GetPartsInPart` / `GetTouchingParts`、`Camera:WorldToViewportPoint` / `ViewportPointToRay`、`mouse.Hit` / `mouse.Target` は、パーツの位置・大きさとカメラから実際に計算します。
-  - 物理演算・3D の描画・本物のサーバー通信は行いません。実装されていないメソッドは「模擬動作です」と表示して既定値を返します。
-- **エグゼキューター API (模擬)**: 環境 (`getgenv`, `getrenv`, `getgc`, `filtergc` …)、クロージャ (`hookfunction`, `restorefunction`, `newcclosure` …)、メタテーブル (`hookmetamethod`, `getnamecallmethod`, `getrawmetatable`, `setreadonly` …)、シグナル (`getconnections`, `firesignal`, `hooksignal` …)、ファイル (`readfile` / `writefile` / `listfiles` … プロジェクトの `workspace/` フォルダに保存)、`request`, `game:HttpGet`, `crypt`, `Drawing` (ゲーム画面にリアルタイムで重ねて表示), `WebSocket`, `bit`, `cache`, `debug.*`, `syn.*` など。補完に出る関数はすべてサンドボックスにも存在します (`tests/executor.test.mjs` で確認)。
-- 無限ループは 10 秒 (設定で変更可) で自動停止します。■ でいつでも止められます。
-
 ## GitHub と同期 (自動バックアップ)
 
 設定 → GitHub と同期 で、プロジェクトを GitHub のリポジトリに自動で保存できます。
@@ -193,72 +128,58 @@ ForgeCode には JavaScript で書かれた Luau 互換のエンジンが入っ�
 ブラウザのデータを消去すると消えるため、大切なものは **設定 → データ → すべてのプロジェクトを ZIP で保存** でバックアップしてください。
 iPhone / iPad では、ホーム画面に追加して使うとデータが消えにくくなります。
 
+以前のバージョン (Luau 版) で作ったプロジェクトもそのまま残り、ファイルの編集・保存・ZIP での書き出しができます (実行はできません)。
+
 ## 開発者向け
 
 ```
 index.html, boot.js          入口 (boot.js が dist/app/main.js を読みます。index.html?src で開くと js/ のソースのまま動きます)
 dist/                        配信用にまとめて圧縮したファイル (node tools/build.mjs で作ります。直接編集しない)
 css/, js/                    アプリ本体のソース (ES モジュール)
-  js/luau/                   Luau 互換エンジン (字句解析・構文解析・JS へのコンパイル・実行時ライブラリ・Roblox / エグゼキューター模擬)
-    debug.js                 デバッガー (ブレークポイント・ステップ実行・変数の表示・式の評価)
-    gui.js                   GUI エンジン (レイアウト計算・入力の再現・画面への差分送信)
-    remote.js                外部スクリプトの取得 (URL の正規化・キャッシュ・中継)
-    spatial.js               レイキャスト・範囲内のパーツ・カメラの投影
-    interp.js                構文木を直接実行するエンジン (eval が使えない環境用。コンパイル版と同じ結果)
   js/editor/                 エディタ機能
-    luau-lang.js             色付けと字下げ
-    blocks.js                ブロック構造の解析 (end の自動入力・過不足の診断・整形)
-    autoend.js               入力・削除に合わせた end の自動挿入・自動削除
-    symbols.js               スコープ解析 (定義・参照・名前の変更・ハイライト・スティッキースクロール)
+    setup.js                 CodeMirror の組み立て (言語・テーマ・設定ごとの機能)
+    python.js                Python の補完・引数のヒント・説明・エラーチェックと直し方・整形・定義へ移動・自動修正
+    pyfix.js                 全角記号・打ち間違い・似た名前 (エディタと AI で共通)
+    sticky.js                スティッキースクロール (字下げからブロックを判定)
     breakpoints.js           ブレークポイントと停止行の表示
-    luau-index.js            文書の索引 (スコープ付きの宣言・ブロック・return・self のフィールド。大きなファイルは差分だけ解析)
-    luau-intel.js            型の推論と補完 (期待される型・ローカル変数・文字列の引数)
-    format.js / autoformat.js  整形 (空白・字下げ・空行) と、入力中の自動整形
-    extlib.js                loadstring で読み込むライブラリのソース解析 (補完・ゴーストテキスト用)
-    inline.js                インライン候補 (ゴーストテキスト)
-    ai.js                    AI による続きの提案 (統計モデル・コメントからコード)
-    lint.js / typo.js        エラーチェック・誤字検出・自動修正 (直し方はデータで返し、大きなファイルはワーカーで調べる)
-    typecheck.js             型チェック (プロパティへの代入・引数・型注釈・計算と連結)
+    ghost.js / ai.js         インライン候補 (ゴーストテキスト) と AI による続きの提案
     errorlens.js             行の右に出るエラー表示
-  js/app/                    画面 (ファイル一覧・タブ・実行パネル・ゲーム画面・設定・初回案内など)
-    gui-preview.js           ゲーム画面 (差分の描画・タップ / ドラッグ / キー入力・全画面)
-    extlibs.js / remote-ui.js  ライブラリの裏読み込み、外部スクリプトの管理・UI ライブラリのギャラリー
-    ai-host.js               Forge AI とアプリの窓口 (ファイルの読み書き・実行・変更の記録)
-    agent.js                 AI がファイルを扱う部品 (置き換え・差分・変更の取り消し・API 検索)
+  js/app/                    画面 (ファイル一覧・タブ・実行パネル・デバッグ・設定・初回案内など)
+    runner.js                実行 (Python ワーカーとの受け渡し・input()・停止・図・コンソール)
+    debug-panel.js           デバッガーの画面 (変数・ウォッチ・呼び出し履歴・ブレークポイント)
+    code-nav.js              定義へ移動・参照・名前の変更
+    explain.js               実行エラーの日本語の説明
+    ai-host.js               Forge AI とアプリの窓口 (ファイルの読み書き・実行・Python の解析・変更の記録)
+    agent.js                 AI がファイルを扱う部品 (書き込み・差分・変更の取り消し)
     ai-panel.js / ai-actions.js  AI パネル、エディタから頼む操作 (提案・修正・選択範囲)
     github-core.js / github-sync.js  GitHub との同期 (Git Data API・3 者比較・衝突) と、その画面
-    live.js / live-instrument.js     実機連携と、実機で動かすコードの下ごしらえ (片付け・デバッグの印。行番号は変えない)
     i18n.js / i18n-en.js     表示の言語 (英語の辞書)
   js/ai/                     Forge AI (内蔵 AI)
     text.js                  ことばの理解 (正規化・意図・概念・値の取り出し・BM25)
-    knowledge.js             知識ベース (Luau / Roblox / エグゼキューター / アプリの使い方)
-    repair.js                構文の自動修復 (探索)・安全な自動修正・新しい書き方への置き換え
-    review.js                コードレビュー (バグ・性能・安全)
-    describe.js              日本語での説明・コメント・型注釈
-    generate.js              コード生成 (きっかけ × 動作の組み立て・レシピ)
+    knowledge.js             知識ベース (Python・ライブラリ・エラー・アプリの使い方)
+    pycode.js                Python のコードの小さな道具 (位置・編集・字句)
+    repair.js                構文の自動修復・打ち間違いと import 忘れの修正・新しい書き方・整形
+    review.js                コードレビュー (バグ・性能・読みやすさ)
+    describe.js              日本語での説明・コメント・型ヒント
+    generate.js              コード生成 (レシピ)
     complete.js              続きの提案 (n-gram)・コメントからコード
     engine.js                依頼の振り分けと返事の組み立て
     llm.js                   高性能モード (端末内 LLM・WebLLM)
-  js/workers/                Web Worker (実行・エラーチェック・端末内 LLM)
-  js/data/                   補完用の API データ (Luau・エグゼキューター・スニペット)
-data/roblox-api.json         Roblox API ダンプ (変換済み)
-vendor/                      同梱ライブラリ (CodeMirror 6, fflate, WebLLM)。ライセンスは vendor/LICENSES.txt
-sw.js                        オフライン用 Service Worker
+  js/workers/                Web Worker
+    python-worker.js         実行用の Python (Pyodide)・デバッガー (bdb + sys.monitoring)
+    pytools-worker.js        エディタ用の Python (jedi・pyflakes・autopep8)。実行中でも補完やチェックが止まりません
+    py-analysis.js           ast による解析 (説明・レビュー・型ヒント用。pytools ワーカーで動きます)
+    llm-worker.js            端末内 LLM
+vendor/                      同梱ライブラリ (CodeMirror 6, fflate, WebLLM, Pyodide, jedi などの wheel)。ライセンスは vendor/LICENSES.txt
+sw.js                        オフライン用 Service Worker (cross-origin isolation のヘッダーも付けます)
 tests/                       テスト
-tools/                       ライブラリと API データを作り直すスクリプト
-relay/server.mjs             実機連携の中継サーバー (依存なし。ForgeCode 本体も配信)
-js/app/live.js               実機連携 (ForgeCode 側)。既定の中継サーバーは js/app/live-config.js
-live/connector.lua           エグゼキューターで動くコネクター (中継サーバーが配ります)
+tools/                       ビルド・ローカルサーバー・ライブラリを作り直すスクリプト
 ```
 
-- テスト: `node tests/run-all.mjs` (すべてのユニットテスト)
+- テスト: `node tests/run-all.mjs` (すべてのユニットテスト。Python のワーカーも Node の中で動かします)
+  - `python` (実行) / `pydebug` (デバッガー) / `pytools` (補完・チェック・整形・参照・名前の変更) / `ai` (Forge AI) / `github` (GitHub 同期。偽の GitHub `tests/mock-github.mjs` を相手に)
   - ブラウザでの通し確認: `node tests/e2e/run.mjs` (`cd tools && npm ci && npx playwright install chromium` が必要)
-  - eval を使わないエンジンでも確認: `node --import ./tests/force-interp.mjs tests/luau-basic.test.mjs` (roblox / executor / gui / debug / extlib も同様)
-  - `relay` (中継サーバー) / `github` (GitHub 同期。偽の GitHub `tests/mock-github.mjs` を相手に) / `ai` / `agent` / `luau-basic` / `roblox` / `executor` / `gui` / `extlib` / `intel` / `format` / `indent` / `lint` (エラーチェック・誤字・型チェック) / `inline` / `autoend` / `debug` / `symbols`
   - GitHub Actions (`.github/workflows/test.yml`) が、main へのプッシュとプルリクエストのたびに、ユニットテスト・配信用ファイルが最新か・ブラウザでの通し確認を行います
 - **ファイルを変更したら `node tools/build.mjs`** を実行してください (dist/ のまとめ直し・index.html の先読み・Service Worker のキャッシュ一覧を更新します。CI は dist/ が最新でないと失敗します)
-- 開発中は `index.html?src` で開くと、まとめ直さずにソースのまま確認できます
-- Roblox API データの更新: `node tools/build-roblox-api.mjs` (最新の API ダンプを取得して `data/roblox-api.json` を作り直します)
+- 開発中は `node tools/serve.mjs` で配信し、`http://localhost:8080/?src` で開くと、まとめ直さずにソースのまま確認できます
 - ライブラリの作り直し: `cd tools && npm install && npm run vendor` (端末内 LLM は `node vendor-webllm.mjs`。更新したら `js/ai/llm.js` の wasm のハッシュも更新)
-
-Roblox は Roblox Corporation の商標です。ForgeCode は Roblox Corporation とは関係ありません。
