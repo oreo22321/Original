@@ -18,6 +18,7 @@ import { warmComplete } from '../ai/complete.js'
 import './code-nav.js'
 import './remote-ui.js'
 import './extlibs.js'
+import './github-sync.js'
 import { toast } from './ui.js'
 
 function applyTheme(s) {

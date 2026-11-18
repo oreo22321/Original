@@ -72,6 +72,7 @@ const SCHEMA = [
     { key: 'formatOnSave', type: 'bool', label: '保存時に整形', desc: '⌘/Ctrl + S で保存したとき' },
     { key: 'trimOnSave', type: 'bool', label: '保存時に行末の空白を削除' },
     { key: 'confirmDelete', type: 'bool', label: '削除の前に確認' },
+    { key: 'githubSync', type: 'action', label: 'GitHub と同期 (自動バックアップ)', desc: 'プロジェクトを GitHub のリポジトリに自動で保存します。端末が壊れても消えず、PC からも開けます', button: '設定', run: () => runCommand('githubSync') },
   ] },
   { group: '実行', icon: 'play', items: [
     { key: 'clearOnRun', type: 'bool', label: '実行前に出力をクリア' },
