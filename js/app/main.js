@@ -81,6 +81,15 @@ function registerServiceWorker() {
       })
       // 開きっぱなしでも 1 時間ごとに更新を確認
       setInterval(() => reg.update().catch(() => {}), 3600000)
+      // はじめて Service Worker が動き始めたら、1 回だけ読み込み直す
+      // (Python の input() と停止に使う共有メモリは、Service Worker が付けるヘッダーのある状態で開き直すと使えるようになる)
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (self.crossOriginIsolated) return
+        try { if (sessionStorage.getItem('forgecode.coi')) return; sessionStorage.setItem('forgecode.coi', '1') } catch { return }
+        if (app.editors && app.editors.anyDirty && app.editors.anyDirty()) return
+        try { if (app.editors) app.editors.flushDrafts() } catch {}
+        location.reload()
+      })
     }).catch(() => {})
   }
 }

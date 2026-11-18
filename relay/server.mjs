@@ -196,8 +196,8 @@ export function createRelay({ log = () => {}, serve = true } = {}) {
   }
 
   // ---- ForgeCode 本体の配信 ----
-  const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.lua': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8', '.wasm': 'application/wasm' }
-  const PUBLIC = /^\/(?:index\.html|404\.html|sw\.js|boot\.js|manifest\.webmanifest|(?:css|js|dist|vendor|data|icons|live)\/[\w./-]+)$/
+  const TYPES = { '.zip': 'application/zip', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.lua': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8', '.wasm': 'application/wasm' }
+  const PUBLIC = /^\/(?:index\.html|404\.html|sw\.js|boot\.js|manifest\.webmanifest|(?:css|js|dist|vendor|data|icons|live)\/[\w./+-]+)$/
   const fileCache = new Map()
   function serveStatic(req, res, url) {
     if (!serve || (req.method !== 'GET' && req.method !== 'HEAD')) return false
@@ -218,7 +218,7 @@ export function createRelay({ log = () => {}, serve = true } = {}) {
     // アプリ本体は Service Worker がまとめて管理するので、index.html と sw.js は毎回確認させる
     const cache = /\/(index\.html|sw\.js)$/.test(p) ? 'no-cache' : 'public, max-age=300'
     const extra = type.startsWith('text/html') ? { 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'; object-src 'none'; base-uri 'self'" } : {}
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Length': body.length, ...extra })
+    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Length': body.length, 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp', 'Cross-Origin-Resource-Policy': 'same-origin', ...extra })
     res.end(req.method === 'HEAD' ? undefined : body)
     return true
   }

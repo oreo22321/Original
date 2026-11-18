@@ -255,3 +255,10 @@ vendor/web-llm.js — WebLLM (@mlc-ai/web-llm 0.2.86。TVM / tokenizers / xgramm
 
 data/roblox-api.json — Roblox API ダンプ (MaximumADHD/Roblox-Client-Tracker から変換)
 Roblox は Roblox Corporation の商標です。ForgeCode は Roblox Corporation とは関係ありません。
+
+vendor/pyodide/ — Pyodide 314.0.8 (CPython 3.14 for WebAssembly) — Mozilla Public License 2.0
+  https://github.com/pyodide/pyodide (Python itself: PSF License)
+vendor/pywheels/ — 補完・エラーチェック・整形に使う Python のライブラリ (いずれも MIT License)
+  jedi 0.19.2 (https://github.com/davidhalter/jedi), parso 0.8.6 (https://github.com/davidhalter/parso),
+  pyflakes 4.1.0 (https://github.com/PyCQA/pyflakes), pycodestyle 2.15.0 (https://github.com/PyCQA/pycodestyle),
+  autopep8 2.3.2 (https://github.com/hhatto/autopep8)

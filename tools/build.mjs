@@ -19,7 +19,7 @@ const esbuild = require('esbuild')
 // ---- 1. まとめて圧縮 ----
 const DIST = path.join(root, 'dist')
 if (existsSync(DIST)) rmSync(DIST, { recursive: true, force: true })
-const ENTRIES = ['js/app/main.js', 'js/workers/luau-worker.js', 'js/workers/lint-worker.js', 'js/workers/llm-worker.js']
+const ENTRIES = ['js/app/main.js', 'js/workers/luau-worker.js', 'js/workers/lint-worker.js', 'js/workers/llm-worker.js', 'js/workers/python-worker.js', 'js/workers/pytools-worker.js']
 const result = await esbuild.build({
   absWorkingDir: root,
   entryPoints: ENTRIES,
@@ -33,7 +33,7 @@ const result = await esbuild.build({
   entryNames: '[dir]/[name]',
   chunkNames: 'chunks/[name]-[hash]',
   // 大きくて使う人だけが読むもの・ないことがあるものは、まとめずにそのまま読みに行く
-  external: ['../../vendor/web-llm.js', '../../data/roblox-api.js'],
+  external: ['../../vendor/web-llm.js', '../../data/roblox-api.js', '../../vendor/pyodide/pyodide.mjs', 'node:*'],
   legalComments: 'none',
   charset: 'utf8',
   metafile: true,
@@ -66,7 +66,7 @@ const walk = dir => {
   for (const name of readdirSync(path.join(root, dir)).sort()) {
     const r = dir + '/' + name
     if (statSync(path.join(root, r)).isDirectory()) walk(r)
-    else if (!/\.(map|DS_Store)$/.test(name) && !LAZY.has(r)) files.push(r)
+    else if (!/\.(map|DS_Store)$/.test(name) && !LAZY.has(r) && !r.startsWith('vendor/pyodide/')) files.push(r)
   }
 }
 for (const d of ['css', 'dist', 'vendor', 'data', 'icons', 'live']) walk(d)
