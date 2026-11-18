@@ -121,8 +121,8 @@ function resolveConflicts(list) {
   modal({
     title: '同期の衝突', body, actions: [
       { label: 'あとで', value: null },
-      { label: 'GitHub の内容にする', run: () => { syncPull({ force: list }) } },
-      { label: 'この端末の内容にする', primary: true, run: () => { syncPush({ force: list }) } },
+      { label: 'GitHub 側を残す', run: () => { syncPull({ force: list }) } },
+      { label: 'この端末を残す', primary: true, run: () => { syncPush({ force: list }) } },
     ],
   })
 }

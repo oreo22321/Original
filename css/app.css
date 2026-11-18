@@ -1047,3 +1047,10 @@ body[data-layout=desktop].touch.kb-open.ed-focus .keybar { display: block; }
 .sb-live[data-state=online] { color: var(--ok); }
 .sb-live[data-state=waiting], .sb-live[data-state=connecting] { color: var(--warn); }
 .sb-live[data-state=error] { color: var(--danger); }
+/* GitHub 同期 */
+.gh-form { gap: 12px; }
+.gh-field { display: flex; flex-direction: column; gap: 4px; }
+.gh-status { padding: 8px 10px; border-radius: var(--r); background: var(--panel2); }
+.gh-conflicts { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.8; }
+.gh-conflicts code { font-size: 12px; }
+.modal-foot { flex-wrap: wrap; }
