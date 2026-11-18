@@ -1,12 +1,12 @@
 // ブラウザでの通し確認 (E2E):  node tests/e2e/run.mjs
-// ・アプリは中継サーバー (relay/server.mjs) が配信。GitHub は偽物 (tests/mock-github.mjs)
+// ・アプリは tools/serve.mjs が配信 (Python に必要な COOP / COEP 付き)。GitHub は偽物 (tests/mock-github.mjs)
 // ・配信用 (dist) で起動・実行を確認し、ソースのまま (?src) で中の機能を確認します
 // 失敗したときの画面は tests/e2e/out/ に保存します
 import { createRequire } from 'node:module'
 import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { createRelay } from '../../relay/server.mjs'
+import { createServer } from '../../tools/serve.mjs'
 import { createMockGitHub } from '../mock-github.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -19,9 +19,9 @@ for (const from of [path.join(here, '../../tools/package.json'), import.meta.url
 if (!playwright) { console.error('playwright が見つかりません (cd tools && npm ci)'); process.exit(1) }
 const { chromium, devices } = playwright
 
-const relay = createRelay()
-await new Promise(r => relay.server.listen(0, '127.0.0.1', r))
-const APP = `http://127.0.0.1:${relay.server.address().port}/`
+const web = createServer()
+await new Promise(r => web.server.listen(0, '127.0.0.1', r))
+const APP = `http://127.0.0.1:${web.server.address().port}/`
 const gh = createMockGitHub()
 await new Promise(r => gh.server.listen(0, '127.0.0.1', r))
 const GH_API = `http://127.0.0.1:${gh.server.address().port}`
@@ -33,13 +33,15 @@ async function step(page, name, fn) {
   const t0 = Date.now()
   try { await fn(); results.push(`✓ ${name} (${((Date.now() - t0) / 1000).toFixed(1)}s)`) } catch (e) {
     failed++
-    results.push(`✗ ${name}: ${String(e.message).split('\n')[0]}`)
+    results.push(`✗ ${name}: ${String(e.message).split('\n').slice(0, 12).join('\n    ')}`)
     try { await page.screenshot({ path: path.join(OUT, name.replace(/[^\w-]+/g, '_') + '.png') }) } catch {}
   }
 }
 async function open(url, { github = false } = {}) {
   const ctx = await browser.newContext({ ...devices['iPhone 13'] })
   if (github) await ctx.addInitScript(api => localStorage.setItem('forgecode.github', JSON.stringify({ token: 'tok', repo: 'me/proj', dir: 'forgecode', auto: false, api })), GH_API)
+  // console.error に渡されたエラーの場所 (stack) も記録する
+  await ctx.addInitScript(() => { const o = console.error; window.__errs = []; console.error = (...a) => { try { window.__errs.push(a.map(x => (x && x.stack) || String(x)).join(' ').slice(0, 1500)) } catch {} o.apply(console, a) } })
   const page = await ctx.newPage()
   const errors = []
   page.on('pageerror', e => errors.push('pageerror: ' + e.message))
@@ -62,9 +64,14 @@ const output = page => page.evaluate(() => (document.querySelector('.output') ||
     const src = await page.evaluate(() => performance.getEntriesByType('resource').some(e => /\/js\/app\//.test(e.name)))
     if (src) throw new Error('loaded unbundled sources')
   })
-  await step(page, 'dist: run the template', async () => {
+  await step(page, 'dist: run the template (Python + input)', async () => {
     await page.locator('.run-btn').click()
-    await page.waitForFunction(() => /コイン/.test(document.querySelector('.output')?.innerText || ''), null, { timeout: 30000 })
+    await page.waitForFunction(() => /こんにちは、Python!/.test(document.querySelector('.output')?.innerText || ''), null, { timeout: 90000 })
+    // input() の入力欄に名前を入れる
+    await page.waitForSelector('.out-input-field', { timeout: 30000 })
+    await page.fill('.out-input-field', 'テスト')
+    await page.press('.out-input-field', 'Enter')
+    await page.waitForFunction(() => /テスト さん、ようこそ!/.test(document.querySelector('.output')?.innerText || ''), null, { timeout: 30000 })
   })
   await step(page, 'dist: no console errors', async () => { if (errors.length) throw new Error(errors.join(' | ')) })
   await ctx.close()
@@ -76,16 +83,26 @@ const output = page => page.evaluate(() => (document.querySelector('.output') ||
   await page.evaluate(async () => { window.__app = (await import('/js/app/app.js')).app })
   const setDoc = t => page.evaluate(t => { const v = window.__app.editors.activeView(); v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: t } }) }, t)
 
+  const run = () => page.evaluate(() => window.__app.commands.get('run').run())
+  const waitOut = (re, timeout = 60000) => page.waitForFunction(re => new RegExp(re).test(document.querySelector('.output')?.innerText || ''), re, { timeout })
   await step(page, 'src: run prints output', async () => {
-    await setDoc('for i = 1, 3 do print("line", i) end\nprint("DONE")\n')
-    await page.evaluate(() => window.__app.commands.get('run').run())
-    await page.waitForFunction(() => /DONE/.test(document.querySelector('.output')?.innerText || ''), null, { timeout: 30000 })
+    await setDoc('for i in range(1, 4):\n    print("line", i)\nprint("DONE")\n')
+    await run()
+    await waitOut('line 3[\\s\\S]*DONE')
   })
-  await step(page, 'src: runtime error shows a line link', async () => {
-    await setDoc('local t = nil\nprint(t.x)\n')
-    await page.evaluate(() => window.__app.commands.get('run').run())
-    await page.waitForSelector('.out-error', { timeout: 30000 })
-    if (!/2 行目/.test(await page.evaluate(() => document.querySelector('.out-error').innerText))) throw new Error(await output(page))
+  await step(page, 'src: runtime error shows a line link and an explanation', async () => {
+    await setDoc('names = ["a"]\nprint(names[3])\n')
+    await run()
+    await page.waitForSelector('.out-error', { timeout: 60000 })
+    const t = await page.evaluate(() => document.querySelector('.out-error').innerText)
+    if (!/IndexError/.test(t) || !/2 行目/.test(t)) throw new Error(t)
+  })
+  await step(page, 'src: stop an infinite loop', async () => {
+    await setDoc('n = 0\nwhile True:\n    n += 1\n')
+    await run()
+    await page.waitForTimeout(800)
+    await page.evaluate(() => window.__app.commands.get('stop').run())
+    await waitOut('KeyboardInterrupt|停止|止め', 20000)
   })
   const hasDiag = re => page.evaluate(async re => {
     const { forEachDiagnostic } = await import('/vendor/codemirror.js')
@@ -93,21 +110,50 @@ const output = page => page.evaluate(() => (document.querySelector('.output') ||
     forEachDiagnostic(window.__app.editors.activeView().state, d => { if (new RegExp(re).test(d.message)) hit = true })
     return hit
   }, re)
-  await step(page, 'src: type check warning (lint worker)', async () => {
-    if (await hasDiag('Transparency')) throw new Error('diagnostic before the code exists')
-    await setDoc('local p = Instance.new("Part")\np.Transparency = "0.5"\n' + '-- filler\n'.repeat(400))
+  await step(page, 'src: pyflakes warning appears and clears', async () => {
+    await setDoc('total = 1\nprint(totl)\n')
     let seen = false
-    for (let i = 0; i < 60 && !seen; i++) { await page.waitForTimeout(250); seen = await hasDiag('Transparency') }
-    if (!seen) throw new Error('no type warning')
-    // 直したら消える
-    await setDoc('local p = Instance.new("Part")\np.Transparency = 0.5\n' + '-- filler\n'.repeat(400))
+    for (let i = 0; i < 160 && !seen; i++) { await page.waitForTimeout(250); seen = await hasDiag('totl') }
+    if (!seen) throw new Error('no undefined-name warning')
+    await setDoc('total = 1\nprint(total)\n')
     let gone = false
-    for (let i = 0; i < 60 && !gone; i++) { await page.waitForTimeout(250); gone = !(await hasDiag('Transparency')) }
+    for (let i = 0; i < 60 && !gone; i++) { await page.waitForTimeout(250); gone = !(await hasDiag('totl')) }
     if (!gone) throw new Error('warning stayed after the fix')
   })
+  await step(page, 'src: jedi completion', async () => {
+    await setDoc('import math\nmath.sq')
+    const names = await page.evaluate(async () => {
+      const { pyTools } = await import('/js/editor/python.js')
+      const r = await pyTools('complete', { code: 'import math\nmath.sq', line: 2, col: 7, path: 'main.py' })
+      return r.map(c => c.name)
+    })
+    if (!names.includes('sqrt')) throw new Error(names.join(','))
+  })
+  await step(page, 'src: debugger stops at a breakpoint', async () => {
+    await setDoc('total = 0\nfor i in range(3):\n    total += i\nprint("sum", total)\n')
+    await page.evaluate(async () => {
+      const bp = await import('/js/editor/breakpoints.js')
+      const v = window.__app.editors.activeView()
+      bp.toggleBreakpoint(v, 3)
+    })
+    await run()
+    await page.waitForSelector('.debug-float.is-paused, .dbg-state.paused', { timeout: 60000 })
+    await page.evaluate(() => window.__app.commands.get('debugContinue').run())
+    await page.waitForTimeout(300)
+    await page.evaluate(() => window.__app.commands.get('debugContinue').run())
+    await page.waitForTimeout(300)
+    await page.evaluate(() => window.__app.commands.get('debugContinue').run())
+    await waitOut('sum 3', 30000)
+  })
   await step(page, 'src: AI answers a question', async () => {
-    const r = await page.evaluate(async () => (await import('/js/app/ai-host.js')).askAi({ text: 'RemoteEvent の使い方は?' }))
-    if (!/FireServer/.test(r.text)) throw new Error(r.text.slice(0, 120))
+    const r = await page.evaluate(async () => (await import('/js/app/ai-host.js')).askAi({ text: 'リストの使い方は?' }))
+    if (!/append/.test(r.text)) throw new Error(r.text.slice(0, 120))
+  })
+  await step(page, 'src: AI fixes the open file', async () => {
+    await setDoc('def f(x)\n    return x\nprnt(f(1))\n')
+    const r = await page.evaluate(async () => (await import('/js/app/ai-host.js')).askAi({ text: '直して' }))
+    const now = await page.evaluate(() => window.__app.editors.activeView().state.doc.toString())
+    if (now !== 'def f(x):\n    return x\nprint(f(1))\n') throw new Error(now + ' / ' + r.text.slice(0, 120))
   })
   await step(page, 'src: GitHub sync push and pull', async () => {
     const name = await page.evaluate(() => window.__app.project.name)
@@ -121,12 +167,16 @@ const output = page => page.evaluate(() => (document.querySelector('.output') ||
     const now = await page.evaluate(() => window.__app.editors.activeView().state.doc.toString())
     if (now !== 'print("from github")\n') throw new Error(now)
   })
-  await step(page, 'src: no console errors', async () => { if (errors.length) throw new Error(errors.join(' | ')) })
+  await step(page, 'src: no console errors', async () => {
+    if (!errors.length) return
+    const stacks = await page.evaluate(() => window.__errs || []).catch(() => [])
+    throw new Error(errors.join(' | ') + (stacks.length ? '\n' + stacks.join('\n') : ''))
+  })
   await ctx.close()
 }
 
 await browser.close()
-relay.server.close()
+web.server.close()
 gh.server.close()
 console.log(results.join('\n'))
 console.log(failed ? `${failed} step(s) failed (screenshots: tests/e2e/out/)` : 'e2e: all passed')

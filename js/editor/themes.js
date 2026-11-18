@@ -17,7 +17,7 @@ export const THEMES = {
     c: { bg: '#1e1e1e', fg: '#d4d4d4', gutter: '#1e1e1e', gutterFg: '#858585', line: '#2a2d2e', sel: '#264f78', cursor: '#aeafad', keyword: '#569cd6', control: '#c586c0', string: '#ce9178', number: '#b5cea8', comment: '#6a9955', func: '#dcdcaa', prop: '#9cdcfe', type: '#4ec9b0', builtin: '#4fc1ff', ns: '#4ec9b0', cls: '#4ec9b0', bool: '#569cd6', op: '#d4d4d4', def: '#9cdcfe', meta: '#808080', invalid: '#f44747', special: '#d7ba7d' },
   },
   'roblox-dark': {
-    name: 'Roblox Studio (ダーク)', dark: true,
+    name: 'クラシック (ダーク)', dark: true,
     c: { bg: '#2e2e2e', fg: '#cccccc', gutter: '#2e2e2e', gutterFg: '#8c8c8c', line: '#373737', sel: '#0b5aaf', cursor: '#ffffff', keyword: '#f86d7c', control: '#f86d7c', string: '#adf195', number: '#ffc600', comment: '#666666', func: '#fdfbac', prop: '#61a1f1', type: '#84d6f7', builtin: '#84d6f7', ns: '#84d6f7', cls: '#84d6f7', bool: '#ffc600', op: '#cccccc', def: '#cccccc', meta: '#a0a0a0', invalid: '#ff4444', special: '#e2a0ff' },
   },
   'monokai': {
@@ -49,7 +49,7 @@ export const THEMES = {
     c: { bg: '#fdf6e3', fg: '#586e75', gutter: '#eee8d5', gutterFg: '#93a1a1', line: '#eee8d5', sel: '#d6d0bc', cursor: '#586e75', keyword: '#859900', control: '#859900', string: '#2aa198', number: '#d33682', comment: '#93a1a1', func: '#268bd2', prop: '#268bd2', type: '#b58900', builtin: '#cb4b16', ns: '#b58900', cls: '#b58900', bool: '#d33682', op: '#859900', def: '#268bd2', meta: '#93a1a1', invalid: '#dc322f', special: '#cb4b16' },
   },
   'roblox-light': {
-    name: 'Roblox Studio (ライト)', dark: false,
+    name: 'クラシック (ライト)', dark: false,
     c: { bg: '#ffffff', fg: '#000000', gutter: '#ffffff', gutterFg: '#8f8f8f', line: '#f4f4f4', sel: '#a8d3ff', cursor: '#000000', keyword: '#0000ff', control: '#0000ff', string: '#ad0000', number: '#007f7f', comment: '#007f00', func: '#000000', prop: '#000000', type: '#7f007f', builtin: '#7f007f', ns: '#7f007f', cls: '#7f007f', bool: '#7f7f00', op: '#7f7f00', def: '#000000', meta: '#7f7f7f', invalid: '#ff0000', special: '#ad0000' },
   },
 }

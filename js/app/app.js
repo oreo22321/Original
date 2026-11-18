@@ -1,12 +1,12 @@
 // アプリ全体の状態と共通操作
 import * as vfs from './vfs.js'
-import { getSettings, emit, saveSession, loadSession, setMode } from './store.js'
+import { getSettings, emit, saveSession, loadSession } from './store.js'
 import { toast } from './ui.js'
 
 export const app = {
-  project: null,       // { id, name, kind: 'studio' | 'executor', runTarget? }
+  project: null,       // { id, name, runTarget?, github? }
   files: [],           // [{ path, dir, size, mtime }]
-  contents: new Map(), // path → 内容 (補完の require 解決や、実行時にディスクを読まないためのキャッシュ)
+  contents: new Map(), // path → 内容 (補完や、実行時にディスクを読まないためのキャッシュ)
   commands: new Map(), // id → { title, run, key, icon }
   editors: null,       // EditorManager
   wb: null,            // Workbench
@@ -31,14 +31,6 @@ export async function refreshFiles() {
   emit('files')
 }
 
-// 既存プロジェクトの種類を中身から推測 (以前のバージョンで作ったプロジェクト用)
-const EXEC_HINT = /\b(getgenv|writefile|readfile|isfile|hookfunction|hookmetamethod|identifyexecutor|gethui|setclipboard|getrawmetatable|queue_on_teleport|firesignal|getconnections)\s*\(|loadstring\s*\(\s*game:HttpGet|\bDrawing\.new\b|\bsyn\./
-function inferKind() {
-  if (app.files.some(f => f.path === 'workspace' || f.path.startsWith('workspace/'))) return 'executor'
-  for (const [path, src] of app.contents) if (/\.luau?$/i.test(path) && EXEC_HINT.test(src)) return 'executor'
-  return 'studio'
-}
-
 export function persistSession() {
   if (!app.project || !app.editors) return
   const s = loadSession()
@@ -56,9 +48,7 @@ export async function openProject(id, { openMain } = {}) {
   p.opened = Date.now()
   app.project = p
   await refreshFiles()
-  if (p.kind !== 'studio' && p.kind !== 'executor') p.kind = inferKind()
   await vfs.putProject(p)
-  setMode(p.kind)
   emit('project', p)
   const s = loadSession()
   const sess = s.byProject && s.byProject[id]
@@ -71,20 +61,11 @@ export async function openProject(id, { openMain } = {}) {
     else if (app.editors.docs.size) { app.editors.activate([...app.editors.docs.keys()][0]); opened = true }
   }
   if (!opened && openMain) {
-    const main = openMain === true ? app.files.find(f => !f.dir && /(^|\/)(main|init)[\w.]*\.luau?$/.test(f.path)) || app.files.find(f => !f.dir && /\.luau?$/.test(f.path)) : { path: openMain }
+    const main = openMain === true ? app.files.find(f => !f.dir && /(^|\/)main\.py$/.test(f.path)) || app.files.find(f => !f.dir && /\.py$/.test(f.path)) || app.files.find(f => !f.dir) : { path: openMain }
     if (main) await app.editors.open(main.path)
   }
   persistSession()
   return true
-}
-
-// プロジェクトのモード (Studio / Executor) を切り替える
-export async function setProjectKind(kind) {
-  if (!app.project || app.project.kind === kind) return
-  app.project.kind = kind === 'executor' ? 'executor' : 'studio'
-  await vfs.putProject(app.project)
-  setMode(app.project.kind)
-  emit('project', app.project)
 }
 
 // ▶ で実行するファイルを固定 / 解除

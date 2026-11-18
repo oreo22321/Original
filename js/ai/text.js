@@ -1,7 +1,7 @@
 // Forge AI: ことばの理解 (日本語・英語)
 // ・normalize: 全角/半角・大文字/小文字の違いをそろえる
 // ・tokens: 検索用の語 (英単語 + camelCase の分割 + 日本語の 2 文字ずつ)
-// ・concepts: 同じ意味の言い方 (「速さ」「スピード」「WalkSpeed」…) を 1 つの概念にまとめて見つける
+// ・concepts: 同じ意味の言い方 (「並べ替え」「ソート」「sort」…) を 1 つの概念にまとめて見つける
 // ・detectIntents: 何を頼まれているか (説明・修正・生成・質問 …) を点数で判定
 // ・slots: 数値・秒数・キー・色・名前などの値を取り出す
 // ・Bm25: 知識ベースの検索 (BM25)
@@ -54,98 +54,75 @@ export function tokens(s) {
 // ============================================================
 // 英字の言い方は単語の区切りで、日本語の言い方は部分一致で探します
 export const CONCEPTS = {
-  // ---- きっかけ ----
-  touch: ['触れ', 'ふれ', '触っ', 'さわ', '触る', '踏', '当たっ', 'あたっ', '当たる', 'ぶつか', 'touch', 'touched', 'collide'],
-  click: ['クリック', 'click', 'clickdetector', 'タップ', 'tap'],
-  prompt: ['プロンプト', 'proximityprompt', '近づいて', '近くで', '長押し'],
-  key: ['キーを押', 'キーで', 'キー入力', 'キーボード', 'を押すと', 'を押したら', 'を押して', 'keybind', 'userinputservice', 'inputbegan', 'shift', 'ctrl', 'スペースキー'],
-  button: ['ボタン', 'button', 'textbutton', 'imagebutton'],
-  chat: ['チャット', 'chat', 'chatted', 'チャットコマンド', 'command'],
-  timer: ['秒ごと', '秒おき', '毎秒', '定期的', '繰り返し', 'ずっと', '一定時間ごと', 'every', 'loop', 'ループ'],
-  join: ['参加', '入ってき', '入った', 'join', 'playeradded', 'ログイン', '入室'],
-  spawnEv: ['リスポーン', 'スポーンした', 'characteradded', '生き返'],
-  die: ['死んだら', '死んだとき', '倒れたら', 'died', '死亡時'],
-  // ---- 動作 ----
-  kill: ['死ぬ', '死なせ', '殺', '即死', 'キル', 'kill', '倒す', 'killbrick', 'デスブロック', '溶岩', 'ようがん', 'lava'],
-  damage: ['ダメージ', 'damage', 'takedamage', '痛い', '減らす', '攻撃'],
-  heal: ['回復', 'ヒール', 'heal', '体力を戻', '体力を増'],
-  health: ['体力', 'hp', 'health', 'ヘルス', 'ライフ'],
-  speed: ['速さ', '速度', 'スピード', 'speed', 'walkspeed', '足を速く', '走る速さ', '速く走', '移動速度', '速く歩', '早く歩', '歩く速', '足が速'],
-  sprint: ['ダッシュ', '走る', 'sprint', '走れる', '走り'],
-  jump: ['ジャンプ', 'jump', 'jumppower', 'jumpheight', '跳'],
-  doubleJump: ['二段ジャンプ', '2段ジャンプ', 'ダブルジャンプ', 'double jump', 'doublejump', '空中ジャンプ'],
-  teleport: ['テレポート', '瞬間移動', 'ワープ', 'teleport', 'tp', '移動させ'],
-  color: ['色', 'いろ', 'カラー', 'color', 'colour', 'brickcolor', '虹'],
-  disappear: ['消える', '消えて', '消す', '透明', 'なくな', 'disappear', 'vanish', 'invisible', 'fade'],
-  destroy: ['削除', '壊れ', '壊す', 'destroy', '破壊'],
-  coin: ['コイン', 'お金', 'coin', 'money', 'cash', 'ゴールド', 'gold', '通貨'],
-  points: ['ポイント', 'point', 'スコア', 'score', 'キル数'],
-  sound: ['音', 'サウンド', 'sound', '効果音', 'bgm', '音楽', 'music'],
-  explode: ['爆発', 'explosion', 'explode', '爆弾', 'bomb'],
-  light: ['ライト', '照明', 'light', '光', '明かり', 'pointlight'],
-  message: ['メッセージ', '表示', 'print', '出力', 'お知らせ', '通知', 'notification', 'notify'],
-  spawnPart: ['降ってく', '降る', '落ちてく', '雨', '出現', '生成', 'スポナー', 'spawner', '湧'],
-  give: ['あげる', '与え', 'もらえ', '渡す', 'give', 'award', '付与'],
-  // ---- もの ----
-  part: ['パーツ', 'ブロック', '床', '壁', 'part', 'brick', 'block', 'パート', '足場'],
-  door: ['ドア', '扉', 'とびら', 'door', 'gate', 'ゲート'],
-  platform: ['動く床', '往復', '移動する床', 'moving platform', 'エレベーター', 'elevator', 'リフト'],
-  spin: ['回転', '回る', 'まわる', 'spin', 'rotate', 'くるくる'],
-  leaderstats: ['リーダーボード', 'リーダースタッツ', 'leaderstats', 'leaderboard', 'ランキング', 'スコアボード', 'ステータス'],
-  datastore: ['データストア', 'datastore', 'セーブ', '保存', 'ロード', '読み込', 'save', 'load', 'データを残', '記録'],
-  gui: ['gui', 'ui', '画面', 'メニュー', 'ウィンドウ', 'window', 'frame', 'フレーム', 'screengui', 'hud', 'インターフェース', 'パネル'],
-  shop: ['ショップ', '店', 'shop', 'store', '購入', '買う', 'buy', '商品'],
-  label: ['ラベル', 'テキスト', 'textlabel', '文字を表示', 'label'],
-  checkpoint: ['チェックポイント', 'checkpoint', 'セーブポイント', '中間地点', 'リスポーン地点'],
-  daynight: ['昼夜', '昼と夜', '時間帯', 'day night', 'daynight', 'clocktime', '朝昼夜', '時刻'],
-  countdown: ['カウントダウン', 'countdown', 'タイマー', 'timer', '制限時間', '残り時間', 'ストップウォッチ'],
-  round: ['ラウンド', 'round', 'ゲームループ', 'intermission', '試合'],
-  npc: ['npc', 'ノンプレイヤー', '敵', 'ゾンビ', 'zombie', 'モンスター', 'enemy', 'ついてくる', '追いかけ', 'follow', 'pathfinding', '経路'],
-  tool: ['ツール', 'tool', '剣', 'sword', '武器', 'weapon', '銃', 'gun'],
-  remote: ['リモート', 'remoteevent', 'remotefunction', 'remote', 'サーバーに送', 'クライアントに送', '通信', 'fireserver', 'fireclient', 'onserverevent'],
-  module: ['モジュール', 'module', 'modulescript', 'require', 'クラス', 'class', 'oop', 'オブジェクト指向'],
-  tween: ['トゥイーン', 'tween', 'tweenservice', 'アニメーション', 'なめらか', '滑らか', 'ふわっと', 'スムーズ'],
-  animation: ['アニメーション', 'animation', 'animator', 'loadanimation', 'モーション', 'ダンス', 'emote', 'エモート'],
-  camera: ['カメラ', 'camera', '視点'],
-  raycast: ['レイキャスト', 'raycast', 'レイ', '光線', '視線'],
-  cframe: ['cframe', '向き', '回転させ', '位置と向き', 'lookat'],
-  vector: ['vector3', 'ベクトル', '座標', '位置', 'position'],
-  input: ['userinputservice', 'contextactionservice', '入力', 'input', 'マウス', 'mouse', 'タッチ操作'],
-  runservice: ['runservice', 'heartbeat', 'renderstepped', 'stepped', '毎フレーム', 'フレームごと'],
-  players: ['プレイヤー', 'player', 'players', 'localplayer', 'ユーザー', '自分'],
-  character: ['キャラクター', 'キャラ', 'character', 'humanoid', 'ヒューマノイド', 'アバター', 'humanoidrootpart'],
-  team: ['チーム', 'team', 'teams'],
-  badge: ['バッジ', 'badge', 'ゲームパス', 'gamepass', '課金', 'devproduct', 'marketplace', 'robux'],
-  physics: ['物理', 'physics', 'anchored', 'cancollide', '重力', 'gravity', 'velocity', '速度ベクトル', '吹き飛', 'ノックバック', 'knockback'],
-  attribute: ['属性', 'attribute', 'setattribute', 'getattribute'],
-  tag: ['タグ', 'collectionservice', 'tag', 'addtag', 'hastag'],
-  workspaceKw: ['workspace', 'ワークスペース'],
-  esp: ['esp', 'ハイライト', 'highlight', '透視', '壁越し', '名前を表示'],
-  drawing: ['drawing', 'ドローイング', '描画'],
-  fly: ['飛ぶ', '飛べる', '空を飛', 'fly', 'フライ'],
-  noclip: ['noclip', 'ノークリップ', '壁抜け', 'すり抜け'],
-  infJump: ['無限ジャンプ', 'infinite jump', 'infjump', '何回でもジャンプ'],
-  executorKw: ['エグゼキューター', 'executor', 'エクスプロイト', 'exploit', 'getgenv', 'loadstring', 'httpget', 'gethui', 'syn'],
-  uiLib: ['uiライブラリ', 'ui library', 'rayfield', 'orion', 'fluent', 'obsidian', 'kavo', 'linoria', 'wally'],
-  // ---- Luau の文法 ----
-  variable: ['変数', 'variable', 'local', 'ローカル', 'グローバル', 'global', 'スコープ', 'scope'],
-  ifStmt: ['if文', 'if 文', '条件分岐', '条件', 'if', 'elseif', 'もし'],
-  loop: ['for文', 'for 文', 'while', 'repeat', 'ループ', '繰り返', 'for', 'ipairs', 'pairs'],
-  func: ['関数', 'function', 'ファンクション', '引数', 'return', '戻り値', 'メソッド'],
-  table: ['テーブル', 'table', '配列', 'array', '辞書', 'dictionary', 'リスト', 'list', 'table.insert', '連想配列'],
-  string: ['文字列', 'string', 'テキスト', 'string.format', '連結', '..', '補間'],
-  number: ['数値', '数字', 'number', 'math', '計算', '乱数', 'ランダム', 'random', '四捨五入', '切り捨て'],
-  wait: ['待つ', '待機', 'wait', 'task.wait', 'delay', '遅らせ', '何秒後', '秒後'],
-  spawnTask: ['task.spawn', 'spawn', 'coroutine', 'コルーチン', '並列', '同時に'],
-  pcall: ['pcall', 'エラー処理', '例外', 'xpcall', 'error', 'try'],
-  metatable: ['メタテーブル', 'metatable', 'setmetatable', '__index'],
-  types: ['型', 'type', '型注釈', 'typeof', '--!strict', 'strict'],
-  event: ['イベント', 'event', 'connect', 'シグナル', 'signal', '接続', 'disconnect', 'bindableevent'],
-  instance: ['instance', 'instance.new', 'インスタンス', 'オブジェクトを作', '親', 'parent', 'clone', '複製', 'findfirstchild', 'waitforchild', 'getchildren', '子'],
-  service: ['サービス', 'getservice', 'service'],
-  server: ['サーバー', 'server', 'serverscriptservice', 'script'],
-  client: ['クライアント', 'client', 'localscript', 'ローカルスクリプト'],
-  debug: ['デバッグ', 'ブレークポイント', 'breakpoint', 'ステップ実行', 'debugger'],
+  // ---- 入出力 ----
+  print: ['表示', '出力', 'print', 'プリント', '画面に出', '書き出'],
+  input: ['入力', 'input', 'キーボードから', '打ち込', '聞いて', 'ユーザーに聞', '受け取'],
+  file: ['ファイル', 'file', 'open', '読み込', '書き込', '保存', 'テキストファイル', 'txt', 'with open'],
+  csv: ['csv', '表計算', 'エクセル', 'excel', 'スプレッドシート'],
+  json: ['json', 'ジェイソン'],
+  // ---- データ ----
+  variable: ['変数', 'variable', '代入', 'グローバル', 'global', 'スコープ', 'scope'],
+  number: ['数値', '数字', 'number', '整数', '小数', 'int', 'float', '計算', '四則', '足し算', '引き算', '掛け算', '割り算', '余り', '割った余り', '累乗', '四捨五入', '切り捨て', '切り上げ'],
+  string: ['文字列', 'string', 'str', '文字', 'テキスト', '連結', 'f-string', 'f文字列', 'フォーマット', '大文字', '小文字', '置き換え', '分割', 'split', 'join'],
+  list: ['リスト', 'list', '配列', 'array', 'append', '要素', 'スライス', 'slice'],
+  dict: ['辞書', 'dict', 'dictionary', 'ディクショナリ', 'キーと値', '連想配列', 'マップ', 'keys', 'items'],
+  set: ['集合', 'set', '重複を', '重複なし', 'ユニーク'],
+  tuple: ['タプル', 'tuple'],
+  bool: ['真偽', 'true', 'false', 'bool', 'ブール', 'none'],
+  sort: ['並べ替え', 'ならべかえ', 'ソート', 'sort', 'sorted', '順番に', '昇順', '降順', '大きい順', '小さい順', '順位', 'ランキング'],
+  sum: ['合計', '足す', '総和', 'sum', '平均', 'average', 'mean', '最大', '最小', 'max', 'min', '集計'],
+  count: ['数える', '数え', 'カウント', 'count', '何回', '出現', '頻度', 'counter'],
+  // ---- 文法 ----
+  ifStmt: ['if文', 'if 文', '条件分岐', '条件', 'if', 'elif', 'else', 'もし', '場合'],
+  loop: ['for文', 'for 文', 'while', 'ループ', '繰り返', 'くり返', 'for', 'range', '回くり返', '回繰り返', 'ずっと'],
+  func: ['関数', 'function', 'def', 'ファンクション', '引数', 'return', '戻り値', '返り値'],
+  classKw: ['クラス', 'class', 'オブジェクト', 'object', 'インスタンス', 'instance', '継承', 'メソッド', 'method', 'self', '__init__', 'コンストラクタ', 'オブジェクト指向', 'dataclass', 'データクラス'],
+  module: ['モジュール', 'module', 'import', 'インポート', 'ライブラリ', 'パッケージ', '別のファイル', '複数のファイル', '__name__'],
+  exception: ['例外', 'エラー処理', 'try', 'except', 'raise', 'finally', 'エラーにならない', '例外処理'],
+  comprehension: ['内包表記', '内包', 'comprehension'],
+  lambda: ['lambda', 'ラムダ', '無名関数'],
+  generator: ['ジェネレーター', 'ジェネレータ', 'generator', 'yield', 'イテレーター', 'iterator'],
+  decorator: ['デコレーター', 'デコレータ', 'decorator', '@'],
+  typehint: ['型ヒント', '型注釈', 'type hint', 'typing', 'アノテーション'],
+  recursion: ['再帰', 'recursion', '自分自身を呼'],
+  regex: ['正規表現', 'regex', 're.', 'パターン', 'マッチ'],
+  // ---- よく使うライブラリ ----
+  random: ['ランダム', 'random', '乱数', 'くじ', 'サイコロ', 'さいころ', 'ダイス', 'シャッフル', 'shuffle', 'choice', '抽選', 'おみくじ'],
+  math: ['math', '数学', '平方根', 'ルート', 'sqrt', '円周率', 'pi', '三角関数', 'sin', 'cos', '対数', 'log'],
+  time: ['time', '時間', '秒', 'タイマー', 'timer', 'sleep', '待つ', '待って', 'カウントダウン', 'ストップウォッチ', '時計'],
+  datetime: ['datetime', '日付', '今日', '何日', '曜日', '年齢', '誕生日', '時刻', '現在時刻', 'カレンダー', 'calendar'],
+  plot: ['グラフ', 'graph', 'plot', 'matplotlib', 'プロット', '棒グラフ', '折れ線', '円グラフ', '散布図', 'ヒストグラム', '図', 'チャート', 'chart'],
+  numpy: ['numpy', 'ナンパイ', '行列', 'ベクトル', 'ndarray'],
+  pandas: ['pandas', 'パンダス', 'データフレーム', 'dataframe', 'データ分析', '分析'],
+  statistics: ['統計', 'statistics', '中央値', 'median', '標準偏差', '分散', '最頻値'],
+  // ---- 作るもの ----
+  game: ['ゲーム', 'game', '遊べ', 'あそべ'],
+  guess: ['数当て', '数あて', '当てる', 'あてる', '当てゲーム', 'ハイアンドロー', 'high and low', '推測'],
+  janken: ['じゃんけん', 'ジャンケン', 'rock paper', 'グーチョキパー'],
+  quiz: ['クイズ', 'quiz', '問題を出', '問題集', 'テスト問題', '正解'],
+  tictactoe: ['三目並べ', 'まるばつ', '〇×', 'マルバツ', 'tic tac toe', 'tictactoe', 'tic-tac-toe'],
+  hangman: ['ハングマン', 'hangman', '単語当て'],
+  calculator: ['電卓', '計算機', 'calculator', '計算する'],
+  todo: ['todo', 'やること', 'タスク管理', 'タスク', 'メモ帳', 'to do', 'to-do'],
+  kakeibo: ['家計簿', 'お小遣い', 'おこづかい', '出費', '支出', '収入', '残高'],
+  grades: ['成績', '点数', 'テストの点', '平均点', '通知表', '偏差値'],
+  wordbook: ['単語帳', '暗記', 'フラッシュカード', '英単語'],
+  fizzbuzz: ['fizzbuzz', 'fizz buzz', 'フィズバズ'],
+  prime: ['素数', 'prime'],
+  fibonacci: ['フィボナッチ', 'fibonacci'],
+  factorial: ['階乗', 'factorial'],
+  multiplication: ['九九', 'くく', '掛け算表', 'かけ算表', '掛け算の表'],
+  leap: ['うるう年', '閏年', 'leap year'],
+  bmi: ['bmi', '肥満度', '体重', '身長'],
+  temperature: ['温度', '摂氏', '華氏', 'celsius', 'fahrenheit'],
+  tax: ['消費税', '税込', '税抜', '割引', '値引き', 'セール', '割り勘', 'わりかん', 'おつり', 'お釣り'],
+  password: ['パスワード', 'password', '暗証'],
+  palindrome: ['回文', 'palindrome'],
+  gcd: ['最大公約数', '最小公倍数', 'gcd', 'lcm'],
+  wordcount: ['文字数', '単語数', '何文字', '出現回数', '単語の数'],
+  unittest: ['テストを書', 'ユニットテスト', 'unittest', 'pytest', 'テストコード', 'assert'],
+  // ---- アプリ ----
+  debug: ['デバッグ', 'ブレークポイント', 'breakpoint', 'ステップ実行', 'debugger', '止めて', '変数の中身'],
 }
 
 // 概念ごとの判定 (英字は単語境界で、それ以外は部分一致で)
@@ -183,7 +160,7 @@ const INTENT_RULES = [
   ['format', /(整形|インデント|字下げ|フォーマット|format|indent)/, 4],
   ['tidy', /(整理|リファクタ|りふぁくた|きれいに|綺麗に|キレイに|読みやすく|見やすく|refactor|clean ?up|tidy|モダン|最新の書き方|新しい書き方|古い書き方|非推奨)/, 3],
   ['comment', /(コメント|comment)/, 4],
-  ['types', /(型注釈|型を(付|つ)け|型を書|type annotation|--!strict)/, 4],
+  ['types', /(型注釈|型ヒント|型を(付|つ)け|型を書|type ?hint|type annotation)/, 4],
   ['optimize', /(最適化|速く|はやく|軽く|かるく|高速化|重い|おもい|ラグ|カクカク|パフォーマンス|optimi[sz]e|faster|performance|lag)/, 3],
   ['review', /(チェック|ちぇっく|レビュー|確認して|見て|みて|問題(は|が)(ある|ない)|おかしいところ|改善点|ダメなところ|review|check)/, 2],
   ['run', /(実行して|動かして|試して|ためして|走らせ|run (it|this|the)|^実行$|^run$)/, 3],
@@ -194,7 +171,7 @@ const INTENT_RULES = [
   ['more', /^(もっと|さらに|続けて|つづけて|他には|ほかには|続き)/, 2],
 ]
 // 実行時エラーの文によくある言い回し
-const ERROR_RE = /(attempt to (index|call|perform|compare|concatenate)|expected .* got|is not a valid member|infinite yield|stack overflow|nil value|syntax error|構文エラー|が必要です|unexpected symbol|attempt to|script timeout|exhausted|not a valid|invalid argument|bad argument|:\d+:)/i
+const ERROR_RE = /(Traceback \(most recent call last\)|\b[A-Z]\w*(Error|Exception): |File "[^"]+", line \d+|SyntaxError|IndentationError|NameError|TypeError|ValueError|IndexError|KeyError|AttributeError|ZeroDivisionError|ModuleNotFoundError|構文エラー|invalid syntax|is not defined)/
 
 export function detectIntents(text) {
   const n = normalize(text)
@@ -251,7 +228,7 @@ export function slots(text) {
   const n = normalize(raw)
   const out = { numbers: [], seconds: null, times: null, percent: null, multiplier: null, keys: [], colors: [], names: [], quoted: [], files: [], identifiers: [] }
   // 数値 (単位つき)
-  const numRe = /(\d+(?:\.\d+)?|[一二三四五六七八九十百半]+)\s*(秒|びょう|s\b|sec|分|ふん|回|かい|倍|ばい|%|パーセント|スタッド|studs?|個|こ|人|つ|コイン|ポイント|ダメージ|hp)?/g
+  const numRe = /(\d+(?:\.\d+)?|[一二三四五六七八九十百半]+)\s*(秒|びょう|s\b|sec|分|ふん|回|かい|倍|ばい|%|パーセント|個|こ|人|つ|円|点|歳|日|行|文字|桁)?/g
   let m
   while ((m = numRe.exec(n))) {
     const v = kanjiNumber(m[1])
@@ -283,7 +260,7 @@ export function slots(text) {
   const qre = /[「『"'`]([^」』"'`\n]{1,60})[」』"'`]/g
   while ((m = qre.exec(raw))) out.quoted.push(m[1].trim())
   // ファイル名
-  const fre = /([\w\-./]+\.(?:server\.|client\.)?luau?)\b/gi
+  const fre = /([\w\-./]+\.(?:py|txt|csv|json|md))\b/gi
   while ((m = fre.exec(raw))) out.files.push(m[1])
   // 識別子らしい英単語 (大文字を含む・ドット区切りなど)
   const ire = /[A-Za-z_][\w]*(?:[.:][A-Za-z_]\w*)*/g
@@ -350,11 +327,4 @@ export function splitRequests(text) {
 }
 
 // 文がコードを含むか (貼り付けられたコード)
-export function extractCode(text) {
-  const fence = /```(?:lua|luau)?\s*\n([\s\S]*?)```/i.exec(text)
-  if (fence) return fence[1].replace(/\n$/, '')
-  const lines = String(text).split('\n')
-  const codeish = lines.filter(l => /^\s*(local |function |end\b|if .* then|for .* do|while .* do|return\b|--|[\w.:]+\(.*\)\s*$|[\w.]+\s*=\s*.+)/.test(l))
-  if (lines.length >= 3 && codeish.length >= Math.max(2, lines.length * 0.6)) return text.trim()
-  return null
-}
+export { extractCode } from './pycode.js'

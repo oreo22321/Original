@@ -1,6 +1,6 @@
 // AI パネル (Forge AI: アプリに内蔵した AI。インターネット・API キー不要)
 import { app, command, runCommand } from './app.js'
-import { getMode, on, emit } from './store.js'
+import { on, emit } from './store.js'
 import { h, icon, toast, copyText, modal, confirmDialog } from './ui.js'
 import { renderMarkdown } from './markdown.js'
 import { askAi, aiStatus, resetMemory } from './ai-host.js'
@@ -15,20 +15,12 @@ const QUICK = [
   { label: 'コメント', prompt: 'コメントを追加して' },
   { label: '最適化', prompt: '最適化して' },
 ]
-const STARTERS = {
-  studio: [
-    { icon: 'cube', title: '触れたら死ぬブロック', prompt: '触れたら死ぬブロックを作って' },
-    { icon: 'window', title: 'ショップの UI', prompt: 'ショップの UI を作って' },
-    { icon: 'save', title: 'データを保存する', prompt: 'コインを保存するリーダーボードを作って' },
-    { icon: 'bug', title: 'コードを直す', prompt: 'このコードの問題を直して' },
-  ],
-  executor: [
-    { icon: 'eye', title: 'ESP', prompt: 'ESP を作って' },
-    { icon: 'window', title: 'メニュー', prompt: 'ドラッグできるメニューを作って' },
-    { icon: 'bolt', title: 'ボタンで速く歩く', prompt: 'ボタンで速く歩くのを切り替えられるようにして' },
-    { icon: 'bug', title: 'コードを直す', prompt: 'このコードの問題を直して' },
-  ],
-}
+const STARTERS = [
+  { icon: 'gamepad', title: '数当てゲーム', prompt: '数当てゲームを作って' },
+  { icon: 'layers', title: 'CSV を集計してグラフに', prompt: 'CSV を読んで集計してグラフにして' },
+  { icon: 'book', title: 'リストと辞書の違い', prompt: 'リストと辞書の違いは?' },
+  { icon: 'bug', title: 'コードを直す', prompt: 'このコードの問題を直して' },
+]
 const HISTORY_KEY = 'forgecode.ai.chat.'
 
 export class AiView {
@@ -113,13 +105,12 @@ export class AiView {
   scrollEnd() { this.log.scrollTop = this.log.scrollHeight }
 
   welcome() {
-    const mode = getMode() === 'executor' ? 'executor' : 'studio'
     const box = h('div', { class: 'ai-welcome' },
       h('div', { class: 'ai-empty-icon' }, icon('sparkle', 18)),
       h('div', { class: 'ai-welcome-title' }, 'Forge AI'),
-      h('p', { class: 'set-desc' }, 'コードの修正・説明・生成と、Luau / Roblox の質問に答えます。端末の中だけで動き、変更はいつでも元に戻せます。'))
+      h('p', { class: 'set-desc' }, 'Python のコードの修正・説明・生成と、質問に答えます。端末の中だけで動き、変更はいつでも元に戻せます。'))
     const grid = h('div', { class: 'ai-starters' })
-    for (const s of STARTERS[mode] || STARTERS.studio) grid.append(h('button', { class: 'ai-starter', onclick: () => this.send(s.prompt) }, icon(s.icon, 18), h('span', null, s.title)))
+    for (const s of STARTERS) grid.append(h('button', { class: 'ai-starter', onclick: () => this.send(s.prompt) }, icon(s.icon, 18), h('span', null, s.title)))
     box.append(grid, h('button', { class: 'btn small ghost ai-help-btn', onclick: () => this.send('何ができる?') }, 'できること一覧'))
     return box
   }

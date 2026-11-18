@@ -1,9 +1,8 @@
 // ForgeCode 起動処理
 import './safe-storage.js'
-import { getSettings, onSettings, emit, on, loadSession, getMode } from './store.js'
+import { getSettings, onSettings, emit, on, loadSession } from './store.js'
 import { uiColors, THEMES } from '../editor/themes.js'
-import { intel } from '../editor/luau-intel.js'
-import { loadRobloxApi } from '../editor/apidb.js'
+import { setPythonFiles, pythonFilesChanged, warmPython } from '../editor/python.js'
 import { app, openProject, runCommand, refreshFiles } from './app.js'
 import * as vfs from './vfs.js'
 import { Workbench } from './workbench.js'
@@ -16,8 +15,6 @@ import './ai-actions.js'
 import { refreshCorpus, loadEngine } from './ai-host.js'
 import { warmComplete } from '../ai/complete.js'
 import './code-nav.js'
-import './remote-ui.js'
-import './extlibs.js'
 import './github-sync.js'
 import { toast } from './ui.js'
 import { startI18n } from './i18n.js'
@@ -102,13 +99,18 @@ async function boot() {
   const root = document.getElementById('app')
   app.wb = new Workbench(root)
   registerServiceWorker()
-  intel.executor = getMode() === 'executor'
-  on('mode', m => { intel.executor = m === 'executor' })
   // 続きの提案 (AI) にプロジェクトのコードを学習させる
   on('files', refreshCorpus)
   on('saved', refreshCorpus)
-
-  loadRobloxApi().then(() => app.editors.relint()).catch(e => toast('Roblox API データを読み込めませんでした: ' + e.message, { kind: 'error' }))
+  // 補完・チェック (jedi) にプロジェクトのファイルを渡す (他のファイルの関数も補完できるように)
+  setPythonFiles(() => {
+    const out = {}
+    for (const f of app.files) if (!f.dir && /\.py$/.test(f.path)) { const d = app.editors && app.editors.docs.get(f.path); out[f.path] = d && d.state ? d.state.doc.toString() : (app.contents.get(f.path) || '') }
+    return out
+  })
+  on('files', pythonFilesChanged)
+  on('saved', pythonFilesChanged)
+  setTimeout(() => { if (typeof requestIdleCallback === 'function') requestIdleCallback(() => warmPython(), { timeout: 6000 }); else warmPython() }, 2500)
 
   const projects = await vfs.listProjects()
   if (!s.onboarded && !projects.length) {
@@ -118,13 +120,13 @@ async function boot() {
     const sess = loadSession()
     const id = sess.project && projects.some(p => p.id === sess.project) ? sess.project : projects[0] && projects[0].id
     if (id) await openProject(id, { openMain: true })
-    else await createFromTemplate('studio')
+    else await createFromTemplate('basics')
   }
 
   onSettings((ns, prev) => {
     if (ns.theme !== prev.theme || ns.fontFamily !== prev.fontFamily) applyTheme(ns)
     app.editors.reconfigureAll()
-    if (ns.lint !== prev.lint || ns.lintTypos !== prev.lintTypos || ns.lintUndefined !== prev.lintUndefined || ns.lintUnused !== prev.lintUnused) app.editors.relint()
+    if (ns.lint !== prev.lint || ns.lintUndefined !== prev.lintUndefined || ns.lintUnused !== prev.lintUnused) app.editors.relint()
     if (ns.layout !== prev.layout) app.wb.applyLayout()
     if (ns.language !== prev.language) toast(ns.language === 'en' || (ns.language === 'auto' && !/^ja/i.test(navigator.language)) ? 'Reload to switch the language' : '再読み込みすると切り替わります', { action: { label: ns.language === 'ja' ? '再読み込み' : 'Reload', run: () => { app.editors.flushDrafts(); location.reload() } }, duration: 8000 })
     emit('settings', ns)

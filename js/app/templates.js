@@ -1,347 +1,205 @@
-// 新規プロジェクトのテンプレート
-// kind: 'studio' (Roblox Studio 用) / 'executor' (エグゼキューター用)
+// 新規プロジェクトのテンプレート (Python)
 export const TEMPLATES = {
-  studio: {
-    name: 'Roblox ゲーム',
-    desc: 'サーバー / クライアント / モジュールの基本構成',
-    icon: 'cube', kind: 'studio',
-    main: 'src/server/main.server.luau',
+  basics: {
+    name: 'はじめての Python',
+    desc: '出力・変数・if・for・関数・input の基本',
+    icon: 'bulb',
+    main: 'main.py',
     files: {
-      'src/server/main.server.luau': `--!strict
--- サーバースクリプト: プレイヤーが参加したらコインを配ります
--- ▶ ボタンで実行すると、Roblox を模したサンドボックスで動作を確認できます
+      'main.py': `# はじめての Python
+# ▶ ボタンで実行すると、下の「出力」に結果が表示されます
 
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+# 1. 出力
+print("こんにちは、Python!")
 
-local Util = require(script.Parent.Parent.shared.Util)
+# 2. 変数と計算
+price = 120
+count = 3
+total = price * count
+print(f"{price} 円 × {count} 個 = {total} 円")
 
-local START_COINS = 100
+# 3. 条件分岐
+if total >= 300:
+    print("300 円以上なので送料無料です")
+else:
+    print("あと", 300 - total, "円で送料無料です")
 
-Players.PlayerAdded:Connect(function(player: Player)
-	local leaderstats = Instance.new("Folder")
-	leaderstats.Name = "leaderstats"
-	leaderstats.Parent = player
+# 4. くり返し
+fruits = ["りんご", "みかん", "ぶどう"]
+for i, fruit in enumerate(fruits, start=1):
+    print(i, fruit)
 
-	local coins = Instance.new("IntValue")
-	coins.Name = "Coins"
-	coins.Value = START_COINS
-	coins.Parent = leaderstats
+# 5. 関数
+def greet(name: str) -> str:
+    """あいさつの文を作る"""
+    return f"{name} さん、ようこそ!"
 
-	print(\`{player.Name} が参加しました。コイン: {Util.formatNumber(coins.Value)}\`)
 
-	player.CharacterAdded:Connect(function(character)
-		local humanoid = character:WaitForChild("Humanoid") :: Humanoid
-		humanoid.WalkSpeed = 20
-		print("キャラクターが出現しました。WalkSpeed =", humanoid.WalkSpeed)
-	end)
-end)
+print(greet("ForgeCode"))
 
--- 3 秒ごとにコインを増やす
-task.spawn(function()
-	for i = 1, 3 do
-		task.wait(1)
-		for _, player in Players:GetPlayers() do
-			local coins = player:FindFirstChild("leaderstats") and player.leaderstats:FindFirstChild("Coins")
-			if coins then
-				coins.Value += 10
-				print(\`[{i}] {player.Name} のコイン → {coins.Value}\`)
-			end
-		end
-	end
-end)
+# 6. 入力 (実行すると、出力の下に入力欄が出ます)
+name = input("名前を入れてください: ")
+print(greet(name))
 `,
-      'src/client/main.client.luau': `-- クライアントスクリプト: 画面にボタンを表示します
-local Players = game:GetService("Players")
-local TweenService = game:GetService("TweenService")
+      'README.md': `# はじめての Python
 
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-
-local gui = Instance.new("ScreenGui")
-gui.Name = "MainGui"
-gui.ResetOnSpawn = false
-
-local button = Instance.new("TextButton")
-button.Size = UDim2.fromOffset(200, 60)
-button.Position = UDim2.fromScale(0.5, 0.8)
-button.AnchorPoint = Vector2.new(0.5, 0.5)
-button.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
-button.TextColor3 = Color3.fromRGB(255, 255, 255)
-button.Text = "クリック!"
-button.TextScaled = true
-button.Parent = gui
-
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 12)
-corner.Parent = button
-
-gui.Parent = playerGui
-
-local clicks = 0
-button.Activated:Connect(function()
-	clicks += 1
-	button.Text = \`{clicks} 回クリック\`
-	TweenService:Create(button, TweenInfo.new(0.15), { Size = UDim2.fromOffset(220, 66) }):Play()
-end)
-
-print("GUI を作成しました:", gui:GetFullName())
-`,
-      'src/shared/Util.luau': `-- 共有モジュール: サーバーとクライアントの両方から require できます
-local Util = {}
-
--- 1234567 → "1,234,567"
-function Util.formatNumber(n: number): string
-	local s = tostring(math.floor(n))
-	local formatted = s:reverse():gsub("(%d%d%d)", "%1,"):reverse()
-	return (formatted:gsub("^,", ""))
-end
-
-function Util.lerp(a: number, b: number, t: number): number
-	return a + (b - a) * t
-end
-
-return Util
-`,
-      'README.md': `# Roblox ゲーム
-
-- \`src/server\` … サーバースクリプト (\`.server.luau\`)
-- \`src/client\` … クライアントスクリプト (\`.client.luau\`)
-- \`src/shared\` … 共有モジュール
-
-ファイルを開いて ▶ を押すと、Roblox の動作を模したサンドボックスで実行できます。
-クライアントスクリプトを実行すると、下の「ゲーム」タブに GUI が表示され、ボタンをタップして試せます。
-完成したらコードをコピーして Roblox Studio に貼り付けてください。
+- \`main.py\` を開いて ▶ で実行します
+- 書き間違いは、赤や黄色の波線で教えてくれます (タップすると直し方が出ます)
+- 分からないことは AI (右上の ✦) に聞けます
 `,
     },
   },
-  studioEmpty: {
-    name: '空の Studio プロジェクト',
-    desc: 'サーバースクリプト 1 つから始めます',
-    icon: 'file', kind: 'studio',
-    main: 'main.server.luau',
-    files: { 'main.server.luau': '-- サーバースクリプト\nlocal Players = game:GetService("Players")\n\n' },
-  },
-  executor: {
-    name: 'エグゼキュータースクリプト',
-    desc: '設定の保存・二重実行の防止など、基本のひな形',
-    icon: 'bolt', kind: 'executor',
-    main: 'main.lua',
+  game: {
+    name: '数当てゲーム',
+    desc: 'random と input で遊べる小さなゲーム',
+    icon: 'gamepad',
+    main: 'main.py',
     files: {
-      'main.lua': `-- エグゼキューター用スクリプトの例
--- ▶ で実行すると、エグゼキューター API (getgenv, writefile など) を模したサンドボックスで動作確認できます
--- 完成したら上部の「コピー」ボタンでコピーして、エグゼキューターに貼り付けてください
+      'main.py': `# 数当てゲーム: 1〜100 の数を当てます
+import random
 
-local Players = game:GetService("Players")
-local HttpService = game:GetService("HttpService")
-local player = Players.LocalPlayer
+answer = random.randint(1, 100)
+tries = 0
 
-print("実行環境:", identifyexecutor())
-
--- 設定の保存と読み込み (workspace フォルダに保存されます)
-local CONFIG_FILE = "MyScript/config.json"
-
-local function loadConfig()
-	if isfile(CONFIG_FILE) then
-		return HttpService:JSONDecode(readfile(CONFIG_FILE))
-	end
-	return { walkSpeed = 16, runs = 0 }
-end
-
-local function saveConfig(config)
-	if not isfolder("MyScript") then
-		makefolder("MyScript")
-	end
-	writefile(CONFIG_FILE, HttpService:JSONEncode(config))
-end
-
-local config = loadConfig()
-config.runs += 1
-saveConfig(config)
-print(\`このスクリプトの実行回数: {config.runs}\`)
-
--- 二重実行の防止
-if getgenv().MyScriptLoaded then
-	warn("既に読み込まれています")
-	return
-end
-getgenv().MyScriptLoaded = true
-
--- キャラクターの速度を変更
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
-humanoid.WalkSpeed = config.walkSpeed
-print("WalkSpeed:", humanoid.WalkSpeed)
-
--- 通知
-game:GetService("StarterGui"):SetCore("SendNotification", {
-	Title = "MyScript",
-	Text = "読み込みが完了しました",
-	Duration = 5,
-})
-`,
-      'workspace/': '',
-      'README.md': `# エグゼキュータースクリプト
-
-- \`workspace/\` フォルダは、\`readfile\` / \`writefile\` などのファイル関数の保存先です。
-- エディタ上部の「コピー」でスクリプト全体をコピーできます。
+print("1〜100 の数を当ててください!")
+while True:
+    text = input("あなたの予想: ")
+    if not text.isdigit():
+        print("数字を入れてください")
+        continue
+    guess = int(text)
+    tries += 1
+    if guess < answer:
+        print("もっと大きいです")
+    elif guess > answer:
+        print("もっと小さいです")
+    else:
+        print(f"正解! {tries} 回で当たりました")
+        break
 `,
     },
   },
-  executorGui: {
-    name: 'GUI 付きスクリプト',
-    desc: 'ウィンドウとボタンを表示するひな形 (プレビューで操作できます)',
-    icon: 'window', kind: 'executor',
-    main: 'main.lua',
+  data: {
+    name: 'データの集計とグラフ',
+    desc: 'CSV を読んで集計し、matplotlib でグラフに',
+    icon: 'layers',
+    main: 'main.py',
     files: {
-      'main.lua': `-- GUI 付きエグゼキュータースクリプトのひな形
--- ▶ で実行すると、下の「ゲーム」タブに GUI が表示されます。ボタンをタップして動作を確認できます
+      'main.py': `# CSV のデータを集計して、グラフにします
+# (はじめての実行では、ライブラリの読み込みに少し時間がかかります)
+import csv
+from collections import defaultdict
 
-local Players = game:GetService("Players")
-local HttpService = game:GetService("HttpService")
-local player = Players.LocalPlayer
+import matplotlib.pyplot as plt
 
--- 二重実行の防止: 前回の GUI が残っていたら消す
-if getgenv().MyHub then
-	getgenv().MyHub:Destroy()
-end
+totals = defaultdict(int)
+with open("sales.csv", encoding="utf-8") as f:
+    for row in csv.DictReader(f):
+        totals[row["month"]] += int(row["sales"])
 
--- ---- 設定の保存と読み込み (workspace フォルダ) ----
-local CONFIG_FILE = "MyHub/config.json"
-local config = { clicks = 0, notify = true }
+for month, value in totals.items():
+    print(f"{month}: {value:,} 円")
 
-if isfile(CONFIG_FILE) then
-	local ok, data = pcall(function()
-		return HttpService:JSONDecode(readfile(CONFIG_FILE))
-	end)
-	if ok and type(data) == "table" then
-		for key, value in pairs(data) do
-			config[key] = value
-		end
-	end
-end
+plt.bar(list(totals.keys()), list(totals.values()), color="#5b8def")
+plt.title("Sales by month")
+plt.ylabel("yen")
+plt.show()  # 図は出力に表示されます
 
-local function saveConfig()
-	if not isfolder("MyHub") then
-		makefolder("MyHub")
-	end
-	writefile(CONFIG_FILE, HttpService:JSONEncode(config))
-end
-
--- ---- GUI を作る ----
-local function create(className, props)
-	local inst = Instance.new(className)
-	for key, value in pairs(props) do
-		inst[key] = value
-	end
-	return inst
-end
-
-local gui = create("ScreenGui", { Name = "MyHub", ResetOnSpawn = false, Parent = gethui() })
-getgenv().MyHub = gui
-
-local window = create("Frame", {
-	Size = UDim2.fromOffset(260, 230),
-	Position = UDim2.fromScale(0.5, 0.5),
-	AnchorPoint = Vector2.new(0.5, 0.5),
-	BackgroundColor3 = Color3.fromRGB(24, 26, 32),
-	Parent = gui,
-})
-create("UICorner", { CornerRadius = UDim.new(0, 12), Parent = window })
-create("UIStroke", { Color = Color3.fromRGB(70, 76, 92), Thickness = 1, Parent = window })
-
-create("TextLabel", {
-	Size = UDim2.new(1, 0, 0, 40),
-	BackgroundTransparency = 1,
-	Text = "My Hub",
-	TextColor3 = Color3.fromRGB(255, 255, 255),
-	TextSize = 18,
-	Font = Enum.Font.GothamBold,
-	Parent = window,
-})
-
-local list = create("Frame", {
-	Size = UDim2.new(1, -24, 1, -52),
-	Position = UDim2.fromOffset(12, 44),
-	BackgroundTransparency = 1,
-	Parent = window,
-})
-create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = list })
-
-local function addButton(text, onClick)
-	local button = create("TextButton", {
-		Size = UDim2.new(1, 0, 0, 36),
-		BackgroundColor3 = Color3.fromRGB(45, 110, 240),
-		Text = text,
-		TextColor3 = Color3.fromRGB(255, 255, 255),
-		TextSize = 15,
-		Font = Enum.Font.Gotham,
-		AutoButtonColor = true,
-		Parent = list,
-	})
-	create("UICorner", { CornerRadius = UDim.new(0, 8), Parent = button })
-	button.Activated:Connect(function()
-		onClick(button)
-	end)
-	return button
-end
-
--- ---- ボタンの動作 ----
-addButton(\`クリック回数: {config.clicks}\`, function(button)
-	config.clicks += 1
-	button.Text = \`クリック回数: {config.clicks}\`
-	saveConfig()
-end)
-
-addButton("通知: " .. (config.notify and "オン" or "オフ"), function(button)
-	config.notify = not config.notify
-	button.Text = "通知: " .. (config.notify and "オン" or "オフ")
-	saveConfig()
-end)
-
-addButton("自分の位置をコピー", function()
-	local character = player.Character or player.CharacterAdded:Wait()
-	local root = character:WaitForChild("HumanoidRootPart")
-	setclipboard(tostring(root.Position))
-	if config.notify then
-		game:GetService("StarterGui"):SetCore("SendNotification", { Title = "My Hub", Text = "位置をコピーしました", Duration = 3 })
-	end
-end)
-
-addButton("閉じる", function()
-	gui:Destroy()
-	getgenv().MyHub = nil
-	print("GUI を閉じました")
-end)
-
-print("読み込み完了:", identifyexecutor())
+# 結果をファイルに保存 (プロジェクトにファイルが増えます)
+with open("summary.txt", "w", encoding="utf-8") as f:
+    for month, value in totals.items():
+        f.write(f"{month},{value}\\n")
+print("summary.txt に保存しました")
 `,
-      'workspace/': '',
+      'sales.csv': `month,item,sales
+Jan,apple,1200
+Jan,orange,800
+Feb,apple,1500
+Feb,orange,900
+Mar,apple,1700
+Mar,orange,1100
+`,
     },
   },
-  executorEmpty: {
-    name: '空のスクリプト',
-    desc: '何もない状態から書き始めます',
-    icon: 'file', kind: 'executor',
-    main: 'main.lua',
-    files: { 'main.lua': '', 'workspace/': '' },
+  app: {
+    name: '複数ファイルのアプリ',
+    desc: 'モジュールに分けた ToDo 管理 (クラス・import)',
+    icon: 'folder',
+    main: 'main.py',
+    files: {
+      'main.py': `# ToDo 管理: モジュールに分けたプログラムの例
+from todo.models import TodoList
+
+
+def main():
+    todos = TodoList()
+    todos.add("Python の勉強")
+    todos.add("買い物")
+    todos.add("部屋の掃除")
+    todos.done(2)
+
+    print("ToDo 一覧")
+    for item in todos:
+        print(item)
+    print(f"残り {todos.remaining()} 件")
+
+
+if __name__ == "__main__":
+    main()
+`,
+      'todo/__init__.py': '',
+      'todo/models.py': `from dataclasses import dataclass
+
+
+@dataclass
+class Todo:
+    id: int
+    title: str
+    finished: bool = False
+
+    def __str__(self) -> str:
+        mark = "✓" if self.finished else " "
+        return f"[{mark}] {self.id}. {self.title}"
+
+
+class TodoList:
+    def __init__(self) -> None:
+        self.items: list[Todo] = []
+
+    def add(self, title: str) -> Todo:
+        todo = Todo(len(self.items) + 1, title)
+        self.items.append(todo)
+        return todo
+
+    def done(self, todo_id: int) -> None:
+        for todo in self.items:
+            if todo.id == todo_id:
+                todo.finished = True
+
+    def remaining(self) -> int:
+        return sum(1 for t in self.items if not t.finished)
+
+    def __iter__(self):
+        return iter(self.items)
+`,
+    },
+  },
+  empty: {
+    name: '空のプロジェクト',
+    desc: 'main.py だけ',
+    icon: 'file',
+    main: 'main.py',
+    files: { 'main.py': '' },
   },
 }
 
-// 「新しいファイル」の種類 (モードごと)
+// 「新しいファイル」の種類
 export const NEW_FILE_TEMPLATES = {
-  studio: {
-    'Script (サーバー)': { ext: '.server.luau', stem: 'Script', content: 'local Players = game:GetService("Players")\n\n' },
-    'LocalScript (クライアント)': { ext: '.client.luau', stem: 'LocalScript', content: 'local Players = game:GetService("Players")\nlocal player = Players.LocalPlayer\n\n' },
-    'ModuleScript': { ext: '.luau', stem: 'Module', content: 'local Module = {}\n\n\n\nreturn Module\n' },
-    'JSON': { ext: '.json', stem: 'data', content: '{\n  \n}\n' },
-    'メモ': { ext: '.md', stem: 'README', content: '# タイトル\n' },
-  },
-  executor: {
-    'スクリプト': { ext: '.lua', stem: 'script', content: '' },
-    'モジュール': { ext: '.lua', stem: 'module', content: 'local Module = {}\n\n\n\nreturn Module\n' },
-    'JSON': { ext: '.json', stem: 'config', content: '{\n  \n}\n' },
-    'テキスト': { ext: '.txt', stem: 'note', content: '' },
-    'メモ': { ext: '.md', stem: 'README', content: '# タイトル\n' },
-  },
+  'Python': { ext: '.py', stem: 'script', content: '' },
+  'モジュール': { ext: '.py', stem: 'module', content: '"""モジュールの説明"""\n\n\ndef hello():\n    return "hello"\n' },
+  'テスト': { ext: '.py', stem: 'test_sample', content: 'import unittest\n\n\nclass SampleTest(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(1 + 1, 2)\n\n\nif __name__ == "__main__":\n    unittest.main()\n' },
+  'CSV': { ext: '.csv', stem: 'data', content: 'name,value\n' },
+  'JSON': { ext: '.json', stem: 'data', content: '{\n  \n}\n' },
+  'テキスト': { ext: '.txt', stem: 'note', content: '' },
+  'メモ': { ext: '.md', stem: 'README', content: '# タイトル\n' },
 }

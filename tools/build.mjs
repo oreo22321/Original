@@ -1,7 +1,7 @@
 // 配信用のファイルを作ります:  node tools/build.mjs
 // 1. js/ のソースを esbuild でまとめて圧縮し、dist/ に出力 (起動時に読むファイルの数と大きさを減らす)
 //    ・ワーカー (dist/workers/) とあとから読む部分 (dist/chunks/) も別ファイルとして出力
-//    ・dist/ は js/ と同じ深さに置くので、ソース中の相対パス (../../data/… など) はそのまま使えます
+//    ・dist/ は js/ と同じ深さに置くので、ソース中の相対パス (../../vendor/… など) はそのまま使えます
 // 2. index.html の先読み (modulepreload) を、起動時に必要な dist のファイルにする
 // 3. sw.js の事前キャッシュの一覧とバージョンを更新
 // ソースのまま動かしたいとき (開発・テスト): index.html?src で開く (boot.js が js/app/main.js を読みます)
@@ -19,7 +19,7 @@ const esbuild = require('esbuild')
 // ---- 1. まとめて圧縮 ----
 const DIST = path.join(root, 'dist')
 if (existsSync(DIST)) rmSync(DIST, { recursive: true, force: true })
-const ENTRIES = ['js/app/main.js', 'js/workers/luau-worker.js', 'js/workers/lint-worker.js', 'js/workers/llm-worker.js', 'js/workers/python-worker.js', 'js/workers/pytools-worker.js']
+const ENTRIES = ['js/app/main.js', 'js/workers/llm-worker.js', 'js/workers/python-worker.js', 'js/workers/pytools-worker.js']
 const result = await esbuild.build({
   absWorkingDir: root,
   entryPoints: ENTRIES,
@@ -33,7 +33,7 @@ const result = await esbuild.build({
   entryNames: '[dir]/[name]',
   chunkNames: 'chunks/[name]-[hash]',
   // 大きくて使う人だけが読むもの・ないことがあるものは、まとめずにそのまま読みに行く
-  external: ['../../vendor/web-llm.js', '../../data/roblox-api.js', '../../vendor/pyodide/pyodide.mjs', 'node:*'],
+  external: ['../../vendor/web-llm.js', '../../vendor/pyodide/pyodide.mjs', 'node:*'],
   legalComments: 'none',
   charset: 'utf8',
   metafile: true,
@@ -69,7 +69,7 @@ const walk = dir => {
     else if (!/\.(map|DS_Store)$/.test(name) && !LAZY.has(r) && !r.startsWith('vendor/pyodide/')) files.push(r)
   }
 }
-for (const d of ['css', 'dist', 'vendor', 'data', 'icons', 'live']) walk(d)
+for (const d of ['css', 'dist', 'vendor', 'icons']) walk(d)
 const hash = createHash('sha1')
 for (const f of files.slice(1)) hash.update(readFileSync(path.join(root, f)))
 const version = hash.digest('hex').slice(0, 10)

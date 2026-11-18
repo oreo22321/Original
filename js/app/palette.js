@@ -110,15 +110,18 @@ export function outlineSymbols(text, lang) {
   let pos = 0
   lines.forEach((line, i) => {
     let m
-    if (lang === 'luau') {
-      if ((m = /^\s*(local\s+)?function\s+([\w.:]+)\s*\(([^)]*)\)/.exec(line))) out.push({ name: m[2] + '(' + m[3].replace(/\s*:\s*[^,]+/g, '') + ')', kind: m[2].includes(':') ? 'メソッド' : '関数', line: i + 1, pos, depth: indentDepth(line) })
-      else if ((m = /^\s*local\s+([\w]+)\s*=\s*function\s*\(([^)]*)\)/.exec(line))) out.push({ name: m[1] + '(' + m[2] + ')', kind: '関数', line: i + 1, pos, depth: indentDepth(line) })
-      else if ((m = /^\s*([\w.]+)\s*=\s*function\s*\(([^)]*)\)/.exec(line))) out.push({ name: m[1] + '(' + m[2] + ')', kind: '関数', line: i + 1, pos, depth: indentDepth(line) })
-      else if ((m = /^local\s+([\w]+)\s*=\s*game:GetService\(["'](\w+)["']\)/.exec(line))) out.push({ name: m[1], kind: 'サービス', line: i + 1, pos, depth: 0 })
-      else if ((m = /^local\s+([\w, ]+?)\s*(?::[^=]+)?=/.exec(line))) out.push({ name: m[1], kind: '変数', line: i + 1, pos, depth: 0 })
-      else if ((m = /^\s*(export\s+)?type\s+(\w+)/.exec(line))) out.push({ name: m[2], kind: '型', line: i + 1, pos, depth: 0 })
-      else if ((m = /^\s*([\w.:]+(?:\.\w+)*)\s*:\s*Connect\s*\(/.exec(line))) out.push({ name: m[1] + ':Connect', kind: 'イベント', line: i + 1, pos, depth: indentDepth(line) })
-      else if ((m = /^\s*--\s*(?:MARK|#region|==+)\s*:?\s*(.+)$/.exec(line))) out.push({ name: m[1].replace(/=+$/, '').trim(), kind: '見出し', line: i + 1, pos, depth: 0 })
+    if (lang === 'python') {
+      const depth = indentDepth(line)
+      if ((m = /^\s*(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)?/.exec(line))) {
+        const params = m[2].split(',').map(p => p.replace(/[:=].*$/, '').trim()).filter(p => p && p !== 'self' && p !== 'cls').join(', ')
+        // クラスの中 (直前の、より浅い行が class) ならメソッド
+        let kind = '関数'
+        for (let j = out.length - 1; j >= 0; j--) { if (out[j].depth < depth) { if (out[j].kind === 'クラス') kind = 'メソッド'; break } }
+        out.push({ name: `${m[1]}(${params})`, kind, line: i + 1, pos, depth })
+      } else if ((m = /^\s*class\s+(\w+)/.exec(line))) out.push({ name: m[1], kind: 'クラス', line: i + 1, pos, depth })
+      else if ((m = /^([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*(?::[^=]+)?=(?!=)/.exec(line))) out.push({ name: m[1], kind: /^[A-Z][A-Z0-9_]*$/.test(m[1]) ? '定数' : '変数', line: i + 1, pos, depth: 0 })
+      else if (/^if\s+__name__\s*==\s*["']__main__["']/.test(line)) out.push({ name: '__main__', kind: '見出し', line: i + 1, pos, depth: 0 })
+      else if ((m = /^\s*#\s*(?:%%|MARK:?|---+|===+)\s*(.*?)[-=\s]*$/.exec(line)) && m[1]) out.push({ name: m[1], kind: '見出し', line: i + 1, pos, depth: 0 })
     } else if (lang === 'markdown') {
       if ((m = /^(#{1,6})\s+(.+)$/.exec(line))) out.push({ name: m[2], kind: '見出し', line: i + 1, pos, depth: m[1].length - 1 })
     }
@@ -128,7 +131,7 @@ export function outlineSymbols(text, lang) {
 }
 function indentDepth(line) {
   const lead = /^[ \t]*/.exec(line)[0]
-  return Math.min(4, lead.replace(/ {2,4}/g, '\t').length)
+  return Math.min(6, Math.floor(lead.replace(/\t/g, '    ').length / 4))
 }
 
 command('palette', 'コマンドパレットを開く', () => palette(), { icon: 'command', key: '⌘⇧P' })

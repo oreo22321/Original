@@ -39,5 +39,16 @@ ok('completion doc', r.result && /sqrt/.test(r.result.sig), JSON.stringify(r.res
 r = await req({ type: 'format', code: 'x=1+2\ndef f( a,b ):\n  return a+b\n' })
 ok('format', r.ok && r.result === 'x = 1 + 2\n\n\ndef f(a, b):\n    return a + b\n', JSON.stringify(r.result))
 
+// 参照・名前の変更・アウトライン
+const main = 'from helpers import double\n\n\ndef twice(v):\n    return double(v)\n\n\nprint(twice(2), double(3))\n'
+r = await req({ type: 'refs', code: main, line: 8, col: 17, path: 'main.py' })
+ok('references across files', r.ok && r.result.some(x => x.file === 'helpers.py' && x.decl) && r.result.filter(x => x.file === 'main.py').length === 3, JSON.stringify(r).slice(0, 400))
+r = await req({ type: 'rename', code: main, line: 4, col: 4, path: 'main.py', name: 'two_times' })
+ok('rename in file', r.ok && r.result.files && /def two_times\(v\)/.test(r.result.files['main.py']) && /print\(two_times\(2\)/.test(r.result.files['main.py']), JSON.stringify(r).slice(0, 400))
+r = await req({ type: 'rename', code: main, line: 8, col: 17, path: 'main.py', name: 'double_it' })
+ok('rename across files', r.ok && r.result.files && /def double_it/.test(r.result.files['helpers.py'] || '') && /import double_it/.test(r.result.files['main.py'] || ''), JSON.stringify(r).slice(0, 400))
+r = await req({ type: 'outline', code: 'class A:\n    def f(self):\n        pass\n\n\ndef g():\n    pass\n', path: 'main.py' })
+ok('outline', r.ok && r.result.map(x => x.name + x.depth).join(',') === 'A0,f1,g0', JSON.stringify(r).slice(0, 300))
+
 console.log(`pytools: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

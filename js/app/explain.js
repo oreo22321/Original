@@ -1,70 +1,91 @@
-// 実行時エラーの解説 (よくあるエラーを日本語で説明し、直し方を提案します)
+// 実行時エラーの解説 (よくある Python のエラーを日本語で説明し、直し方を提案します)
+// explainError(err): err は { type, message, text?, frames? } か、エラーの文字列 ("NameError: name 'x' is not defined")
 // 返り値: { why: string, fixes: string[] } | null
-const RULES = [
-  [/attempt to index nil with '([^']+)'/, (m, c) => ({
-    why: `「.${m[1]}」の左側の値が nil (何もない状態) です。変数にまだ何も入っていないか、探したオブジェクトが見つかっていません。`,
-    fixes: [
-      c.kind === 'server' && /Character|PlayerGui|Backpack|UserId|Name/.test(m[1]) ? 'サーバースクリプトでは Players.LocalPlayer は nil です。PlayerAdded の引数でプレイヤーを受け取ってください' : null,
-      'FindFirstChild は見つからないと nil を返します。読み込みを待つなら WaitForChild("名前") を使います',
-      '使う前に if 変数 then ... end で nil でないことを確認します',
-      '変数名のスペルミス (大文字・小文字) がないか確認します',
-    ],
-  })],
-  [/attempt to index nil with (number|key)/, () => ({ why: 'nil の値に対して [添字] でアクセスしました。テーブルが入っているはずの変数が nil です。', fixes: ['テーブルを作る前に使っていないか確認します', '関数が値を return しているか確認します'] })],
-  [/attempt to call a nil value(?: \(([^)]*)\))?/, m => ({
-    why: `存在しない関数を呼び出しました${m[1] ? ` (${m[1]})` : ''}。関数名が間違っているか、まだ定義されていません。`,
-    fixes: ['関数名のスペル (大文字・小文字) を確認します', 'local function は、呼び出す場所より上に書く必要があります', 'メソッドは obj:Method() のように ":" で呼びます'],
-  })],
-  [/attempt to call missing method '([^']+)' of (\w+)/, m => ({ why: `${m[2]} に「${m[1]}」というメソッドはありません。`, fixes: ['メソッド名のスペルを確認します', '別の型の値が入っていないか print(typeof(値)) で確認します'] })],
-  [/attempt to call a (\w+) value/, m => ({ why: `${m[1]} 型の値を関数のように呼び出しました。`, fixes: ['変数に関数ではない値 (数値や文字列など) を上書きしていないか確認します', '余分な () が付いていないか確認します'] })],
-  [/attempt to perform arithmetic \((\w+)\) on (\w+)(?: and (\w+))?/, m => ({
-    why: `計算 (${m[1]}) に ${m[2] === 'nil' || m[3] === 'nil' ? 'nil が混ざっています。変数に数値が入っていません' : `${m[2]}${m[3] ? ' と ' + m[3] : ''} は使えません`}。`,
-    fixes: ['変数に初期値を入れます (例: local count = 0)', '文字列を数値にするには tonumber(値) を使います', 'テーブルのキー名が合っているか確認します'],
-  })],
-  [/attempt to concatenate (\w+) with (\w+)/, m => ({ why: `".." でつなげられるのは文字列と数値だけです (${m[1]} と ${m[2]} をつなげようとしました)。`, fixes: ['tostring(値) で文字列に変換します', '`こんにちは {name}` のような補間文字列を使うと安全です', 'nil の場合は 値 or "なし" と書くと既定値を使えます'] })],
-  [/attempt to compare (\w+) [<>=~]+ (\w+)/, m => ({ why: `${m[1]} と ${m[2]} は大小を比べられません。`, fixes: ['両方が数値か確認します (文字列なら tonumber で変換)', '変数が nil になっていないか確認します'] })],
-  [/attempt to get length of a (\w+) value/, m => ({ why: `# (長さ) はテーブルか文字列にしか使えません (${m[1]} に使いました)。`, fixes: ['変数にテーブルが入っているか確認します'] })],
-  [/attempt to iterate over a (\w+) value/, m => ({ why: `for ... in でくり返せるのはテーブルだけです (${m[1]} を渡しました)。`, fixes: ['GetChildren() や GetPlayers() の () を忘れていないか確認します', '変数が nil になっていないか確認します'] })],
-  [/attempt to modify a readonly table/, (m, c) => ({ why: '書き換えできないテーブル (ライブラリや保護されたテーブル) を変更しようとしました。', fixes: [c.mode === 'executor' ? 'setreadonly(テーブル, false) で書き込み可能にしてから変更します' : 'string や math などのライブラリは変更できません。別のテーブルを作ります'] })],
-  [/(\S+) is not a valid member of Model "Asset"/, () => ({
-    why: 'game:GetObjects で読み込んだはずのモデルが空です。Roblox のアセットはブラウザから読み込めないため、サンドボックスでは空の Model になります。',
-    fixes: ['Rayfield のように UI をアセットから読み込むライブラリは、ここでは表示できません。Obsidian・Linoria・Orion・Kavo・WindUI などはそのまま動きます', '実際のゲームでは正しく動く可能性があります'],
-  })],
-  [/HttpError: .*CORS/, () => ({
-    why: 'このサイトはブラウザから直接スクリプトを読み込めない設定になっています (本物のエグゼキューターでは読み込めます)。',
-    fixes: ['下の「中継を使って再実行」か「中身を登録」で使えるようになります', 'GitHub のスクリプトは raw.githubusercontent.com の URL なら直接読み込めます'],
-  })],
-  [/(\S+) is not a valid member of (\w+) "([^"]*)"/, m => ({
-    why: `${m[2]} 「${m[3]}」の中に「${m[1]}」という名前の子オブジェクトもプロパティもありません。`,
-    fixes: ['名前のスペル (大文字・小文字・空白) を確認します', 'まだ読み込まれていない可能性があるなら :WaitForChild("' + m[1] + '") を使います', 'あるか分からないなら :FindFirstChild("' + m[1] + '") で確認します'],
-  })],
-  [/(\S+) is not a valid member of (\w[\w.]*)/, m => ({ why: `${m[2]} に「${m[1]}」という項目はありません。`, fixes: ['名前のスペルを確認します'] })],
-  [/Unable to assign property (\w+)\. (.+) expected, got (.+)/, m => ({ why: `プロパティ ${m[1]} には ${m[2]} 型の値が必要ですが、${m[3]} を入れようとしました。`, fixes: [m[2] === 'Vector3' ? 'Vector3.new(x, y, z) で作ります' : m[2] === 'Color3' ? 'Color3.fromRGB(r, g, b) で作ります' : m[2] === 'UDim2' ? 'UDim2.new(...) / UDim2.fromScale(...) で作ります' : `${m[2]} 型の値を渡します`] })],
-  [/Unable to assign property (\w+)\. Property is read only/, m => ({ why: `プロパティ ${m[1]} は読み取り専用で、値を入れられません。`, fixes: ['別のプロパティやメソッドで変更します (例: Position ではなく CFrame / PivotTo)'] })],
-  [/Unable to create an Instance of type "([^"]*)"/, m => ({ why: `「${m[1]}」という種類の Instance は作れません。クラス名が間違っているか、作成できないクラスです。`, fixes: ['クラス名のスペルを確認します (例: "Part", "TextLabel")', 'サービスは game:GetService("名前") で取得します'] })],
-  [/invalid argument #(\d+) to '([^']+)' \((.+) expected, got (.+)\)/, m => ({ why: `${m[2]} の ${m[1]} 番目の引数には ${m[3]} が必要ですが、${m[4]} が渡されました。`, fixes: ['引数の順番と型を確認します', m[4] === 'nil' ? '渡している変数が nil になっています' : null] })],
-  [/missing argument #(\d+)(?: to '([^']+)')?/, m => ({ why: `${m[2] ? m[2] + ' の ' : ''}${m[1]} 番目の引数が足りません。`, fixes: ['必要な引数をすべて渡しているか確認します'] })],
-  [/Infinite yield possible on '(.+)'/, m => ({ why: `${m[1]} がずっと待ち続けています。その名前のオブジェクトが作られていません。`, fixes: ['名前のスペルを確認します', 'そのオブジェクトを作るコードが実行されているか確認します', 'WaitForChild("名前", 5) のように待ち時間を指定できます'] })],
-  [/stack overflow/, () => ({ why: '関数が自分自身を呼び続けて止まらなくなりました (無限再帰)。', fixes: ['再帰を終わらせる条件 (if ... then return end) があるか確認します'] })],
-  [/時間切れ|timeout|exceeded|連続実行/i, () => ({ why: '処理が長時間止まらなかったため、強制的に停止しました (無限ループの可能性があります)。', fixes: ['while true do の中に task.wait() を入れます', 'ループの終了条件が正しいか確認します'] })],
-  [/Module code did not return exactly one value/, () => ({ why: 'ModuleScript は最後に値を 1 つだけ return する必要があります。', fixes: ['ファイルの最後に return モジュール名 を書きます'] })],
-  [/Requested module was required recursively/, () => ({ why: '2 つのモジュールがお互いを require し合っています (循環参照)。', fixes: ['共通の部分を 3 つ目のモジュールに分けます'] })],
-  [/モジュール "([^"]*)" が見つかりません/, m => ({ why: `require で指定した「${m[1]}」がプロジェクトにありません。`, fixes: ['ファイル名とフォルダを確認します (左のファイル一覧)', 'require(script.Parent.モジュール名) の形で指定します'] })],
-  [/attempt to yield across metamethod/, () => ({ why: 'メタメソッド (__index など) や並べ替えの比較関数の中では、task.wait() などの待機はできません。', fixes: ['待機する処理を外に出すか、task.spawn(function() ... end) の中で行います'] })],
-  [/cannot resume dead coroutine/, () => ({ why: '終了したコルーチンをもう一度動かそうとしました。', fixes: ['coroutine.status(co) で状態を確認してから resume します'] })],
-  [/readfile: ファイル "([^"]*)" がありません/, m => ({ why: `workspace フォルダに「${m[1]}」がありません。`, fixes: [`if isfile("${m[1]}") then ... end で、あるかどうかを先に確認します`, '左のファイル一覧の workspace フォルダにファイルを作ると、readfile で読めます'] })],
-  [/base64decode: 不正/, () => ({ why: 'Base64 として正しくない文字列を渡しました。', fixes: ['文字列が途中で切れていないか確認します'] })],
-  [/HTTP|fetch|CORS|ネットワーク|Failed to fetch|NetworkError/i, () => ({ why: 'インターネット上の URL を取得できませんでした。ブラウザの制限 (CORS) で、アクセスを許可していないサイトからは取得できません。', fixes: ['raw.githubusercontent.com や pastebin.com/raw などは取得できます', '実際のエグゼキューターでは動く場合があります (この画面だけの制限です)'] })],
-  [/attempt to yield from outside a coroutine/, () => ({ why: '待機 (task.wait など) ができない場所で待機しようとしました。', fixes: ['task.spawn(function() ... end) の中で実行します'] })],
-  [/string expected, got (\w+)|number expected, got (\w+)|table expected, got (\w+)/, m => ({ why: `渡した値の型が違います (${m[1] || m[2] || m[3]} が渡されました)。`, fixes: ['引数の順番と、変数の中身を確認します'] })],
-]
+const q = s => `「${s}」`
 
-export function explainError(message, ctx = {}) {
-  if (!message) return null
-  for (const [re, fn] of RULES) {
+const RULES = {
+  NameError: [
+    [/name '(\w+)' is not defined\. Did you mean: '(\w+)'\?/, m => ({ why: `${q(m[1])} という名前は定義されていません。${q(m[2])} の書き間違いかもしれません。`, fixes: [`${m[1]} → ${m[2]} に直します`, '大文字・小文字の違いも別の名前になります'] })],
+    [/name '(\w+)' is not defined/, m => ({
+      why: `${q(m[1])} という名前 (変数・関数) はまだ作られていません。`,
+      fixes: [
+        /^(np|pd|plt|math|random|time|os|sys|json|re|datetime|csv)$/.test(m[1]) ? `ファイルの先頭で import します (例: ${({ np: 'import numpy as np', pd: 'import pandas as pd', plt: 'import matplotlib.pyplot as plt' })[m[1]] || 'import ' + m[1]})` : null,
+        /^(true|false|null|none|nil)$/i.test(m[1]) ? `Python では ${({ true: 'True', false: 'False', null: 'None', none: 'None', nil: 'None' })[m[1].toLowerCase()]} と書きます (最初が大文字)` : null,
+        'スペル (大文字・小文字) を確認します',
+        '使う行より上で、変数に値を入れたり def で関数を作ったりします',
+        '文字列のつもりなら "" で囲みます',
+      ],
+    })],
+    [/cannot access local variable '(\w+)'|local variable '(\w+)' referenced before assignment/, m => ({ why: `関数の中で ${q(m[1] || m[2])} に値を入れる前に使いました。関数の中で代入すると、その名前は関数の中だけの変数になります。`, fixes: ['関数の外の変数を書き換えたいなら、関数の先頭に global 名前 と書きます', '値は引数で受け取り、結果は return で返す書き方がおすすめです'] })],
+  ],
+  TypeError: [
+    [/can only concatenate str \(not "(\w+)"\) to str/, m => ({ why: `文字列と ${m[1]} は + でつなげられません。`, fixes: ['str(値) で文字列に変換します', 'f-string が便利です: f"合計は {total} です"'] })],
+    [/unsupported operand type\(s\) for ([^:]+): '(\w+)' and '(\w+)'/, m => ({ why: `${m[2]} と ${m[3]} は ${m[1].trim()} で計算できません。`, fixes: [m[2] === 'str' || m[3] === 'str' ? 'input() の結果は文字列です。int(…) や float(…) で数値にします' : null, m[2] === 'NoneType' || m[3] === 'NoneType' ? 'None が混ざっています。関数が return で値を返しているか確認します' : null, '値の型は print(type(値)) で確かめられます'] })],
+    [/'(\w+)' object is not callable/, m => ({ why: `${m[1]} の値を関数のように () で呼び出しました。`, fixes: [`組み込み関数と同じ名前 (list, str, sum など) の変数を作っていないか確認します`, '余分な () が付いていないか確認します'] })],
+    [/'(\w+)' object is not subscriptable/, m => ({ why: `${m[1]} の値に [ ] は使えません。`, fixes: [m[1] === 'NoneType' ? '値が None です。関数が return しているか確認します' : null, m[1] === 'function' || m[1] === 'method' ? '関数を呼び出すときは [ ] ではなく ( ) を使います' : null, 'リスト・辞書・文字列のつもりの変数に、別の値が入っていないか確認します'] })],
+    [/'(\w+)' object is not iterable/, m => ({ why: `${m[1]} の値は for でくり返せません。`, fixes: [m[1] === 'int' ? '数だけくり返すなら range(n) を使います (例: for i in range(10))' : null, 'リストや文字列が入っているか確認します'] })],
+    [/'(\w+)' object does not support item assignment/, m => ({ why: `${m[1]} は中身を書き換えられません${m[1] === 'str' || m[1] === 'tuple' ? ` (${m[1]} は変更できない型です)` : ''}。`, fixes: [m[1] === 'str' ? '新しい文字列を作ります (例: s = s[:i] + "x" + s[i+1:])' : null, m[1] === 'tuple' ? 'list(…) でリストにしてから変更します' : null] })],
+    [/(\w+)\(\) missing (\d+) required positional arguments?: (.+)/, m => ({ why: `${m[1]}() に必要な引数 ${m[3]} が足りません。`, fixes: [`呼び出すときに引数を ${m[2]} 個増やします`, 'クラスのメソッドなら、def の最初の引数が self になっているか確認します'] })],
+    [/(\w+)\(\) takes (\d+) positional arguments? but (\d+) (?:was|were) given/, m => ({ why: `${m[1]}() の引数は ${m[2]} 個ですが、${m[3]} 個渡しました。`, fixes: ['呼び出しの引数の数を確認します', 'メソッドなら def に self を書き忘れていないか確認します'] })],
+    [/(\w+)\(\) got an unexpected keyword argument '(\w+)'/, m => ({ why: `${m[1]}() に ${q(m[2])} という名前の引数はありません。`, fixes: ['引数の名前のスペルを確認します', '関数の上で長押し (またはマウスを乗せる) と、使える引数が分かります'] })],
+    [/'(<|>|<=|>=)' not supported between instances of '(\w+)' and '(\w+)'/, m => ({ why: `${m[2]} と ${m[3]} は ${m[1]} で比べられません。`, fixes: ['input() の結果は文字列です。int(…) で数値にしてから比べます', 'None が混ざっていないか確認します'] })],
+    [/list indices must be integers or slices, not (\w+)/, m => ({ why: `リストの [ ] には整数を入れます (${m[1]} を入れました)。`, fixes: [m[1] === 'str' ? 'int(…) で数値にします。辞書のつもりなら {} で作ります' : null, m[1] === 'float' ? 'int(…) か // (切り捨ての割り算) で整数にします' : null] })],
+  ],
+  ValueError: [
+    [/invalid literal for int\(\) with base 10: '(.*)'/, m => ({ why: `${q(m[1])} は整数に変換できません。`, fixes: [m[1] === '' ? '何も入力されていません。空のときの処理を入れます' : null, /\./.test(m[1]) ? '小数は float(…) を使います' : null, '数字だけが入っているか確認します (全角の数字や空白も使えません)', 'try: … except ValueError: で、変換できないときの処理を書けます'] })],
+    [/could not convert string to float: '(.*)'/, m => ({ why: `${q(m[1])} は小数に変換できません。`, fixes: ['数字と . だけが入っているか確認します'] })],
+    [/too many values to unpack|not enough values to unpack/, (m, e) => ({ why: `左側の変数の数と、右側の値の数が合っていません。(${e.message})`, fixes: ['a, b = … の変数の数を確認します', '辞書を for で回すときは .items() を付けます'] })],
+    [/math domain error/, () => ({ why: '数学的に計算できない値を渡しました (例: math.sqrt(-1)、math.log(0))。', fixes: ['渡す値の範囲を確認します'] })],
+    [/(\S+) is not in list/, m => ({ why: `リストの中に ${m[1]} はありません。`, fixes: ['先に if 値 in リスト: で確かめます'] })],
+  ],
+  IndexError: [[/(list|string|tuple) index out of range/, m => ({ why: `${({ list: 'リスト', string: '文字列', tuple: 'タプル' })[m[1]]}の範囲の外の番号を使いました。番号は 0 から 長さ-1 までです。`, fixes: ['len(…) で長さを確認します', 'for i in range(len(items)) の範囲を確認します', '空のリストではないか確認します'] })]],
+  KeyError: [[/^'?(.*?)'?$/, m => ({ why: `辞書にキー ${q(m[1])} がありません。`, fixes: ['キーのスペル (大文字・小文字) を確認します', 'd.get(キー) を使うと、ないときに None (または既定値) になります', 'if キー in d: で先に確かめられます'] })]],
+  AttributeError: [
+    [/'NoneType' object has no attribute '(\w+)'/, m => ({ why: `値が None なので .${m[1]} を使えません。`, fixes: ['関数が return で値を返しているか確認します', 'list.sort() や list.append() は None を返します (結果はリスト自体が変わります)'] })],
+    [/'(\w+)' object has no attribute '(\w+)'(?:\. Did you mean: '(\w+)'\?)?/, m => ({ why: `${m[1]} には ${q(m[2])} という属性 (メソッド) はありません。`, fixes: [m[3] ? `${q(m[3])} の書き間違いかもしれません` : null, m[1] === 'str' && /^(append|push)$/.test(m[2]) ? '文字列は + でつなげます' : null, m[1] === 'list' && /^(push|add|length|size)$/.test(m[2]) ? 'リストは append(…) で追加、len(…) で長さです' : null, 'スペルを確認します。. を打つと使える名前が候補に出ます'] })],
+    [/module '(\w+)' has no attribute '(\w+)'/, m => ({ why: `モジュール ${m[1]} に ${q(m[2])} はありません。`, fixes: ['名前のスペルを確認します', `自分のファイル名が ${m[1]}.py になっていると、本物の ${m[1]} の代わりに読み込まれます。ファイル名を変えます`] })],
+  ],
+  ZeroDivisionError: [[/./, () => ({ why: '0 で割り算をしました。', fixes: ['割る数が 0 のときの処理を if で分けます', 'リストの長さで割るときは、空でないか確認します'] })]],
+  ModuleNotFoundError: [[/No module named '([\w.]+)'/, m => ({ why: `${q(m[1])} というモジュール (ライブラリ) が見つかりません。`, fixes: ['名前のスペルを確認します', '自分のファイルなら、同じプロジェクトにあるか、フォルダに __init__.py があるか確認します', 'pip install はできません。使えるライブラリは「使い方 → 使えるライブラリ」で確認できます'] })]],
+  ImportError: [[/cannot import name '(\w+)' from '([\w.]+)'/, m => ({ why: `${m[2]} に ${q(m[1])} はありません。`, fixes: ['名前のスペルを確認します', 'ファイル同士がお互いを import している (循環 import) と起きることがあります'] })]],
+  RecursionError: [[/./, () => ({ why: '関数が自分自身を呼び出し続けて、終わらなくなりました。', fixes: ['再帰を止める条件 (if で return) があるか確認します', 'くり返しは for / while でも書けます'] })]],
+  IndentationError: [[/./, () => ({ why: '字下げ (行の先頭の空白) が正しくありません。Python は字下げでブロックを表します。', fixes: ['if / for / def などの次の行は、スペース 4 つ下げます', 'タブとスペースを混ぜないようにします (整形 ⇧⌥F で直せます)'] })]],
+  TabError: [[/./, () => ({ why: '字下げにタブとスペースが混ざっています。', fixes: ['整形 (⇧⌥F) で、スペースにそろえます'] })]],
+  SyntaxError: [
+    [/invalid character '(.)'/, m => ({ why: `使えない文字 ${q(m[1])} があります。全角の記号かもしれません。`, fixes: ['半角の記号に直します (エラーの行の電球から直せます)'] })],
+    [/expected ':'/, () => ({ why: 'if / for / while / def / class の行の最後に : が必要です。', fixes: ['行の最後に : を付けます'] })],
+    [/was never closed/, () => ({ why: '括弧が閉じられていません。', fixes: ['( [ { に対応する ) ] } を付けます'] })],
+    [/Missing parentheses in call to 'print'/, () => ({ why: 'Python 3 では print は関数です。', fixes: ['print("こんにちは") のように ( ) で囲みます'] })],
+    [/unterminated string literal/, () => ({ why: '文字列の " か \' が閉じられていません。', fixes: ['文字列の最後に、最初と同じ引用符を付けます'] })],
+    [/Maybe you meant '==' or ':=' instead of '='/, () => ({ why: '比べるときは == を使います (= は代入です)。', fixes: ['if a = b: → if a == b:'] })],
+    [/./, () => ({ why: '書き方 (文法) が正しくありません。', fixes: ['エラーの行と、その 1 つ上の行を確認します (括弧や : の付け忘れが多いです)'] })],
+  ],
+  FileNotFoundError: [[/No such file or directory: '(.+)'/, m => ({ why: `ファイル ${q(m[1])} が見つかりません。`, fixes: ['ファイル名のスペルを確認します', 'プロジェクトにそのファイルがあるか確認します (ファイルは ＋ で作れます)', 'フォルダの中なら "フォルダ名/ファイル名" と書きます'] })]],
+  UnicodeDecodeError: [[/./, () => ({ why: '文字コードの違うファイルを読もうとしました。', fixes: ['open(…, encoding="utf-8") を付けます。Excel の CSV なら encoding="cp932" を試します'] })]],
+  OverflowError: [[/./, () => ({ why: '数が大きすぎて計算できません。', fixes: ['小数 (float) の計算なら、整数 (int) で計算できないか考えます'] })]],
+  StopIteration: [[/./, () => ({ why: 'next(…) で、もう取り出す値がありません。', fixes: ['for ループを使うと、終わりを自動で扱えます'] })]],
+  AssertionError: [[/./, () => ({ why: 'assert の条件が成り立ちませんでした。', fixes: ['assert の式と、その時の値を確認します'] })]],
+  EOFError: [[/./, () => ({ why: 'input() で入力を待っている途中で、入力が終わりました。', fixes: ['入力欄に値を入れて「送る」を押します'] })]],
+  MemoryError: [[/./, () => ({ why: 'メモリが足りません。', fixes: ['大きなリストを一度に作らず、少しずつ処理します'] })]],
+}
+
+export function explainError(err) {
+  let type, message
+  if (typeof err === 'string') {
+    const lines = err.trim().split('\n')
+    const last = lines[lines.length - 1] || ''
+    const m = /^(\w+(?:Error|Exception|Interrupt|Exit|Warning|Iteration))(?::\s*(.*))?$/.exec(last.trim())
+    if (!m) return null
+    type = m[1]; message = m[2] || ''
+  } else if (err) {
+    type = err.type; message = err.message || ''
+  }
+  const rules = RULES[type]
+  if (!rules) return null
+  for (const [re, fn] of rules) {
     const m = re.exec(message)
     if (m) {
-      const r = fn(m, ctx)
+      const r = fn(m, { type, message })
       return { why: r.why, fixes: (r.fixes || []).filter(Boolean) }
     }
   }

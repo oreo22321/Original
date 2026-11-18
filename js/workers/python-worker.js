@@ -13,7 +13,7 @@ const CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`
 let post = m => self.postMessage(m)
 let py = null
 let loading = null
-let shared = null      // { interrupt: Int32Array, ctl: Int32Array, buf: Uint8Array } 共有メモリ (input と停止)
+let shared = null      // { interrupt, ctl, buf, dctl, dbuf } 共有メモリ (input・停止・デバッガー)
 let runId = 0
 let lastGlobals = null // 終わった実行の変数 (コンソールで続きを試せるように)
 let snapshot = new Map()
@@ -68,6 +68,7 @@ async function ensure() {
       p.setStdin({ stdin: readLine, isatty: true })
       if (shared) p.setInterruptBuffer(shared.interrupt)
       p.FS.mkdirTree(PROJECT)
+      p.globals.set('__fc_dbg_src', DEBUGGER)
       p.runPython(SETUP)
       py = p
       post({ type: 'status', state: 'ready', text: `Python ${p.runPython('import sys; sys.version.split()[0]')}` })
@@ -87,7 +88,7 @@ function readLine() {
   for (;;) {
     const r = Atomics.wait(shared.ctl, 0, 0, 250)
     if (Atomics.load(shared.ctl, 0) !== 0) break
-    if (r === 'timed-out' && shared.interrupt[0] !== 0) { post({ type: 'inputDone' }); return null }
+    if (r === 'timed-out' && shared.interrupt[0] === 2) { post({ type: 'inputDone' }); return null }
   }
   const state = Atomics.load(shared.ctl, 0)
   const len = Atomics.load(shared.ctl, 1)
@@ -155,34 +156,402 @@ def __fc_prepare_matplotlib():
         pass
 
 __fc_last = {"g": None, "err": None}
-def __fc_run(path, src):
+def __fc_run(path, src, dbg=None):
     g = {"__name__": "__main__", "__file__": __fc_project + "/" + path, "__builtins__": builtins}
     __fc_last["g"] = g
     __fc_last["err"] = None
+    opt = json.loads(dbg) if dbg else None
+    __fc_dbg["opt"] = opt
+    d = None
     try:
         code = compile(src, __fc_project + "/" + path, "exec")
-        exec(code, g)
+        # ブレークポイントがあるときだけデバッガーを付けて実行 (ないときは breakpoint() / 一時停止で途中から付ける)
+        if opt and opt.get("bps"):
+            d = __fc_dbg_start(opt)
+            d.run(code, g)
+        else:
+            exec(code, g)
     except BaseException as e:
         __fc_last["err"] = __fc_error(e)
+    finally:
+        d = __fc_dbg["cur"]
+        if d is not None:
+            try:
+                d.stop_trace()
+            except Exception:
+                pass
+        __fc_dbg["cur"] = None
+        __fc_dbg["opt"] = None
     return __fc_last["err"]
 
-def __fc_eval(code, g):
+def __fc_eval_in(code, g, l=None):
     import ast
     try:
         tree = ast.parse(code, "<console>", "exec")
         if tree.body and isinstance(tree.body[-1], ast.Expr):
             last = ast.Expression(tree.body.pop().value)
-            exec(compile(tree, "<console>", "exec"), g)
-            v = eval(compile(last, "<console>", "eval"), g)
-            return json.dumps({"ok": True, "value": None if v is None else repr(v)})
-        exec(compile(tree, "<console>", "exec"), g)
-        return json.dumps({"ok": True, "value": None})
+            exec(compile(tree, "<console>", "exec"), g, l)
+            v = eval(compile(last, "<console>", "eval"), g, l)
+            return {"ok": True, "value": None if v is None else repr(v)}
+        exec(compile(tree, "<console>", "exec"), g, l)
+        return {"ok": True, "value": None}
     except BaseException as e:
         info = json.loads(__fc_error(e))
-        return json.dumps({"ok": False, "type": info["type"], "error": info["text"].strip()})
+        return {"ok": False, "type": info["type"], "error": info["text"].strip()}
+
+def __fc_eval(code, g):
+    return json.dumps(__fc_eval_in(code, g))
+
+# ---- デバッガー (はじめて使うときに読み込む) ----
+__fc_dbg = {"cur": None, "loaded": False, "opt": None}
+def __fc_dbg_start(opt):
+    import signal
+    if not __fc_dbg["loaded"]:
+        exec(__fc_dbg_src, globals())
+        __fc_dbg["loaded"] = True
+    d = __FcDbg(opt.get("bps"), opt.get("watches"))
+    __fc_dbg["cur"] = d
+    signal.signal(signal.SIGUSR1, __fc_dbg_signal)
+    return d
+
+def __fc_dbg_attach(frame):
+    # 実行の途中からデバッガーを付ける
+    d = __fc_dbg["cur"] or __fc_dbg_start(__fc_dbg["opt"])
+    if getattr(d, "botframe", None) is None:
+        d.reset()
+        f = frame
+        while f is not None and not (f.f_code.co_filename.startswith(__fc_project + "/") and f.f_code.co_name == "<module>"):
+            f = f.f_back
+        d.botframe = f.f_back if f is not None else None
+        d.skip_first = False
+        d._set_stopinfo(d.botframe, None, -1)  # 止めずに走らせる (ブレークポイントだけで止まる)
+    return d
+
+def __fc_breakpointhook(*args, **kwargs):
+    # breakpoint() を書いた行で止まる
+    if __fc_dbg["opt"] is None:
+        print("breakpoint(): この環境ではデバッガーを使えません (ページを再読み込みしてください)", file=sys.stderr)
+        return
+    frame = sys._getframe(1)
+    d = __fc_dbg_attach(frame)
+    d.reason = {"kind": "breakpoint"}
+    d.pause_now(frame)
+sys.breakpointhook = __fc_breakpointhook
 `
 
 self.__fc_image = b64 => { flush(true); post({ type: 'image', data: b64 }) }
+
+// ---- デバッガーと画面のやりとり (止まっている間は共有メモリで指示を待つ) ----
+const DEBUGGER = `import bdb, reprlib, inspect, types, sys, json, js, re as _re
+
+# クラスの中では __ で始まる名前が変わってしまうので、別名で使う
+_FC_PROJECT = __fc_project
+_fc_eval_in = __fc_eval_in
+def _dbg_post(text):
+    js.__fc_dbg_post(text)
+def _dbg_wait():
+    return js.__fc_dbg_wait()
+
+class __FcDbg(bdb.Bdb):
+    # ForgeCode のデバッガー (Python 3.14 の sys.monitoring で動くので、止めない行はほぼ普通の速さ)
+    def __init__(self, bps, watches):
+        super().__init__(backend="monitoring")
+        self.watches = list(watches or [])
+        self.reason = None
+        self.refs = {}
+        self.ref_seq = 0
+        self.skip_first = True
+        self.rep = reprlib.Repr(maxlevel=2, maxtuple=8, maxlist=8, maxarray=8, maxdict=6, maxset=8, maxfrozenset=8, maxdeque=8, maxstring=80, maxlong=60, maxother=100)
+        self.set_bps(bps)
+
+    # ---- ブレークポイント ----
+    def set_bps(self, bps):
+        self.bps = {}
+        for path, lst in (bps or {}).items():
+            self.bps[path] = {int(b["line"]): b for b in lst}
+        self.breaks = {_FC_PROJECT + "/" + p: sorted(d) for p, d in self.bps.items() if d}
+
+    def ours(self, frame):
+        return frame.f_code.co_filename.startswith(_FC_PROJECT + "/")
+
+    def rel(self, frame):
+        return frame.f_code.co_filename[len(_FC_PROJECT) + 1:]
+
+    def stop_here(self, frame):
+        # 自分のファイルの中だけで止まる (ライブラリの中には入らない)
+        return self.ours(frame) and super().stop_here(frame)
+
+    def break_here(self, frame):
+        if not self.ours(frame):
+            return False
+        bp = self.bps.get(self.rel(frame), {}).get(frame.f_lineno)
+        if not bp:
+            return False
+        cond = (bp.get("cond") or "").strip()
+        if cond:
+            try:
+                if not eval(cond, frame.f_globals, frame.f_locals):
+                    return False
+            except Exception as e:
+                self.reason = {"kind": "condError", "error": f"{cond} → {type(e).__name__}: {e}"}
+                return True
+        log = (bp.get("log") or "").strip()
+        if log:
+            def sub(m):
+                try:
+                    return str(eval(m.group(1), frame.f_globals, frame.f_locals))
+                except Exception as e:
+                    return f"<{type(e).__name__}>"
+            text = _re.sub(r"\\{([^{}]+)\\}", sub, log)
+            _dbg_post(json.dumps({"type": "output", "items": [{"kind": "log", "text": f"{self.rel(frame)}:{frame.f_lineno}  {text}"}]}))
+            return False
+        self.reason = {"kind": "breakpoint"}
+        return True
+
+    # ---- 止まったとき ----
+    def user_call(self, frame, arg):
+        pass
+
+    def user_return(self, frame, value):
+        # 「外へ」: 呼び出し元の行で止まる (戻り値も表示)
+        caller = frame.f_back
+        if self.returnframe is frame and self.stopframe is caller and caller is not None and self.ours(caller):
+            self.interaction(caller, {"kind": "step"}, ret=(frame.f_code.co_name, value))
+
+    def user_exception(self, frame, info):
+        pass
+
+    def user_line(self, frame):
+        if self.skip_first:
+            # 実行を始めた直後: ブレークポイントがなければ走らせる
+            self.skip_first = False
+            if not self.break_here(frame):
+                self.set_continue()
+                return
+        reason = self.reason or {"kind": "step"}
+        self.reason = None
+        self.interaction(frame, reason)
+
+    def pause_now(self, frame):
+        # 実行中に「一時停止」/ breakpoint(): 次の自分の行で止まる
+        f = frame
+        while f is not None:
+            if self.ours(f):
+                f.f_trace = self.trace_dispatch
+                f.f_trace_lines = True
+            f = f.f_back
+        self.skip_first = False
+        self.set_step()
+        if sys.monitoring.get_tool(sys.monitoring.DEBUGGER_ID) is None:
+            self.start_trace()
+        self.monitoring_tracer.update_local_events(frame)
+        self.restart_events()
+
+    def retrace(self, frame):
+        # ブレークポイントを増やしたとき (止めずに走っている途中)
+        if not self.breaks:
+            return
+        f = frame
+        while f is not None:
+            if self.ours(f):
+                f.f_trace = self.trace_dispatch
+                f.f_trace_lines = True
+            f = f.f_back
+        if sys.monitoring.get_tool(sys.monitoring.DEBUGGER_ID) is None:
+            self.start_trace()
+        self.monitoring_tracer.update_local_events(frame)
+        self.restart_events()
+
+    # ---- 値の表示 ----
+    def val(self, v):
+        try:
+            if v is None:
+                return {"t": "nil", "v": "None"}
+            if isinstance(v, bool):
+                return {"t": "boolean", "v": repr(v)}
+            if isinstance(v, (int, float, complex)):
+                return {"t": "number", "v": self.rep.repr(v)}
+            if isinstance(v, str):
+                return {"t": "string", "v": self.rep.repr(v)}
+            if isinstance(v, type):
+                return {"t": "function", "v": f"<クラス {v.__name__}>", "ref": self.keep(v)}
+            if inspect.isroutine(v):
+                try:
+                    sig = str(inspect.signature(v))
+                except Exception:
+                    sig = "(…)"
+                return {"t": "function", "v": f"{getattr(v, '__name__', '関数')}{sig}"}
+            if isinstance(v, types.ModuleType):
+                return {"t": "function", "v": f"<モジュール {v.__name__}>"}
+            text = self.rep.repr(v)
+            n = ""
+            if isinstance(v, (list, tuple, dict, set, frozenset)):
+                n = f"{type(v).__name__} ({len(v)}) "
+            elif not isinstance(v, (bytes, bytearray)):
+                n = f"{type(v).__name__} "
+                if text.startswith(type(v).__name__):
+                    n = ""
+            ref = self.keep(v) if self.has_children(v) else None
+            out = {"t": "table", "v": (n + text)[:220]}
+            if ref:
+                out["ref"] = ref
+            return out
+        except Exception as e:
+            return {"t": "error", "v": f"<表示できません: {type(e).__name__}>"}
+
+    def keep(self, v):
+        self.ref_seq += 1
+        self.refs[self.ref_seq] = v
+        return self.ref_seq
+
+    def has_children(self, v):
+        if isinstance(v, (str, bytes, bytearray, int, float, complex, bool)) or v is None:
+            return False
+        if isinstance(v, (list, tuple, dict, set, frozenset)):
+            return len(v) > 0
+        return bool(getattr(v, "__dict__", None)) or bool(getattr(type(v), "__slots__", None))
+
+    def children(self, ref):
+        v = self.refs.get(ref)
+        items = []
+        if v is None:
+            return items
+        try:
+            if isinstance(v, dict):
+                for k, x in list(v.items())[:300]:
+                    items.append({"name": self.rep.repr(k), "value": self.val(x)})
+            elif isinstance(v, (list, tuple)):
+                for i, x in enumerate(v[:300]):
+                    items.append({"name": f"[{i}]", "value": self.val(x)})
+            elif isinstance(v, (set, frozenset)):
+                for x in list(v)[:300]:
+                    items.append({"name": "•", "value": self.val(x)})
+            else:
+                attrs = dict(getattr(v, "__dict__", None) or {})
+                for s in getattr(type(v), "__slots__", ()) or ():
+                    if hasattr(v, s):
+                        attrs[s] = getattr(v, s)
+                for k, x in list(attrs.items())[:300]:
+                    if not (k.startswith("__") and k.endswith("__")):
+                        items.append({"name": k, "value": self.val(x)})
+        except Exception as e:
+            items.append({"name": "(エラー)", "value": {"t": "error", "v": f"{type(e).__name__}: {e}"}})
+        return items
+
+    def var_list(self, d, glob=False):
+        out = []
+        for k, x in list(d.items()):
+            if k.startswith("__") and k.endswith("__"):
+                continue
+            if glob and (isinstance(x, types.ModuleType) or k.startswith("_")):
+                continue
+            out.append({"name": k, "value": self.val(x)})
+            if len(out) >= 300:
+                break
+        return out
+
+    def eval_watches(self, frame):
+        res = []
+        for code in self.watches:
+            try:
+                res.append({"code": code, "value": self.val(eval(code, frame.f_globals, frame.f_locals))})
+            except Exception as e:
+                res.append({"code": code, "error": f"{type(e).__name__}: {e}"})
+        return res
+
+    def snapshot(self, frame, reason, ret=None):
+        stack = []
+        f = frame
+        while f is not None:
+            if self.ours(f):
+                name = f.f_code.co_name
+                stack.append({"name": "(モジュール)" if name == "<module>" else name + "()", "file": self.rel(f), "line": f.f_lineno})
+            f = f.f_back
+        module = frame.f_code.co_name == "<module>"
+        local_vars = [] if module else self.var_list(frame.f_locals)
+        if ret is not None:
+            local_vars.insert(0, {"name": f"({ret[0]} の戻り値)", "value": self.val(ret[1])})
+        return {"type": "paused", "file": self.rel(frame), "line": frame.f_lineno, "reason": reason,
+                "locals": local_vars,
+                "globals": self.var_list(frame.f_globals, glob=True),
+                "stack": stack, "watches": self.eval_watches(frame)}
+
+    def interaction(self, frame, reason, ret=None):
+        self.refs = {}
+        _dbg_post(json.dumps(self.snapshot(frame, reason, ret)))
+        try:
+            while True:
+                cmd = json.loads(_dbg_wait())
+                t = cmd.get("type")
+                if t == "expand":
+                    _dbg_post(json.dumps({"type": "expanded", "id": cmd.get("id"), "items": self.children(cmd.get("ref"))}))
+                elif t == "watches":
+                    self.watches = list(cmd.get("list") or [])
+                    _dbg_post(json.dumps({"type": "watchValues", "watches": self.eval_watches(frame)}))
+                elif t == "breakpoints":
+                    self.set_bps(cmd.get("list"))
+                elif t == "eval":
+                    _dbg_post(json.dumps(dict(_fc_eval_in(cmd.get("code", ""), frame.f_globals, frame.f_locals), type="evalResult", id=cmd.get("id"))))
+                    # 値を変えたかもしれないので、表示を更新
+                    _dbg_post(json.dumps(self.snapshot(frame, reason, ret)))
+                elif t == "stop":
+                    raise KeyboardInterrupt
+                elif t == "debug":
+                    a = cmd.get("action")
+                    if a == "continue":
+                        self.set_continue()
+                    elif a == "over":
+                        self.set_next(frame)
+                    elif a == "in":
+                        self.set_step()
+                    elif a == "out":
+                        self.set_return(frame)
+                    else:
+                        continue
+                    break
+        finally:
+            self.refs = {}
+            _dbg_post(json.dumps({"type": "resumed"}))
+
+def __fc_dbg_signal(sig, frame):
+    # 画面からの指示 (実行中): 一時停止 / ブレークポイントの変更 / ウォッチの変更
+    d = __fc_dbg["cur"]
+    while True:
+        s = js.__fc_dbg_poll()
+        if not s:
+            break
+        cmd = json.loads(s)
+        t = cmd.get("type")
+        if d is None:
+            # ブレークポイントなしで走っている途中: 必要になったらデバッガーを付ける
+            if __fc_dbg["opt"] is None or not ((t == "debug" and cmd.get("action") == "pause") or (t == "breakpoints" and cmd.get("list"))):
+                continue
+            d = __fc_dbg_attach(frame)
+        if t == "breakpoints":
+            d.set_bps(cmd.get("list"))
+            d.retrace(frame)
+        elif t == "watches":
+            d.watches = list(cmd.get("list") or [])
+        elif t == "debug" and cmd.get("action") == "pause":
+            d.reason = {"kind": "pause"}
+            d.pause_now(frame)
+`
+function takeCmd() {
+  const len = Atomics.load(shared.dctl, 1)
+  const text = new TextDecoder().decode(shared.dbuf.slice(0, len))
+  Atomics.store(shared.dctl, 0, 0)
+  return text
+}
+self.__fc_dbg_post = text => { flush(true); post(JSON.parse(text)) }
+self.__fc_dbg_wait = () => {
+  flush(true)
+  for (;;) {
+    Atomics.wait(shared.dctl, 0, 0, 250)
+    if (Atomics.load(shared.dctl, 0) === 1) return takeCmd()
+    if (shared.interrupt[0] === 2) { shared.interrupt[0] = 0; return '{"type":"stop"}' }
+  }
+}
+self.__fc_dbg_poll = () => (shared && Atomics.load(shared.dctl, 0) === 1 ? takeCmd() : '')
 
 // ---- プロジェクトのファイル ----
 function writeProject(files) {
@@ -253,10 +622,12 @@ async function run(m) {
   try {
     py.globals.set('__fc_entry', m.entry)
     py.globals.set('__fc_src', src)
+    py.globals.set('__fc_dbgopt', shared && m.debug ? JSON.stringify(m.debug) : null)
     py.runPython('import os; os.chdir(__fc_project)')
     // 共有メモリがない (画面を待てない) ときは、input() を分かるエラーにする
     py.runPython(shared ? 'builtins.input = __fc_builtin_input' : 'builtins.input = __fc_no_input')
-    const errJson = py.runPython('__fc_run(__fc_entry, __fc_src)')
+    if (shared) { Atomics.store(shared.dctl, 0, 0) }
+    const errJson = py.runPython('__fc_run(__fc_entry, __fc_src, __fc_dbgopt)')
     if (lastGlobals) { try { lastGlobals.destroy() } catch {} }
     lastGlobals = py.runPython('__fc_last["g"]')
     if (errJson) {
@@ -301,7 +672,7 @@ self.onmessage = e => {
   const m = e.data
   if (!m) return
   if (m.type === 'init') {
-    if (m.interrupt && m.ctl && m.buf) shared = { interrupt: new Int32Array(m.interrupt), ctl: new Int32Array(m.ctl), buf: new Uint8Array(m.buf) }
+    if (m.interrupt && m.ctl && m.buf && m.dctl && m.dbuf) shared = { interrupt: new Int32Array(m.interrupt), ctl: new Int32Array(m.ctl), buf: new Uint8Array(m.buf), dctl: new Int32Array(m.dctl), dbuf: new Uint8Array(m.dbuf) }
     ensure().catch(err => post({ type: 'status', state: 'error', text: 'Python を読み込めませんでした: ' + (err && err.message || err) }))
   } else if (m.type === 'run') run(m)
   else if (m.type === 'eval') evalCode(m)

@@ -3,9 +3,10 @@
 // ・AI の変更は 1 回の依頼ごとに記録し、まとめて元に戻せるようにします
 // ・高性能モード (端末内 LLM) が設定されていれば、必要になったときに読み込みます
 import { app, refreshFiles } from './app.js'
-import { getSettings, getMode, emit } from './store.js'
+import { getSettings, emit } from './store.js'
 import * as vfs from './vfs.js'
-import { fileText, writeText, isFile, cleanPath, lintOpts, problemsOf, finishChanges, revertChanges, serial } from './agent.js'
+import { fileText, writeText, isFile, cleanPath, finishChanges, revertChanges, serial } from './agent.js'
+import { pyTools, pythonFilesChanged } from '../editor/python.js'
 import * as llm from '../ai/llm.js'
 import { setProjectCorpus } from '../ai/complete.js'
 
@@ -26,7 +27,6 @@ export function makeHost(session) {
   const record = async path => { if (!session.changes.has(path)) session.changes.set(path, { before: isFile(path) ? await fileText(path) : null }) }
   const focusFirst = () => session.focusEdits && session.changes.size <= 1
   const host = {
-    mode: getMode(),
     hasProject: !!app.project,
     files: () => app.files.filter(f => !f.dir).map(f => ({ path: f.path })),
     active() {
@@ -42,6 +42,7 @@ export function makeHost(session) {
       path = cleanPath(path)
       await record(path)
       await writeText(path, text, { focus: !!opts.focus && focusFirst() })
+      pythonFilesChanged()
     }),
     create: (path, text, opts = {}) => serial(async () => {
       path = cleanPath(path)
@@ -52,9 +53,10 @@ export function makeHost(session) {
       app.contents.set(path, text)
       await refreshFiles()
       await app.editors.open(path, { activate: !!opts.focus || focusFirst() })
+      pythonFilesChanged()
     }),
-    lintOpts: path => lintOpts(path || 'main.lua'),
-    problems: (path, text) => problemsOf(path, text, { max: 40 }),
+    // Python の解析 (pytools ワーカー: jedi / pyflakes / autopep8 / ast)。ファイルを書き換えたら、ほかのファイルの中身も送り直す
+    py: (type, args = {}) => pyTools(type, args, type === 'warm' ? 120000 : 30000),
     lastErrors() {
       if (!app.runner) return []
       return [...document.querySelectorAll('.out-error')].slice(-3).map(e => ({ text: e.dataset.text || e.textContent || '' })).filter(e => e.text)
@@ -123,7 +125,7 @@ export function refreshCorpus() {
   corpusTimer = setTimeout(() => {
     try {
       const files = []
-      for (const f of app.files) if (!f.dir && /\.luau?$/i.test(f.path)) { const t = app.contents.get(f.path); if (t) files.push({ path: f.path, text: t }) }
+      for (const f of app.files) if (!f.dir && /\.pyw?$/i.test(f.path)) { const t = app.contents.get(f.path); if (t) files.push({ path: f.path, text: t }) }
       setProjectCorpus(files).catch(() => {})
     } catch {}
   }, 3000)

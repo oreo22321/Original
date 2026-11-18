@@ -1,13 +1,12 @@
 // 設定画面
-import { getSettings, setSettings, resetSettings, getMode, DEFAULTS, on } from './store.js'
+import { getSettings, setSettings, resetSettings, DEFAULTS, on } from './store.js'
 import { THEMES } from '../editor/themes.js'
 import * as llm from '../ai/llm.js'
 import { h, icon, toast, modal, confirmDialog, download } from './ui.js'
 import * as vfs from './vfs.js'
-import { apiVersion } from '../editor/apidb.js'
-import { app, command, runCommand, setProjectKind } from './app.js'
+import { app, command, runCommand } from './app.js'
 
-export const APP_VERSION = '11.0.0'
+export const APP_VERSION = '12.0.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -18,8 +17,8 @@ const FONTS = [
 ]
 
 const PRESETS = [
-  { icon: 'sparkle', name: 'おまかせ (おすすめ)', desc: '補完・誤字の自動修正・エラーの解説をすべてオン', patch: { autocomplete: true, inlineSuggest: true, signatureHelp: true, lint: true, lintUndefined: true, lintUnused: true, lintTypos: true, lintTypes: true, errorLens: true, fixInput: true, autoCorrect: true, autoEnd: true, autoEndDelete: true, autoClose: true, autoSave: true, explainErrors: true } },
-  { icon: 'edit', name: '自分で書きたい', desc: '自動修正とインライン候補をオフ。チェックだけ残す', patch: { inlineSuggest: false, autoCorrect: false, fixInput: false, autoEnd: false, autoEndDelete: false, lint: true, errorLens: true } },
+  { icon: 'sparkle', name: 'おまかせ (おすすめ)', desc: '補完・誤字の自動修正・エラーの解説をすべてオン', patch: { autocomplete: true, aiInline: true, signatureHelp: true, lint: true, lintUndefined: true, lintUnused: true, errorLens: true, fixInput: true, autoCorrect: true, autoClose: true, autoSave: true, explainErrors: true } },
+  { icon: 'edit', name: '自分で書きたい', desc: '自動修正と AI の続きの提案をオフ。チェックだけ残す', patch: { aiInline: false, autoCorrect: false, fixInput: false, lint: true, errorLens: true } },
   { icon: 'eye', name: '大きな文字', desc: '見やすさ重視', patch: { fontSize: 18, lineHeight: 1.7, wordWrap: true } },
   { icon: 'history', name: '初期設定に戻す', desc: 'すべての設定を元に戻します', reset: true },
 ]
@@ -35,42 +34,35 @@ const SCHEMA = [
     { key: 'lineNumbers', type: 'bool', label: '行番号を表示' },
     { key: 'highlightLine', type: 'bool', label: 'カーソルのある行を強調' },
     { key: 'indentGuides', type: 'bool', label: 'インデントガイド (縦線)' },
-    { key: 'stickyScroll', type: 'bool', label: 'スティッキースクロール', desc: '長いコードをスクロールしても、いま見ている function / if / for の行を画面の上に固定表示します (タップでその行へ)' },
-    { key: 'highlightSymbols', type: 'bool', label: '同じ変数をハイライト', desc: 'カーソルを置いた変数を、使われている場所すべてで強調します (同じ名前の別の変数は除く)' },
+    { key: 'stickyScroll', type: 'bool', label: 'スティッキースクロール', desc: '長いコードをスクロールしても、いま見ている def / class / if / for の行を画面の上に固定表示します (タップでその行へ)' },
+    { key: 'highlightSymbols', type: 'bool', label: '同じ変数をハイライト', desc: 'カーソルを置いた単語を、ファイルの中で同じ単語すべてで強調します' },
     { key: 'rainbowBrackets', type: 'bool', label: '括弧を色分け' },
     { key: 'layout', type: 'select', label: '画面レイアウト', options: [['auto', '自動 (画面の幅で切り替え)'], ['mobile', 'スマホ向け'], ['desktop', 'タブレット / PC 向け']] },
   ] },
   { group: '入力の手助け', icon: 'sparkle', items: [
-    { key: 'autocomplete', type: 'bool', label: '入力中に補完候補を表示' },
-    { key: 'inlineSuggest', type: 'bool', label: 'インライン候補 (薄い文字の続き)', desc: 'Tab (スマホは ✓) で確定。イベントの引数や、似た行の続きを予測します' },
-    { key: 'signatureHelp', type: 'bool', label: '関数の引数ヒント' },
-    { key: 'autoEnd', type: 'bool', label: 'end を自動で入力', desc: 'if ... then / for ... do / function() を書いた時点で、次の行に end を追加します。自分で end を書いても二重になりません' },
-    { key: 'autoEndDelete', type: 'bool', label: 'ブロックを消したら end も消す', desc: 'if / for / while / function を消すと、対になっていた end も一緒に消します (⌘Z 1 回で元に戻せます)' },
+    { key: 'autocomplete', type: 'bool', label: '入力中に補完候補を表示', desc: 'jedi (Python 本物の解析) で、変数・関数・ライブラリの中身を候補に出します' },
+    { key: 'signatureHelp', type: 'bool', label: '関数の引数ヒント', desc: '( を打つと、その関数の引数と説明を表示します' },
     { key: 'autoClose', type: 'bool', label: '括弧・引用符を自動で閉じる' },
     { key: 'hover', type: 'bool', label: 'マウスを乗せたときの説明 (iPad / PC)' },
-    { key: 'colorPicker', type: 'bool', label: 'Color3 の色見本とカラーピッカー' },
   ] },
   { group: '誤字・エラー対策', icon: 'bulb', items: [
-    { key: 'lint', type: 'bool', label: 'エラー・警告を表示' },
+    { key: 'lint', type: 'bool', label: 'エラー・警告を表示', desc: '書き間違い (構文エラー) と pyflakes のチェックを、日本語で表示します' },
     { key: 'errorLens', type: 'bool', label: 'エラーの内容を行の右に表示', desc: 'タップすると直し方を選べます' },
-    { key: 'lintTypos', type: 'bool', label: '誤字を検出して「もしかして」を提案', desc: 'プロパティ名・サービス名・クラス名・Enum・関数名のスペルミス' },
-    { key: 'autoCorrect', type: 'bool', label: 'よくある打ち間違いを自動修正', desc: 'fucntion → function、locla → local など (元に戻せます)' },
-    { key: 'fixInput', type: 'bool', label: '全角記号・スマート引用符を半角に直す', desc: '（ ） ” ＝ や全角スペース、iPhone が変換した “ ” — など。文字列とコメントの中はそのまま' },
-    { key: 'lintTypes', type: 'bool', label: '型の間違いを警告 (型チェック)', desc: 'part.Transparency = "0.5" のようなプロパティへの代入、関数の引数、型注釈、文字列の + など。--!nocheck と書いたファイルは調べません' },
-    { key: 'lintUndefined', type: 'bool', label: '定義されていない変数を警告' },
-    { key: 'lintUnused', type: 'bool', label: '使われていない変数を薄く表示' },
+    { key: 'autoCorrect', type: 'bool', label: 'よくある打ち間違いを自動修正', desc: 'pirnt( → print(、improt → import、true → True など (元に戻せます)' },
+    { key: 'fixInput', type: 'bool', label: '全角記号・スマート引用符を半角に直す', desc: '（ ） ： ＝ や全角スペース、iPhone が変換した “ ” など。文字列とコメントの中はそのまま' },
+    { key: 'lintUndefined', type: 'bool', label: '定義されていない名前を警告', desc: '近い名前があれば「もしかして」を出します' },
+    { key: 'lintUnused', type: 'bool', label: '使っていない import・変数を薄く表示' },
     { key: 'explainErrors', type: 'bool', label: '実行エラーに日本語の解説を付ける' },
   ] },
   { group: 'エディタ', icon: 'edit', items: [
-    { key: 'tabSize', type: 'select', label: 'タブの幅', options: [[2, '2'], [4, '4'], [8, '8']], num: true },
-    { key: 'insertSpaces', type: 'bool', label: 'タブの代わりにスペースを入れる', desc: 'Roblox Studio の標準はタブです' },
+    { key: 'tabSize', type: 'select', label: '字下げの幅', options: [[2, '2'], [4, '4 (おすすめ)'], [8, '8']], num: true },
+    { key: 'insertSpaces', type: 'bool', label: 'タブの代わりにスペースを入れる', desc: 'Python はスペース 4 つが標準です (PEP 8)。タブとスペースが混ざるとエラーになります' },
     { key: 'pinchZoom', type: 'bool', label: 'ピンチで文字サイズを変更' },
   ] },
   { group: '保存', icon: 'save', items: [
     { key: 'autoSave', type: 'bool', label: '自動保存', desc: '入力が止まるとすぐ保存します。保存前にアプリが閉じても、下書きから復元されます' },
     { key: 'autoSaveDelay', type: 'range', min: 200, max: 3000, step: 100, label: '自動保存までの時間', unit: 'ms' },
-    { key: 'autoFormat', type: 'bool', label: '自動整形', desc: '書き終えた行の空白 (= や , の前後など) を整え、エラーのないときはファイル全体の字下げ・空行も裏で直します。カーソルのある行には触れません' },
-    { key: 'formatOnSave', type: 'bool', label: '保存時に整形', desc: '⌘/Ctrl + S で保存したとき' },
+    { key: 'formatOnSave', type: 'bool', label: '保存時に整形 (autopep8)', desc: '⌘/Ctrl + S で保存したとき、PEP 8 に合わせて空白や空行を整えます' },
     { key: 'trimOnSave', type: 'bool', label: '保存時に行末の空白を削除' },
     { key: 'confirmDelete', type: 'bool', label: '削除の前に確認' },
     { key: 'githubSync', type: 'action', label: 'GitHub と同期 (自動バックアップ)', desc: 'プロジェクトを GitHub のリポジトリに自動で保存します。端末が壊れても消えず、PC からも開けます', button: '設定', run: () => runCommand('githubSync') },
@@ -78,13 +70,8 @@ const SCHEMA = [
   { group: '実行', icon: 'play', items: [
     { key: 'clearOnRun', type: 'bool', label: '実行前に出力をクリア' },
     { key: 'groupOutput', type: 'bool', label: '同じ出力をまとめる (×3 のように表示)' },
-    { key: 'outputTime', type: 'bool', label: '出力に経過時間を表示' },
-    { key: 'timeLimit', type: 'range', min: 1, max: 60, label: '連続実行の上限 (無限ループ対策)', unit: '秒' },
-    { key: 'maxRunTime', type: 'range', min: 0, max: 600, step: 10, label: '最大実行時間', unit: '秒', desc: '0 で無制限。GUI やボタンの操作待ちの間は数えません' },
-    { key: 'netProxy', type: 'select', label: '外部スクリプトの中継サーバー', desc: 'game:HttpGet で読み込む URL が、ブラウザの制限 (CORS) で直接取れないときだけ使います。使うと、その URL が中継サーバーの運営者に送られます (ヘッダーや本文を付けた request は中継しません)', options: [['', '使わない'], ['corsproxy', 'corsproxy.io'], ['allorigins', 'allorigins.win']] },
-    { key: 'liveRelay', type: 'text', label: '実機連携の中継サーバー', desc: 'Delta などのエグゼキューターとつなぐための中継サーバーの URL (https://…)。空のときは、アプリに組み込まれた中継サーバーか、中継サーバーと同じ場所から開いたときはその場所を自動で使います。つなぎ方は出力パネルの「実機」タブで確認できます' },
-    { key: 'liveOpen', type: 'action', label: '実機連携 (エグゼキューター)', desc: '▶ のスクリプトを実際のゲームの中で実行し、出力・エラーを ForgeCode に表示します', button: '開く', run: () => runCommand('liveOpen') },
-    { key: 'remoteScripts', type: 'action', label: '取得した外部スクリプト', desc: 'loadstring で読み込んだスクリプトはこの端末に保存され、オフラインでも動きます', button: '一覧を開く', run: () => runCommand('remoteScripts') },
+    { key: 'maxRunTime', type: 'range', min: 0, max: 600, step: 10, label: '最大実行時間', unit: '秒', desc: '0 で無制限。超えたら止めます (無限ループ対策)。input() の入力待ちと一時停止の間は数えません' },
+    { key: 'packages', type: 'action', label: '使えるライブラリ', desc: 'numpy・pandas・matplotlib などは import するだけで使えます (初回だけインターネットから読み込みます)', button: '一覧', run: () => runCommand('help', 'packages') },
   ] },
   { group: 'AI (Forge AI)', icon: 'sparkle', items: [
     { key: 'aiAbout', type: 'custom', label: 'Forge AI について 内蔵 オフライン', render: () => aiAboutRow() },
@@ -119,15 +106,6 @@ export class SettingsView {
     const body = this.body
     body.innerHTML = ''
     if (!this.filter) {
-      // プロジェクトのモード
-      if (app.project) {
-        const mode = getMode()
-        body.append(h('div', { class: 'set-group-title' }, icon('swap', 16), 'このプロジェクトのモード'))
-        body.append(h('div', { class: 'mode-cards' },
-          [['studio', 'cube', 'Roblox Studio', 'ゲーム用のスクリプト。Roblox API のみ'], ['executor', 'bolt', 'Executor', 'エグゼキューター API も補完・実行']].map(([id, ic, name, desc]) =>
-            h('button', { class: 'mode-card k-' + id + (mode === id ? ' on' : ''), onclick: async () => { await setProjectKind(id); this.render(); toast(`${name} モードにしました`, { icon: ic }) } },
-              icon(ic, 22), h('div', null, h('div', { class: 'preset-name' }, name), h('div', { class: 'preset-desc' }, desc)), mode === id ? icon('check', 18) : null))))
-      }
       body.append(h('div', { class: 'set-group-title' }, icon('sparkle', 16), 'かんたん設定'))
       const grid = h('div', { class: 'preset-grid' })
       for (const p of PRESETS) {
@@ -163,7 +141,7 @@ export class SettingsView {
       body.append(box)
       body.append(h('div', { class: 'set-group-title' }, icon('info', 16), '情報'))
       body.append(h('div', { class: 'set-group' },
-        h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, `ForgeCode ${APP_VERSION}`), h('div', { class: 'set-desc' }, `Roblox API: ${apiVersion()} ・ エディタ: CodeMirror 6`))),
+        h('div', { class: 'set-row' }, h('div', { class: 'set-text' }, h('div', { class: 'set-label' }, `ForgeCode ${APP_VERSION}`), h('div', { class: 'set-desc' }, `Python 3.14 (Pyodide 314) ・ 補完: jedi ・ チェック: pyflakes ・ 整形: autopep8 ・ エディタ: CodeMirror 6`))),
         this.actionRow('アプリを最新版に更新', 'キャッシュを消して再読み込みします', '更新', async () => {
           try { const keys = await caches.keys(); await Promise.all(keys.map(k => caches.delete(k))) } catch {}
           try { const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r => r.update())) } catch {}

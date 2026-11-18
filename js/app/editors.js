@@ -1,13 +1,12 @@
 // 開いているファイル (タブ) とエディタ画面の管理
 import { EditorView, EditorSelection, forEachDiagnostic, forceLinting, undo } from '../../vendor/codemirror.js'
-import { createState, reconfigureEffects, langOf, scriptKindOf, LANG_LABELS, KIND_LABELS } from '../editor/setup.js'
+import { createState, reconfigureEffects, langOf, LANG_LABELS } from '../editor/setup.js'
 import { makeAiProvider } from '../editor/ai.js'
-import { formatLuau, tidy } from '../editor/format.js'
+import { formatPython } from '../editor/python.js'
 import { setRunError } from '../editor/errorlens.js'
-import { intel } from '../editor/luau-intel.js'
 import * as vfs from './vfs.js'
 import { app, runCommand, persistSession, command } from './app.js'
-import { getSettings, setSettings, getMode, emit, on } from './store.js'
+import { getSettings, setSettings, emit, on } from './store.js'
 import { h, icon, fileIcon, toast, menu, onLongPress, confirmDialog, copyText, modal } from './ui.js'
 import { renderMarkdown } from './markdown.js'
 import { bpStore } from './debug-panel.js'
@@ -32,15 +31,6 @@ export class EditorManager {
     this.build()
     on('files', () => this.renderTabs())
     on('ai', () => this.renderEmpty())
-    on('mode', () => { this.reconfigureAll('mode'); this.relint(); this.renderBreadcrumb() })
-    // require したモジュールの中身を補完に使う (開いているファイルは編集中の内容を優先)
-    intel.moduleSource = name => {
-      const re = new RegExp(`(^|/)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\.server|\\.client)?\\.luau?$`)
-      const init = new RegExp(`(^|/)${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/init\\.luau?$`)
-      for (const [path, doc] of this.docs) if (re.test(path) || init.test(path)) return doc.state.doc.toString()
-      for (const [path, src] of app.contents) if (re.test(path) || init.test(path)) return src
-      return null
-    }
   }
 
   build() {
@@ -68,7 +58,6 @@ export class EditorManager {
   ctxFor(doc) {
     return {
       getSettings,
-      getMode,
       get path() { return doc.path },
       get lang() { return doc.lang },
       commands: {
@@ -87,7 +76,7 @@ export class EditorManager {
         command: (id, ...a) => runCommand(id, ...a),
       },
       onUpdate: u => this.onUpdate(doc, u),
-      aiProvider: this.aiProvider || (this.aiProvider = makeAiProvider(() => ({ lang: this.activeDoc() ? this.activeDoc().lang : 'text', name: this.active || '', mode: getMode() }))),
+      aiProvider: this.aiProvider || (this.aiProvider = makeAiProvider(() => ({ lang: this.activeDoc() ? this.activeDoc().lang : 'text', name: this.active || '', mode: 'python' }))),
       aiReady: () => true,
       onAiError: e => { if (!this.aiErrShown) { this.aiErrShown = true; toast('AI の候補: ' + e.message, { kind: 'error', duration: 5000 }); setTimeout(() => { this.aiErrShown = false }, 30000) } },
       onScale: size => {
@@ -274,12 +263,15 @@ export class EditorManager {
     clearTimeout(doc.saveTimer)
     if (doc.saving) { doc.saveAgain = true; return doc.saving }
     const s = getSettings()
-    if (!auto && (s.formatOnSave || s.trimOnSave)) {
+    if (!auto && s.trimOnSave) {
       const text = doc.state.doc.toString()
-      let next = text
-      try { if (s.formatOnSave && doc.lang === 'luau') next = formatLuau(next, indentStr()) } catch {}
-      if (s.trimOnSave) next = next.replace(/[ \t]+$/gm, '')
+      const next = text.replace(/[ \t]+$/gm, '')
       if (next !== text) this.replaceAll(doc, next)
+    }
+    // 保存時の整形 (Python は autopep8。終わったらもう一度保存する)
+    if (!auto && s.formatOnSave && doc.lang === 'python') {
+      const v = this.viewFor(doc.path)
+      if (v) formatPython(v).then(changed => { if (changed) this.save(doc.path, { auto: true }) }, () => {})
     }
     if (auto && !doc.dirty) return Promise.resolve()
     const pid = app.project.id
@@ -338,31 +330,34 @@ export class EditorManager {
     }
   }
 
-  format() {
+  async format() {
     const doc = this.activeDoc()
     if (!doc) return
     const text = doc.state.doc.toString()
+    if (doc.lang === 'python') {
+      const view = this.viewFor(doc.path)
+      if (!view) return
+      const t = toast('整形しています…', { spinner: true, duration: 30000 })
+      try {
+        const changed = await formatPython(view, { aggressive: true })
+        t.close()
+        toast(changed ? '整形しました (PEP 8)' : '整形済みです', { icon: changed ? 'format' : undefined, duration: 1200 })
+      } catch (e) {
+        t.close()
+        toast('整形できませんでした: ' + (e && e.message || e), { kind: 'error' })
+      }
+      return
+    }
     let next
     try {
-      if (doc.lang === 'luau') next = formatLuau(text, indentStr()).replace(/[ \t]+$/gm, '')
-      else if (doc.lang === 'json') next = JSON.stringify(JSON.parse(text), null, getSettings().insertSpaces ? getSettings().tabSize : '\t') + '\n'
-      else next = tidy(text)
+      if (doc.lang === 'json') next = JSON.stringify(JSON.parse(text), null, getSettings().insertSpaces ? getSettings().tabSize : '\t') + '\n'
+      else next = text.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').replace(/\n*$/, '\n')
     } catch (e) {
       toast(e.message, { kind: 'error' })
       return
     }
     if (next !== text) {
-      const view = this.viewFor(doc.path)
-      // カーソルは同じ行の同じ文字へ
-      const sel = doc.state.selection.main.head
-      const line = doc.state.doc.lineAt(sel)
-      const colFromText = sel - line.from - (/^[ \t]*/.exec(line.text)[0].length)
       this.replaceAll(doc, next)
-      if (view) {
-        const nl = view.state.doc.line(Math.min(view.state.doc.lines, line.number))
-        const pos = Math.min(nl.to, nl.from + /^[ \t]*/.exec(nl.text)[0].length + Math.max(0, colFromText))
-        view.dispatch({ selection: EditorSelection.cursor(pos) })
-      }
       toast('整形しました', { icon: 'format', duration: 1200 })
     } else toast('整形済みです', { duration: 1000 })
   }
@@ -443,8 +438,8 @@ export class EditorManager {
     const sel = doc.state.selection
     doc.path = to
     const newLang = langOf(to)
-    // 種類 (言語・サーバー/クライアント) が変わったら作り直す
-    if (newLang !== doc.lang || scriptKindOf(from, 'studio') !== scriptKindOf(to, 'studio')) {
+    // 言語が変わったら作り直す
+    if (newLang !== doc.lang) {
       doc.lang = newLang
       doc.ctx = this.ctxFor(doc)
       const dirty = doc.dirty
@@ -502,7 +497,7 @@ export class EditorManager {
   // ---- 実行時エラーの表示 ----
   markRunError(path, line, message) {
     const doc = this.docs.get(path)
-    if (!doc || doc.lang !== 'luau') return
+    if (!doc || doc.lang !== 'python') return
     const effects = setRunError.of({ line, message })
     const v = this.viewFor(path)
     if (v) v.dispatch({ effects })
@@ -510,7 +505,7 @@ export class EditorManager {
   }
   clearRunErrors() {
     for (const doc of this.docs.values()) {
-      if (doc.lang !== 'luau') continue
+      if (doc.lang !== 'python') continue
       const effects = setRunError.of(null)
       const v = this.viewFor(doc.path)
       if (v) v.dispatch({ effects })
@@ -681,8 +676,7 @@ export class EditorManager {
       if (i) this.breadcrumb.append(icon('chevronRight', 12))
       this.breadcrumb.append(h('span', { class: i === parts.length - 1 ? 'crumb last' : 'crumb' }, p))
     })
-    const kind = scriptKindOf(doc.path, getMode())
-    this.breadcrumb.append(h('span', { class: 'crumb-lang' + (kind ? ' k-' + kind : '') }, kind ? KIND_LABELS[kind] : LANG_LABELS[doc.lang] || doc.lang))
+    this.breadcrumb.append(h('span', { class: 'crumb-lang' + (doc.lang === 'python' ? ' k-python' : '') }, LANG_LABELS[doc.lang] || doc.lang))
   }
 
   renderEmpty() {
@@ -716,12 +710,7 @@ export class EditorManager {
   }
 }
 
-function indentStr() {
-  const s = getSettings()
-  return s.insertSpaces ? ' '.repeat(s.tabSize) : '\t'
-}
-
 command('quickFix', 'この行のエラーを修正', () => app.editors.quickFix(), { icon: 'wand', key: '⌘.' })
-command('fixAllTypos', '誤字・全角記号をまとめて直す', () => app.editors.fixAllTypos(), { icon: 'wand' })
+command('fixAllTypos', '全角記号などをまとめて直す', () => app.editors.fixAllTypos(), { icon: 'wand' })
 
 export { modal }

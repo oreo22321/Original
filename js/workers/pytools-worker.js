@@ -5,6 +5,7 @@
 // 実行中のプログラムとは別のワーカーなので、プログラムが動いていても補完やチェックは止まりません
 // ライブラリはアプリに同梱 (vendor/pywheels)。オフラインでも使えます
 import { loadPyodide } from '../../vendor/pyodide/pyodide.mjs'
+import { ANALYSIS } from './py-analysis.js'
 
 const PROJECT = '/home/pyodide/project'
 const WHEELS = ['parso-0.8.6-py2.py3-none-any.whl', 'jedi-0.19.2-py2.py3-none-any.whl', 'pyflakes-4.1.0-py2.py3-none-any.whl', 'pycodestyle-2.15.0-py2.py3-none-any.whl', 'autopep8-2.3.2-py2.py3-none-any.whl']
@@ -35,6 +36,7 @@ function ensure() {
       p.FS.mkdirTree('/tmp/wheels')
       for (const w of WHEELS) p.FS.writeFile('/tmp/wheels/' + w, await bytes(local('../../vendor/pywheels/' + w)))
       p.runPython(TOOLS)
+      p.runPython(ANALYSIS)
       py = p
       // jedi の初回は遅いので、先に一度動かしておく
       try { p.runPython('__fct_warm()') } catch {}
@@ -140,6 +142,53 @@ def __fct_goto(code, line, col, path):
         out.append({"name": n.name, "file": rel, "line": n.line, "col": n.column, "builtin": n.in_builtin_module(), "module": n.module_name or ""})
     return json.dumps(out)
 
+def __fct_rel(n):
+    p = str(n.module_path) if n.module_path else ""
+    return p[len(PROJECT) + 1:] if p.startswith(PROJECT + "/") else None
+
+def __fct_refs(code, line, col, path):
+    # 参照 (プロジェクトのファイルの中だけ)
+    out = []
+    for n in __fct_script(code, path).get_references(line, col, include_builtins=False)[:400]:
+        rel = __fct_rel(n)
+        if rel is None:
+            continue
+        out.append({"name": n.name, "file": rel, "line": n.line, "col": n.column, "decl": n.is_definition(), "code": (n.get_line_code() or "").rstrip("\\n")})
+    return json.dumps(out)
+
+def __fct_rename(code, line, col, path, new_name):
+    # 名前の変更: 変わるファイルと、その新しい中身
+    import jedi
+    try:
+        ref = __fct_script(code, path).rename(line, col, new_name=new_name)
+    except jedi.RefactoringError as e:
+        return json.dumps({"error": str(e)})
+    files = {}
+    for p, ch in ref.get_changed_files().items():
+        sp = str(p)
+        rel = sp[len(PROJECT) + 1:] if sp.startswith(PROJECT + "/") else None
+        if rel is None:
+            return json.dumps({"error": "プロジェクトの外のファイル (" + sp + ") が変わるため、変更できません"})
+        files[rel] = ch.get_new_code()
+    return json.dumps({"files": files})
+
+def __fct_outline(code, path):
+    # ファイルの中の関数・クラス (アウトライン)
+    import jedi
+    out = []
+    def walk(names, depth):
+        for n in names:
+            if n.type not in ("function", "class"):
+                continue
+            out.append({"name": n.name, "type": n.type, "line": n.line, "col": n.column, "depth": depth, "desc": n.description})
+            if depth < 3:
+                try:
+                    walk(n.defined_names(), depth + 1)
+                except Exception:
+                    pass
+    walk(__fct_script(code, path).get_names(all_scopes=False, definitions=True), 0)
+    return json.dumps(out)
+
 def __fct_format(code, aggressive):
     import autopep8
     return autopep8.fix_code(code, options={"aggressive": aggressive, "max_line_length": 120, "ignore": ["E501", "W6"]})
@@ -168,7 +217,13 @@ self.onmessage = async e => {
       case 'signature': result = JSON.parse(call('__fct_signature', m.code, m.line, m.col, m.path || 'main.py')); break
       case 'help': result = JSON.parse(call('__fct_help', m.code, m.line, m.col, m.path || 'main.py')); break
       case 'goto': result = JSON.parse(call('__fct_goto', m.code, m.line, m.col, m.path || 'main.py')); break
+      case 'refs': result = JSON.parse(call('__fct_refs', m.code, m.line, m.col, m.path || 'main.py')); break
+      case 'rename': result = JSON.parse(call('__fct_rename', m.code, m.line, m.col, m.path || 'main.py', m.name)); break
+      case 'outline': result = JSON.parse(call('__fct_outline', m.code, m.path || 'main.py')); break
       case 'format': result = call('__fct_format', m.code, m.aggressive ? 1 : 0); break
+      case 'describe': result = JSON.parse(call('__fca_describe', m.code)); break
+      case 'review': result = JSON.parse(call('__fca_review', m.code)); break
+      case 'typehints': result = JSON.parse(call('__fca_typehints', m.code, m.from || 1, m.to || 1e9)); break
       case 'warm': result = true; break
       default: throw new Error('unknown request: ' + m.type)
     }

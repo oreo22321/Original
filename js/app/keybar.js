@@ -6,7 +6,7 @@ import {
 import { app, runCommand } from './app.js'
 import { getSettings, on } from './store.js'
 import { h, icon, haptic } from './ui.js'
-import { acceptGhost, hasGhost } from '../editor/inline.js'
+import { acceptGhost, hasGhost } from '../editor/ghost.js'
 
 export function typeText(view, text) {
   const { state } = view

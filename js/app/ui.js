@@ -1,5 +1,4 @@
 // UI の共通部品: DOM 作成、アイコン、トースト、ダイアログ、メニュー
-import { getMode } from './store.js'
 export function h(tag, props, ...children) {
   const el = document.createElement(tag)
   if (props) {
@@ -82,6 +81,7 @@ const P = {
   filter: '<path d="M3 5h18l-7 8.5V19l-4-2v-3.5z"/>',
   wand: '<path d="M4 20 15 9l-2-2L2 18z" transform="translate(1 1)"/><path d="m17 3 .9 2.1L20 6l-2.1.9L17 9l-.9-2.1L14 6l2.1-.9zM20 13l.6 1.4L22 15l-1.4.6L20 17l-.6-1.4L18 15l1.4-.6z"/>',
   bolt: '<path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12z"/>',
+  python: '<path d="M12 3H9.5A2.5 2.5 0 0 0 7 5.5V8h5v1H5.5A2.5 2.5 0 0 0 3 11.5v2A2.5 2.5 0 0 0 5.5 16H7v-2.5A2.5 2.5 0 0 1 9.5 11h5A2.5 2.5 0 0 0 17 8.5v-3A2.5 2.5 0 0 0 14.5 3z"/><path d="M12 21h2.5a2.5 2.5 0 0 0 2.5-2.5V16h-5v-1h6.5a2.5 2.5 0 0 0 2.5-2.5v-2A2.5 2.5 0 0 0 18.5 8H17v2.5a2.5 2.5 0 0 1-2.5 2.5h-5A2.5 2.5 0 0 0 7 15.5v3A2.5 2.5 0 0 0 9.5 21z"/><path d="M10 5.6h.01M14 18.4h.01"/>',
   window: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M6.5 6.5h.01M9.5 6.5h.01"/>',
   bulb: '<path d="M9.5 18h5M10.5 21h3"/><path d="M12 3a6 6 0 0 0-4 10.5c.8.8 1.2 1.6 1.3 2.5h5.4c.1-.9.5-1.7 1.3-2.5A6 6 0 0 0 12 3z"/>',
   pin: '<path d="M12 16v6M8.5 3h7l-1 6 3.5 4.500H6L9.5 9z"/>',
@@ -117,23 +117,23 @@ export function icon(name, size = 20, cls = '') {
   return span
 }
 
-// ファイルの種類を表すアイコン (Studio の Script / LocalScript / ModuleScript と同じ色分け)
-// ファイルの種類 (色は彩度を抑えて、種類の違いが分かる程度に)
+// ファイルの種類を表すアイコン (色は彩度を抑えて、種類の違いが分かる程度に)
 const FILE_KINDS = {
-  server: ['server', '#6fae8a', 'Script (サーバー)'],
-  client: ['device', '#7f9fd6', 'LocalScript (クライアント)'],
-  module: ['cube', '#a493d6', 'ModuleScript'],
-  executor: ['bolt', '#c9a062', 'エグゼキュータースクリプト'],
+  python: ['python', '#6f9fd8', 'Python'],
+  package: ['cube', '#a493d6', 'パッケージ (__init__.py)'],
+  test: ['check', '#6fae8a', 'テスト'],
   json: ['braces', '#b3a36e', 'JSON'],
+  csv: ['layers', '#8fae6f', 'CSV (表のデータ)'],
   md: ['book', '#8d9097', 'メモ (Markdown)'],
   text: ['text', '#8d9097', 'テキスト'],
 }
 export function fileKind(path) {
-  const m = /\.(server|client)?\.?(luau?|json|md|markdown|txt)$/i.exec(path)
+  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  const m = /\.(pyw?|pyi|json|md|markdown|csv|tsv|txt)$/.exec(name)
   if (!m) return 'text'
-  const ext = m[2].toLowerCase()
-  if (ext === 'lua' || ext === 'luau') return m[1] ? m[1].toLowerCase() : (getMode() === 'executor' ? 'executor' : 'module')
-  return ext === 'json' ? 'json' : ext === 'txt' ? 'text' : 'md'
+  const ext = m[1]
+  if (ext.startsWith('py')) return name === '__init__.py' ? 'package' : /^test_|_test\.py$/.test(name) ? 'test' : 'python'
+  return ext === 'json' ? 'json' : ext === 'csv' || ext === 'tsv' ? 'csv' : ext === 'txt' ? 'text' : 'md'
 }
 export function fileIcon(path, dir, open) {
   if (dir) return icon(open ? 'folderOpen' : 'folder', 18, 'fi-folder')

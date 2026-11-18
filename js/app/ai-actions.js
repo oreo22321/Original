@@ -4,12 +4,11 @@ import { app, command, runCommand } from './app.js'
 import { emit } from './store.js'
 import { toast, menu, promptDialog } from './ui.js'
 import { askAi } from './ai-host.js'
-import { lintOpts } from './agent.js'
-import { requestAiGhost } from '../editor/inline.js'
-import { repairSyntax, applyAction } from '../ai/repair.js'
-import { checkSyntax } from '../luau/parser.js'
-import { lintLuau } from '../editor/lint.js'
-import { undo } from '../../vendor/codemirror.js'
+import { minimalChange } from './agent.js'
+import { requestAiGhost } from '../editor/ghost.js'
+import { pyTools } from '../editor/python.js'
+import { fixAll } from '../ai/repair.js'
+import { undo, forEachDiagnostic } from '../../vendor/codemirror.js'
 
 let busy = false
 
@@ -51,7 +50,7 @@ command('aiSuggest', 'AI: 続きを提案', async () => {
   if (!view.state.selection.main.empty) { runCommand('aiSelectionMenu'); return }
   try {
     const ok = await requestAiGhost(view, doc.ctx.aiProvider)
-    if (!ok) toast('提案はありませんでした。コメント (-- 触れたら死ぬ など) を書いて次の行で頼むと、コードを組み立てます', { duration: 3500 })
+    if (!ok) toast('提案はありませんでした。コメント (# 1 から 100 まで足す など) を書いて次の行で頼むと、コードを組み立てます', { duration: 3500 })
     else view.focus()
   } catch (e) {
     toast('AI: ' + ((e && e.message) || e), { kind: 'error', duration: 4000 })
@@ -59,26 +58,29 @@ command('aiSuggest', 'AI: 続きを提案', async () => {
 }, { icon: 'sparkle' })
 
 // ---- エディタが見つけた問題を直す (この行) ----
-command('aiFixDiagnostics', 'AI: この行の問題を直す', view => {
+// エディタのチェック (pyflakes / 構文) の直し方を、この行の分だけまとめて当てる。なければ、ファイル全体を Forge AI の修復にかける
+command('aiFixDiagnostics', 'AI: この行の問題を直す', async view => {
   view = view || app.editors.activeView()
   const path = app.editors.active
   if (!view || !path) return
-  const text = view.state.doc.toString()
-  let next = text
-  let what = ''
-  if (checkSyntax(text)) {
-    const r = repairSyntax(text)
-    if (r.fixes.length) { next = r.text; what = r.fixes.slice(0, 3).map(f => f.why).join('、') }
-  } else {
-    const line = view.state.doc.lineAt(view.state.selection.main.head)
-    const diags = lintLuau(text, lintOpts(path)).filter(d => d.actions && d.actions.length && d.from <= line.to && d.to >= line.from).sort((a, b) => b.from - a.from)
-    const done = []
-    for (const d of diags) { const after = applyAction(next, d, d.actions[0]); if (after !== next) { next = after; done.push(d.actions[0].name) } }
-    what = done.join('、')
+  const line = view.state.doc.lineAt(view.state.selection.main.head)
+  const list = []
+  forEachDiagnostic(view.state, (d, from, to) => { if (d.actions && d.actions.length && from <= line.to && to >= line.from) list.push({ d, from, to }) })
+  const done = []
+  // 後ろから (前の位置がずれないように)
+  for (const { d, from, to } of list.sort((x, y) => y.from - x.from)) {
+    const before = view.state.doc
+    try { d.actions[0].apply(view, from, to) } catch {}
+    if (view.state.doc !== before) done.push(d.actions[0].name)
   }
-  if (next === text) { runInline(view, 'このコードの問題を直して', '直してい'); return }
-  view.dispatch({ changes: { from: 0, to: text.length, insert: next }, userEvent: 'input.fix', scrollIntoView: true })
-  toast(`AI が直しました: ${what}`.slice(0, 120), { icon: 'sparkle', duration: 5000, action: { label: '元に戻す', run: () => undo(view) } })
+  if (done.length) { toast(`直しました: ${done.join('、')}`.slice(0, 120), { icon: 'sparkle', duration: 5000, action: { label: '元に戻す', run: () => undo(view) } }); return }
+  const text = view.state.doc.toString()
+  let r = null
+  try { r = await fixAll((type, args) => pyTools(type, args), text) } catch {}
+  if (view.state.doc.toString() !== text) return
+  if (!r || r.text === text) { runInline(view, 'このコードの問題を直して', '直してい'); return }
+  view.dispatch({ changes: minimalChange(text, r.text), userEvent: 'input.fix', scrollIntoView: true })
+  toast(`AI が直しました: ${r.fixes.slice(0, 3).map(f => f.why).join('、')}`.slice(0, 120), { icon: 'sparkle', duration: 5000, action: { label: '元に戻す', run: () => undo(view) } })
 }, { icon: 'sparkle' })
 
 // ---- 選択範囲 ----
@@ -87,7 +89,7 @@ const SELECTION_ACTIONS = [
   { label: '整理する (新しい書き方に)', icon: 'wand', prompt: 'この範囲を整理して', verb: '整理してい' },
   { label: '整形する', icon: 'format', prompt: 'この範囲を整形して', verb: '整形してい' },
   { label: 'コメントを追加', icon: 'comment', prompt: 'コメントを追加して', verb: 'コメントを書いてい' },
-  { label: '型注釈を付ける', icon: 'braces', prompt: '型注釈を付けて', verb: '型を推測してい' },
+  { label: '型ヒントを付ける', icon: 'braces', prompt: '型ヒントを付けて', verb: '型を推測してい' },
   { label: '速く・軽くする', icon: 'bolt', prompt: '最適化して', verb: '最適化してい' },
 ]
 command('aiSelectionMenu', 'AI: 選択範囲を頼む', async anchor => {
@@ -122,7 +124,7 @@ command('aiEditSelection', 'AI: 指示して頼む', async () => {
   const view = app.editors.activeView()
   if (!view) return
   const s = selInfo(view)
-  const what = await promptDialog(s ? `${s.a === s.b ? s.a + ' 行目' : s.a + '〜' + s.b + ' 行目'}をどうしますか?` : '何をしますか?', { placeholder: '例: 直して / コメントを追加して / E キーで開くドアを作って', okLabel: '頼む' })
+  const what = await promptDialog(s ? `${s.a === s.b ? s.a + ' 行目' : s.a + '〜' + s.b + ' 行目'}をどうしますか?` : '何をしますか?', { placeholder: '例: 直して / コメントを追加して / 数当てゲームを作って', okLabel: '頼む' })
   if (!what) return
   runCommand('aiAsk', what)
 }, { icon: 'sparkle' })

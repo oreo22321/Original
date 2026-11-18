@@ -210,8 +210,7 @@ async function importProject(name) {
   try {
     const r = await pullProject(client(), { dir, files: {}, state: null })
     const files = Object.fromEntries(Object.entries(r.changes).filter(([, t]) => t !== null))
-    const kind = Object.keys(files).some(p => /\.(server|client)\.luau?$/.test(p)) ? 'studio' : 'executor'
-    const p = await vfs.createProject(name, files, { kind, github: { dir, state: r.state, lastSync: Date.now() } })
+    const p = await vfs.createProject(name, files, { github: { dir, state: r.state, lastSync: Date.now() } })
     const { openProject } = await import('./app.js')
     await openProject(p.id, { openMain: true })
     toast(`GitHub から「${name}」を開きました (${Object.keys(files).length} ファイル)`, { icon: 'github' })

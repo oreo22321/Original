@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = '11de9fe4ca'
+const VERSION = '96035c9b60'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -10,25 +10,20 @@ const PRECACHE = [
   "boot.js",
   "css/app.css",
   "dist/app/main.js",
-  "dist/chunks/app-ZDCZYPRL.js",
-  "dist/chunks/chunk-5MWMOW3R.js",
-  "dist/chunks/chunk-7R6X5ZZH.js",
-  "dist/chunks/chunk-AGAI5N3Q.js",
-  "dist/chunks/chunk-AIN4TSBF.js",
-  "dist/chunks/chunk-C2OIGJTN.js",
-  "dist/chunks/chunk-EVFZTEP2.js",
-  "dist/chunks/chunk-L52IZ56K.js",
-  "dist/chunks/chunk-M4YAIX4P.js",
-  "dist/chunks/chunk-TRSZNM54.js",
-  "dist/chunks/chunk-VC46IEJQ.js",
-  "dist/chunks/engine-JWPDDDIL.js",
-  "dist/chunks/fflate-TAGFKEII.js",
-  "dist/chunks/generate-A6KAWRCE.js",
-  "dist/chunks/knowledge-FVOLELZE.js",
-  "dist/chunks/text-FPRMIC2R.js",
-  "dist/chunks/ui-LUH3YI46.js",
-  "dist/workers/lint-worker.js",
-  "dist/workers/luau-worker.js",
+  "dist/chunks/app-JNUCL3VR.js",
+  "dist/chunks/chunk-2HUDDNXI.js",
+  "dist/chunks/chunk-4MYTFDFL.js",
+  "dist/chunks/chunk-6YYWDLBJ.js",
+  "dist/chunks/chunk-CANPDHTU.js",
+  "dist/chunks/chunk-NO2F2FYO.js",
+  "dist/chunks/chunk-ZAXZ4FEI.js",
+  "dist/chunks/chunk-ZGGFKZY3.js",
+  "dist/chunks/engine-JDOPWGYV.js",
+  "dist/chunks/fflate-ECKODDUP.js",
+  "dist/chunks/generate-GFHSBG4N.js",
+  "dist/chunks/knowledge-QFN2A3AG.js",
+  "dist/chunks/text-GPDYCE7D.js",
+  "dist/chunks/ui-B7M57HVL.js",
   "dist/workers/python-worker.js",
   "dist/workers/pytools-worker.js",
   "vendor/pywheels/autopep8-2.3.2-py2.py3-none-any.whl",
@@ -36,13 +31,11 @@ const PRECACHE = [
   "vendor/pywheels/parso-0.8.6-py2.py3-none-any.whl",
   "vendor/pywheels/pycodestyle-2.15.0-py2.py3-none-any.whl",
   "vendor/pywheels/pyflakes-4.1.0-py2.py3-none-any.whl",
-  "data/roblox-api.json",
   "icons/apple-touch-icon.png",
   "icons/icon-192.png",
   "icons/icon-512.png",
   "icons/icon-maskable-512.png",
-  "icons/icon.svg",
-  "live/connector.lua"
+  "icons/icon.svg"
 ]
 
 self.addEventListener('install', e => {

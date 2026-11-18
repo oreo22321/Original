@@ -90,7 +90,7 @@ export class GitHubClient {
   }
   // 空のリポジトリに最初のコミットを作る (Git Data API は空のリポジトリでは使えないため)
   async init() {
-    await this.req('PUT', '/contents/README.md', { message: 'ForgeCode: 同期を開始', content: toBase64('# ForgeCode のプロジェクト\n\nForgeCode (スマホ・iPad の Luau エディタ) から同期したファイルです。\n') })
+    await this.req('PUT', '/contents/README.md', { message: 'ForgeCode: 同期を開始', content: toBase64('# ForgeCode のプロジェクト\n\nForgeCode (スマホ・iPad の Python エディタ) から同期したファイルです。\n') })
   }
   // フォルダの中のファイル: 相対パス → blob の SHA
   async listDir(treeSha, dir) {
