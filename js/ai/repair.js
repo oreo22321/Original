@@ -1,388 +1,399 @@
-// Forge AI: コードの自動修復
-// ・repairSyntax: 構文エラーを「候補を試して、いちばん先まで解析できるもの」を選ぶ探索で直す
-//   (end / then / do / 括弧の不足、!= && || ! などの他の言語の書き方、{ } のブロック、// コメント、打ち間違い …)
-// ・fixAll: 全角記号 → 構文 → エディタのチェック (誤字・非推奨・'.' と ':' の取り違え …) の順に、安全な修正だけを入れる
-// ・modernize: 古い書き方を新しい書き方に (wait → task.wait、game.Workspace → workspace、Instance.new の第 2 引数 …)
-// どの修正も「直した場所と理由」を返すので、AI の返事に一覧で表示できます。
-import { checkSyntax } from '../luau/parser.js'
-import { Lexer } from '../luau/lexer.js'
-import { lintLuau } from '../editor/lint.js'
-import { diagnoseBlocks } from '../editor/blocks.js'
-import { fixCode, hasSuspect, KEYWORD_FIXES, nearest } from '../editor/typo.js'
-import { formatLuau, detectIndentUnit } from '../editor/format.js'
-import { EditorState } from '../../vendor/codemirror.js'
-import * as db from '../editor/apidb.js'
+// Forge AI: Python のコードを直す
+// ・repairSyntax: 構文エラーを 1 つずつ直す (コロン忘れ・全角記号・括弧・字下げ・print 文・他の言語の書き方 など)
+// ・fixAll: 構文 + 定義されていない名前 (打ち間違い・import 忘れ) + is と == など
+// ・modernize: 古い書き方・よくない書き方を新しい書き方に (== None → is None、% → f-string など)
+// ・formatCode: autopep8 で PEP 8 に整形
+// Python の解析は pytools ワーカー (py(type, args) → Promise) で行います
+import { fixFullwidth, similarNames, editDistance, STDLIB, ALIASES, TYPOS } from '../editor/pyfix.js'
+import { applyEdits, blankStrings } from './pycode.js'
 
-const KEYWORDS = ['and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true', 'until', 'while', 'continue']
-
-export const lineOf = (text, pos) => { let n = 1; for (let i = 0; i < pos && i < text.length; i++) if (text.charCodeAt(i) === 10) n++; return n }
-const lineRange = (text, pos) => {
-  const s = text.lastIndexOf('\n', pos - 1) + 1
-  let e = text.indexOf('\n', pos)
-  if (e < 0) e = text.length
-  return { s, e }
+export async function lint(py, code) {
+  try { return (await py('lint', { code, path: 'main.py' })) || [] } catch { return [] }
 }
-const edit = (text, from, to, insert) => text.slice(0, from) + insert + text.slice(to)
-
-// ============================================================
-// エディタのチェック結果の「修正」を、画面なしで当てる
-// ============================================================
-function headlessView(text) {
-  const view = {
-    state: EditorState.create({ doc: text }),
-    dispatch(spec) { this.state = this.state.update(spec).state },
-    focus() {},
-  }
-  return view
-}
-export function applyAction(text, diag, action) {
-  const view = headlessView(text)
-  try { action.apply(view, diag.from, diag.to) } catch { return text }
-  return view.state.doc.toString()
+// 構文エラー (なければ null)
+export async function syntaxError(py, code) {
+  const list = await lint(py, code)
+  return list.find(d => d.severity === 'error') || null
 }
 
+const lines = t => t.split('\n')
+const setLine = (text, n, fn) => {
+  const ls = lines(text)
+  if (n < 1 || n > ls.length) return null
+  const next = fn(ls[n - 1], ls, n - 1)
+  if (next === null || next === undefined || next === ls[n - 1]) return null
+  ls[n - 1] = next
+  return ls.join('\n')
+}
+const indentOf = s => /^[ \t]*/.exec(s)[0]
+const prevCode = (ls, i) => { for (let k = i - 1; k >= 0; k--) if (ls[k].trim() && !/^\s*#/.test(ls[k])) return k; return -1 }
+const HEADER = /^\s*(if|elif|else|for|while|def|class|try|except|finally|with|async\s+def|async\s+for|async\s+with|match|case)\b/
+
 // ============================================================
-// 構文の修復 (探索)
+// 他の言語の書き方・よくある打ち間違い (Python を使わずに直せるもの)
 // ============================================================
-// 1 つの候補 = { from, to, insert, why, prior }  (prior: もっともらしさ。大きいほど優先)
-function candidates(text, err) {
+export function prefix(src) {
+  const fixes = []
+  let text = src
+  // 全角記号・スマート引用符
+  const fw = fixFullwidth(text).replace(/[​﻿]/g, '')
+  if (fw !== text) { fixes.push({ line: 0, why: '全角の記号を半角に直しました' }); text = fw }
   const out = []
-  const add = (from, to, insert, why, prior = 1) => { if (from >= 0 && to >= from && to <= text.length) out.push({ from, to, insert, why, prior }) }
-  const pos = Math.min(Math.max(0, err.pos || 0), text.length)
-  const msg = err.message || ''
-  const { s: ls, e: le } = lineRange(text, pos)
-  const line = text.slice(ls, le)
-  const prevRange = ls > 0 ? lineRange(text, ls - 1) : null
-
-  // ---- その場所の記号 ----
-  const two = text.slice(pos, pos + 2), three = text.slice(pos, pos + 3)
-  if (three === '!==') add(pos, pos + 3, '~=', "'!==' → '~='", 9)
-  else if (three === '===') add(pos, pos + 3, '==', "'===' → '=='", 9)
-  else if (two === '!=') add(pos, pos + 2, '~=', "'!=' → '~=' (Luau の「等しくない」)", 9)
-  else if (two === '&&') add(pos, pos + 2, 'and', "'&&' → 'and'", 9)
-  else if (two === '||') add(pos, pos + 2, 'or', "'||' → 'or'", 9)
-  else if (text[pos] === '!') add(pos, pos + 1, 'not ', "'!' → 'not'", 8)
-  // 関数の中で ')' に出会った: `end)` の end を消してしまった形 → ) の前に end
-  if (text[pos] === ')' && !/'\)' が必要/.test(msg)) {
-    const { s: ls0 } = lineRange(text, pos)
-    const ind = /^[ \t]*/.exec(text.slice(ls0))[0]
-    const outer = ind.endsWith('\t') ? ind.slice(0, -1) : ind.slice(0, Math.max(0, ind.length - 4))
-    const before = text.slice(ls0, pos)
-    add(pos, pos, (before.trim() ? '\n' : '') + outer + 'end', "')' の前に 'end' を追加 (関数の終わり)", 7)
+  const ls = lines(text)
+  for (let i = 0; i < ls.length; i++) {
+    let l = ls[i]
+    const code = blankStrings(l)
+    const before = l
+    const why = []
+    // 行末の ;
+    if (/;\s*$/.test(code) && !/;\s*\S/.test(code.replace(/;\s*$/, ''))) { l = l.replace(/;(\s*)$/, '$1'); why.push('行末の ; を消しました') }
+    // // コメント → #
+    if (/^\s*\/\//.test(code)) { l = l.replace(/^(\s*)\/\/\s?/, '$1# '); why.push('// のコメントを # にしました') }
+    // else if → elif
+    if (/^\s*else\s+if\b/.test(code)) { l = l.replace(/^(\s*)else\s+if\b/, '$1elif'); why.push('else if を elif にしました') }
+    // && || ! → and or not
+    if (/&&|\|\|/.test(code)) { l = replaceInCode(l, /\s*&&\s*/g, ' and '); l = replaceInCode(l, /\s*\|\|\s*/g, ' or '); why.push('&& / || を and / or にしました') }
+    if (/(^|[\s(])!(?!=)\s*[A-Za-z_(]/.test(blankStrings(l))) { l = replaceInCode(l, /(^|[\s(])!(?!=)\s*/g, '$1not '); why.push('! を not にしました') }
+    // i++ / i--
+    if (/^\s*[A-Za-z_][\w.]*(\+\+|--)\s*$/.test(code)) { l = l.replace(/^(\s*)([A-Za-z_][\w.]*)(\+\+|--)\s*$/, (m, ind, v, op) => `${ind}${v} ${op[0]}= 1`); why.push('++ / -- を += 1 / -= 1 にしました') }
+    // { で始まるブロック: if (x) { → if x:
+    if (HEADER.test(code) && /\)?\s*\{\s*$/.test(code)) {
+      l = l.replace(/\s*\{\s*$/, '')
+      const m = /^(\s*(?:if|elif|while)\s*)\((.*)\)\s*$/.exec(l)
+      if (m && !/[()]/.test(m[2].replace(/\([^()]*\)/g, ''))) l = `${m[1].replace(/\s*$/, ' ')}${m[2]}`
+      if (!/:\s*$/.test(l)) l += ':'
+      why.push('{ } のブロックを : と字下げの書き方にしました')
+    } else if (/^\s*\}\s*(else\s*\{?)?\s*$/.test(code)) {
+      // 閉じ括弧だけの行
+      const els = /else/.test(code)
+      if (els) { l = indentOf(l) + 'else:'; why.push('} else { を else: にしました') } else { why.push('} だけの行を消しました'); out.push(null); continue }
+    }
+    // function → def
+    if (/^\s*function\s+\w+\s*\(.*\)\s*\{?\s*:?\s*$/.test(code)) { l = l.replace(/^(\s*)function\s+/, '$1def ').replace(/\s*\{?\s*:?\s*$/, ':'); why.push('function を def にしました') }
+    // print "x" (Python 2)
+    if (/^\s*print\s+[^(=\s]/.test(code) && !/^\s*print\s*\(/.test(code)) { l = l.replace(/^(\s*)print\s+(.*?)\s*$/, '$1print($2)'); why.push('print を関数の形 print(…) にしました') }
+    // Python 2 の書き方
+    if (/\braw_input\s*\(/.test(code)) { l = replaceInCode(l, /\braw_input\s*\(/g, 'input('); why.push('raw_input を input にしました') }
+    if (/\bxrange\s*\(/.test(code)) { l = replaceInCode(l, /\bxrange\s*\(/g, 'range('); why.push('xrange を range にしました') }
+    if (/^\s*except\s+([\w.]+)\s*,\s*(\w+)\s*:/.test(code)) { l = l.replace(/^(\s*except\s+[\w.]+)\s*,\s*(\w+)\s*:/, '$1 as $2:'); why.push('except E, e を except E as e にしました') }
+    if (/<>/.test(code)) { l = replaceInCode(l, /<>/g, '!='); why.push('<> を != にしました') }
+    if (l !== before) for (const w of why) fixes.push({ line: i + 1, why: w })
+    out.push(l)
   }
-  // 条件の中の '=' は比較の書き間違い
-  if (text[pos] === '=' && text[pos + 1] !== '=' && /^'(then|do)' が必要/.test(msg)) add(pos, pos + 1, '==', "比較の '=' → '=='", 9)
-
-  // ---- 行ごとの書き換え (他の言語の書き方) ----
-  const lineFixes = (rs, re, isErrLine) => {
-    const l = text.slice(rs, re)
-    const sub = (re2, rep, why, prior) => {
-      const m = re2.exec(l)
-      if (!m) return
-      const next = l.replace(re2, rep)
-      if (next !== l) add(rs, re, next, why, prior)
-    }
-    sub(/^(\s*)(\/\/+|#)\s?/, '$1-- ', 'コメントは -- で書きます', 9)
-    sub(/\/\*/, '--[[', "'/*' → '--[['", 7)
-    sub(/\*\//, ']]', "'*/' → ']]'", 7)
-    sub(/^(\s*)(?:const|let|var)\s+/, '$1local ', "'const / let / var' → 'local'", 8)
-    sub(/\belse\s+if\b/, 'elseif', "'else if' → 'elseif'", 6)
-    sub(/\belif\b/, 'elseif', "'elif' → 'elseif'", 8)
-    sub(/^(\s*)([\w.[\]"']+)\s*\+\+\s*;?\s*$/, '$1$2 += 1', "'++' → '+= 1'", 8)
-    sub(/^(\s*)(if|elseif)\s*\((.*)\)\s*\{\s*$/, '$1$2 $3 then', "'{' → 'then'", 9)
-    sub(/^(\s*)(if|elseif)\s+(.*?)\s*\{\s*$/, '$1$2 $3 then', "'{' → 'then'", 9)
-    sub(/^(\s*)(while|for)\s*\((.*)\)\s*\{\s*$/, '$1$2 $3 do', "'{' → 'do'", 9)
-    sub(/^(\s*)(while|for)\s+(.*?)\s*\{\s*$/, '$1$2 $3 do', "'{' → 'do'", 9)
-    sub(/^(\s*)((?:local\s+)?function\b.*\))\s*\{\s*$/, '$1$2', "関数の '{' は不要", 9)
-    sub(/^(\s*)\}\s*else\s*if\s*\((.*)\)\s*\{\s*$/, '$1elseif $2 then', "'} else if {' → 'elseif ... then'", 9)
-    sub(/^(\s*)\}\s*else\s*\{\s*$/, '$1else', "'} else {' → 'else'", 9)
-    sub(/^(\s*)\}\s*\)?\s*;?\s*$/, (m, a) => a + (/\)\s*;?\s*$/.test(m) ? 'end)' : 'end'), "'}' → 'end'", 8)
-    sub(/^(\s*)(if|elseif)\s+(.*?):\s*$/, '$1$2 $3 then', "':' → 'then'", 9)
-    sub(/^(\s*)(while|for)\s+(.*?):\s*$/, '$1$2 $3 do', "':' → 'do'", 9)
-    sub(/^(\s*)else:\s*$/, '$1else', "'else:' → 'else'", 9)
-    sub(/^(\s*)def\s+([A-Za-z_]\w*)\s*\((.*)\)\s*:\s*$/, '$1local function $2($3)', "'def' → 'local function'", 9)
-    sub(/^(\s*)(?:public\s+|static\s+)*(?:void|int|function)\s+([A-Za-z_]\w*)\s*\((.*)\)\s*\{\s*$/, '$1local function $2($3)', "関数の書き方を Luau に", 8)
-    sub(/;\s*$/, '', "行末の ';' (不要)", 2)
-    // then / do の付け忘れ
-    if (isErrLine || /^'(then|do)' が必要/.test(msg)) {
-      const code = l.replace(/\s*--.*$/, '')
-      if (/^\s*(if|elseif)\b/.test(code) && !/\bthen\b/.test(code)) add(rs + code.length, rs + code.length, ' then', "'then' を追加", 8)
-      if (/^\s*(while|for)\b/.test(code) && !/\bdo\b/.test(code)) add(rs + code.length, rs + code.length, ' do', "'do' を追加", 8)
-    }
-    // 括弧の閉じ忘れ (行の中で数が合わない)
-    const code = l.replace(/--.*$/, '').replace(/(["'])(?:\\.|(?!\1).)*\1/g, '""')
-    const opens = (code.match(/\(/g) || []).length - (code.match(/\)/g) || []).length
-    if (opens > 0 && !/\bfunction\s*\(/.test(code)) {
-      const end = rs + l.replace(/\s*--.*$/, '').replace(/\s+$/, '').length
-      add(end, end, ')'.repeat(opens), "閉じ括弧 ')' を追加", 6)
-    }
-    const sq = (code.match(/\[/g) || []).length - (code.match(/\]/g) || []).length
-    if (sq > 0) { const end = rs + l.replace(/\s*--.*$/, '').replace(/\s+$/, '').length; add(end, end, ']'.repeat(sq), "']' を追加", 5) }
-    // 閉じていない文字列
-    const strs = l.replace(/--.*$/, '')
-    for (const q of ['"', "'"]) {
-      const cnt = (strs.replace(/\\./g, '').match(new RegExp(q, 'g')) || []).length
-      if (cnt % 2 === 1) {
-        // 行末の閉じ括弧の前で閉じる: print("abc)  →  print("abc")
-        const body = l.replace(/\s+$/, '')
-        const tail = /[)\]},\s]*$/.exec(body)[0]
-        if (tail.trim()) add(rs + body.length - tail.length, rs + body.length - tail.length, q, `閉じていない文字列に ${q} を追加`, 8)
-        add(re, re, q, `閉じていない文字列に ${q} を追加`, 7)
-      }
-    }
-    // キーワードの打ち間違い
-    const wre = /[A-Za-z_]\w*/g
-    let m
-    while ((m = wre.exec(l))) {
-      const w = m[0]
-      if (KEYWORDS.includes(w)) continue
-      const fix = Object.prototype.hasOwnProperty.call(KEYWORD_FIXES, w) ? KEYWORD_FIXES[w] : (w.length >= 4 ? nearest(w, KEYWORDS, w.length >= 6 ? 2 : 1) : null)
-      if (fix && KEYWORDS.includes(fix)) add(rs + m.index, rs + m.index + w.length, fix, `'${w}' → '${fix}' (打ち間違い)`, 7)
-      else if (w === 'True' || w === 'False' || w === 'None' || w === 'null') add(rs + m.index, rs + m.index + w.length, { True: 'true', False: 'false', None: 'nil', null: 'nil' }[w], `'${w}' → Luau の書き方`, 4)
-    }
-  }
-  lineFixes(ls, le, true)
-  if (prevRange && prevRange.s !== ls) lineFixes(prevRange.s, prevRange.e, false)
-
-  // ---- end の過不足 (ブロック構造から) ----
-  try {
-    for (const d of diagnoseBlocks(text)) {
-      if (d.kind === 'missing' && d.insertAt !== undefined) add(d.insertAt, d.insertAt, d.insertText, `'${d.insertText.trim()}' を追加 (${lineOf(text, d.from)} 行目のブロック)`, 8)
-      if (d.kind === 'extra' && d.removeFrom !== undefined) add(d.removeFrom, d.removeTo, '', `余分な '${text.slice(d.from, d.to)}' を削除 (${lineOf(text, d.from)} 行目)`, 7)
-    }
-  } catch {}
-
-  // ---- 「')' が必要」: 直前の end の後ろに ) (:Connect(function() ... end の閉じ忘れ) ----
-  if (/'\)' が必要/.test(msg)) {
-    const before = text.slice(0, pos)
-    const m = /\bend\b(?![\s\S]*\bend\b)/.exec(before)
-    if (m) add(m.index + 3, m.index + 3, ')', "'end' の後ろに ')' を追加 (関数の閉じ括弧)", 7)
-    const prevEnd = before.replace(/\s+$/, '').length
-    add(prevEnd, prevEnd, ')', "')' を追加", 5)
-  }
-  if (/'\}' が必要/.test(msg)) {
-    // テーブルの項目の間のカンマ忘れ
-    const prevEnd = text.slice(0, pos).replace(/\s+$/, '').length
-    if (/[\w"'\])}]$/.test(text.slice(0, prevEnd))) add(prevEnd, prevEnd, ',', "テーブルの項目の間に ',' を追加", 7)
-    add(prevEnd, prevEnd, '\n}', "'}' を追加", 3)
-  }
-  if (/'end' が必要|ファイルが終わりました/.test(msg)) {
-    const at = text.replace(/\s+$/, '').length
-    add(at, at, '\nend', "'end' を追加", 4)
-    // 'else if' は入れ子の if になるので end が 1 つ足りなくなる
-    const ei = /\belse[ \t]+if\b/.exec(text)
-    if (ei) add(ei.index, ei.index + ei[0].length, 'elseif', "'else if' → 'elseif'", 8)
-  }
-
-  // ---- 一般的な候補 (最後の手段) ----
-  const tokEnd = (() => { let i = pos; if (/[\w]/.test(text[i] || '')) while (i < text.length && /\w/.test(text[i])) i++; else i = Math.min(text.length, pos + 1); return i })()
-  if (pos < text.length && !/["'\[]/.test(text[pos])) add(pos, tokEnd, '', `'${text.slice(pos, tokEnd)}' を削除`, 0.3)
-  for (const ins of ['then', 'do', 'end', ')', ',', '=']) add(pos, pos, ins + ' ', `'${ins}' を追加`, 0.3)
-  return out
+  const joined = out.filter(l => l !== null).join('\n')
+  return { text: joined, fixes }
 }
-
-// 修復の評価: 解析できたら最高点。できなければ、どれだけ先まで進んだか
-function evaluate(text, err, c) {
-  const next = edit(text, c.from, c.to, c.insert)
-  const e2 = checkSyntax(next)
-  if (!e2) return { next, score: 985 + c.prior * 10, ok: true }
-  const delta = c.insert.length - (c.to - c.from)
-  const shifted = (err.pos || 0) + (c.from <= (err.pos || 0) ? delta : 0)
-  const progress = (e2.pos || 0) - shifted
-  if (progress <= 0) return { next, score: -1, ok: false, err: e2 }
-  return { next, score: Math.min(200, Math.log2(1 + progress) * 10) + c.prior * 2, ok: false, err: e2 }
-}
-
-export function repairSyntax(src, { maxSteps = 24 } = {}) {
-  let text = String(src)
-  const fixes = []
-  if (hasSuspect(text)) {
-    const f = fixCode(text)
-    if (f !== text) { text = f; fixes.push({ line: 0, why: '全角の記号・見えない文字を半角に' }) }
+// 文字列・コメントの外だけ置き換える (re に g がなければ最初の 1 つだけ。rep の $1 などは元の行の文字)
+export function replaceInCode(line, re, rep) {
+  const mask = blankStrings(line)
+  const once = !re.flags.includes('g')
+  const g = new RegExp(re.source, (once ? re.flags + 'g' : re.flags) + (re.flags.includes('d') ? '' : 'd'))
+  let out = '', last = 0, m
+  while ((m = g.exec(mask))) {
+    const groups = m.indices.map(ix => (ix ? line.slice(ix[0], ix[1]) : ''))
+    out += line.slice(last, m.index) + rep.replace(/\$(\d)/g, (_, k) => groups[+k] ?? '')
+    last = m.index + m[0].length
+    if (!m[0].length) g.lastIndex++
+    if (once) break
   }
-  const seen = new Set([text])
-  for (let step = 0; step < maxSteps; step++) {
-    const err = checkSyntax(text)
-    if (!err) return { text, fixes, ok: true }
-    let best = null
-    const tried = []
-    for (const c of candidates(text, err)) {
-      const r = evaluate(text, err, c)
-      if (r.score < 0 || seen.has(r.next)) continue
-      tried.push({ ...r, c })
-      if (!best || r.score > best.score) best = { ...r, c }
-    }
-    // 1 手では直らない候補も、もう 1 手先まで読んで比べる (例: 文字列の閉じ忘れ → " と ) の 2 つが必要)
-    if (text.length < 30000) {
-      const partial = tried.filter(r => !r.ok && r.c.prior >= 2).sort((a, b) => b.score - a.score).slice(0, 6)
-      for (const r of partial) {
-        let best2 = null
-        for (const c2 of candidates(r.next, r.err)) {
-          if (c2.prior < 2) continue
-          const n2 = edit(r.next, c2.from, c2.to, c2.insert)
-          if (checkSyntax(n2)) continue
-          const sc = 970 + (r.c.prior + c2.prior) * 5
-          if (!best2 || sc > best2) best2 = sc
-        }
-        if (best2 && best2 > best.score) best = { ...r, score: best2 }
-      }
-    }
-    if (!best) return { text, fixes, ok: false, error: err }
-    fixes.push({ line: lineOf(text, best.c.from), why: best.c.why })
-    text = best.next
-    seen.add(text)
-  }
-  const err = checkSyntax(text)
-  return { text, fixes, ok: !err, error: err || undefined }
+  return out + line.slice(last)
 }
 
 // ============================================================
-// エディタのチェック結果のうち、安全に自動で直せるもの
+// 構文エラーを 1 つ直す (直せなければ null)
 // ============================================================
-const SAFE_MESSAGE = /(task\.\w+ に置き換え|Connect に置き換え|Destroy に置き換え|':' に置き換え|'\.' に置き換え|に直す|task\.wait\(\) を追加|半角に直す|'elseif' に直す)/
-export function safeFixesOf(text, opts) {
-  let diags = []
-  try { diags = lintLuau(text, opts) } catch { return [] }
-  return diags.filter(d => d.actions && d.actions.length && d.severity !== 'hint' && SAFE_MESSAGE.test(d.actions[0].name) && !/ファイル全体/.test(d.actions[0].name))
+function fixOne(text, err) {
+  const msg = err.msg || ''
+  const n = err.line || 1
+  const ls = lines(text)
+  const line = ls[n - 1] ?? ''
+  let m
+  if (/expected ':'/.test(msg)) {
+    // 見出しの行の最後に :
+    let k = n - 1
+    if (!HEADER.test(ls[k] || '')) { const p = prevCode(ls, k + 1); if (p >= 0 && HEADER.test(ls[p])) k = p }
+    const t = setLine(text, k + 1, l => { const c = /\s*(#.*)?$/.exec(l); return l.slice(0, c.index) + ':' + (c[1] ? '  ' + c[1] : '') })
+    if (t) return { text: t, why: "行の最後に ':' を付けました", line: k + 1 }
+  }
+  if (/Missing parentheses in call to 'print'/.test(msg)) {
+    const t = setLine(text, n, l => l.replace(/^(\s*)print\s+(.*?)\s*$/, '$1print($2)'))
+    if (t) return { text: t, why: 'print を print(…) にしました', line: n }
+  }
+  if (/Maybe you meant '==' or ':=' instead of '='/.test(msg) || (/invalid syntax/.test(msg) && /^\s*(if|elif|while)\b[^=]*[^=!<>:]=[^=]/.test(line))) {
+    const t = setLine(text, n, l => replaceInCode(l, /([^=!<>:])=(?!=)/, '$1=='))
+    if (t) return { text: t, why: "比較の '=' を '==' にしました", line: n }
+  }
+  if (/^invalid character|^invalid non-printable character/.test(msg)) {
+    const t = setLine(text, n, l => fixFullwidth(l).replace(/[​ ﻿　]/g, ' '))
+    if (t) return { text: t, why: '使えない文字 (全角記号など) を直しました', line: n }
+  }
+  if (/^unexpected indent$/.test(msg)) {
+    const p = prevCode(ls, n - 1)
+    const ind = p >= 0 ? (/:\s*(#.*)?$/.test(ls[p]) ? indentOf(ls[p]) + '    ' : indentOf(ls[p])) : ''
+    const t = setLine(text, n, l => ind + l.trimStart())
+    if (t) return { text: t, why: '余分な字下げを直しました', line: n }
+  }
+  if (/^expected an indented block/.test(msg)) {
+    const base = /on line (\d+)$/.exec(msg)
+    const head = base ? Number(base[1]) : prevCode(ls, n - 1) + 1
+    const ind = indentOf(ls[head - 1] || '') + '    '
+    const cur = ls[n - 1]
+    // 中身がない (ファイルの終わり・すぐに else などが続く) → pass を入れる。それ以外は、字下げを忘れた行を下げる
+    if (cur === undefined || !cur.trim() || /^\s*(elif|else|except|finally|case)\b/.test(cur)) {
+      ls.splice(head, 0, ind + 'pass')
+      return { text: ls.join('\n'), why: `${head} 行目のブロックの中身が空なので pass を入れました`, line: head + 1 }
+    }
+    const t = setLine(text, n, l => ind + l.trimStart())
+    if (t) return { text: t, why: `${head} 行目の次の行を字下げしました`, line: n }
+  }
+  if (/^unindent does not match|^inconsistent use of tabs/.test(msg)) {
+    const fixed = text.replace(/^[ \t]+/gm, x => x.replace(/\t/g, '    '))
+    if (fixed !== text) return { text: fixed, why: 'タブをスペース 4 つにそろえました', line: n }
+    // 前の行のどれかの深さにそろえる
+    const want = indentOf(line).length
+    let best = ''
+    for (let k = n - 2; k >= 0; k--) { const l = ls[k]; if (!l.trim()) continue; const d = indentOf(l); if (d.length <= want && d.length >= best.length) { best = d; if (d.length === want) break } if (d.length === 0) break }
+    const t = setLine(text, n, l => best + l.trimStart())
+    if (t) return { text: t, why: '字下げの深さを前の行にそろえました', line: n }
+  }
+  if ((m = /^'(\(|\[|\{)' was never closed$/.exec(msg))) {
+    const close = { '(': ')', '[': ']', '{': '}' }[m[1]]
+    const t = setLine(text, n, l => { const c = /\s*(:?)\s*(#.*)?$/.exec(l); return l.slice(0, c.index) + close + (c[1] || '') + (c[2] ? '  ' + c[2] : '') })
+    if (t) return { text: t, why: `閉じていない '${m[1]}' に '${close}' を付けました`, line: n }
+  }
+  if ((m = /^unmatched '(\)|\]|\})'$/.exec(msg))) {
+    const ch = m[1]
+    const t = setLine(text, n, l => { const at = l.indexOf(ch, Math.max(0, (err.col || 1) - 1)); const pos = at >= 0 ? at : l.lastIndexOf(ch); return pos >= 0 ? l.slice(0, pos) + l.slice(pos + 1) : null })
+    if (t) return { text: t, why: `余分な '${ch}' を消しました`, line: n }
+  }
+  if ((m = /^closing parenthesis '(.)' does not match opening parenthesis '(.)'/.exec(msg))) {
+    const close = { '(': ')', '[': ']', '{': '}' }[m[2]]
+    const t = setLine(text, n, l => { const at = l.indexOf(m[1], Math.max(0, (err.col || 1) - 1)); return at >= 0 ? l.slice(0, at) + close + l.slice(at + 1) : null })
+    if (t) return { text: t, why: `閉じ括弧 '${m[1]}' を '${close}' にしました`, line: n }
+  }
+  if (/^unterminated string literal/.test(msg)) {
+    const t = setLine(text, n, l => closeString(l, (err.col || 1) - 1))
+    if (t) return { text: t, why: '閉じていない文字列に引用符を付けました', line: n }
+  }
+  if (/^unterminated triple-quoted string literal/.test(msg)) {
+    const q = line.includes('"""') ? '"""' : "'''"
+    return { text: text.replace(/\n*$/, '') + '\n' + q + '\n', why: `閉じていない ${q} を最後に付けました`, line: n }
+  }
+  if (/invalid syntax\. Perhaps you forgot a comma\?/.test(msg)) {
+    // [1 2 3] / f(a b) → カンマを入れる (名前・数・文字列が空白で並んでいるところ)
+    const t = setLine(text, n, l => replaceInCode(l, /([\w"')\]])\s+(?=[\w"'([])(?!(?:and|or|not|in|is|if|else|for|lambda)\b)/g, '$1, '))
+    if (t && t !== text) return { text: t, why: 'カンマを補いました', line: n }
+  }
+  if (/^'(return|yield)' outside function$/.test(msg)) return null
+  return null
 }
 
-export function applyLintFixes(src, opts = {}, { rounds = 4, only } = {}) {
+// 閉じていない文字列を閉じる。print("abc) のように、行の最後の閉じ括弧が文字列の外のものなら、その手前で閉じる
+function closeString(l, col) {
+  let at = col >= 0 && /["']/.test(l[col] || '') ? col : -1
+  if (at < 0) { const m = /(?:^|[^\w])[rbfuRBFU]{0,2}(["'])[^"']*$/.exec(l); if (!m) return null; at = m.index + m[0].indexOf(m[1]) }
+  const q = l[at]
+  const head = l.slice(0, at), body = l.slice(at + 1).replace(/\s*$/, '')
+  let depth = 0
+  for (const c of blankStrings(head)) { if ('([{'.includes(c)) depth++; else if (')]}'.includes(c)) depth-- }
+  const tail = /[)\]}:,\s]*$/.exec(body)[0]
+  const closers = (tail.match(/[)\]}]/g) || []).length
+  if (depth > 0 && closers && closers <= depth && body.length > tail.length) {
+    const cut = body.length - tail.length
+    return head + q + body.slice(0, cut) + q + body.slice(cut)
+  }
+  return head + q + body + q
+}
+
+// ============================================================
+// まとめて
+// ============================================================
+export async function repairSyntax(py, src, { maxSteps = 24 } = {}) {
+  const pre = prefix(src)
+  let text = pre.text
+  const fixes = [...pre.fixes]
+  let err = await syntaxError(py, text)
+  for (let i = 0; err && i < maxSteps; i++) {
+    const r = fixOne(text, err)
+    if (!r || r.text === text) break
+    const next = await syntaxError(py, r.text)
+    // 同じ行で同じエラーが続くなら、それ以上は直さない
+    if (next && next.line === err.line && next.msg === err.msg && i > 2) { text = r.text; fixes.push({ line: r.line, why: r.why }); err = next; break }
+    text = r.text
+    fixes.push({ line: r.line, why: r.why })
+    err = next
+  }
+  return { text, fixes, ok: !err, error: err ? { line: err.line, message: err.msg } : null }
+}
+
+// 定義されていない名前 (打ち間違い・import 忘れ) と、is と == の間違い
+export async function lintFixes(py, src) {
   let text = src
   const fixes = []
-  for (let r = 0; r < rounds; r++) {
-    let list = safeFixesOf(text, opts)
-    if (only) list = list.filter(only)
-    if (!list.length) break
-    // 後ろから当てる (前の位置がずれないように)。重なるものは次の回に
-    list.sort((a, b) => b.from - a.from)
-    let next = text, lastFrom = Infinity
-    const applied = []
+  for (let round = 0; round < 3; round++) {
+    const list = await lint(py, text)
+    if (list.some(d => d.severity === 'error')) break
+    const imports = new Set()
+    const edits = []
+    const codeAll = text
     for (const d of list) {
-      if (d.to > lastFrom) continue
-      const after = applyAction(next, d, d.actions[0])
-      if (after === next) continue
-      next = after
-      lastFrom = d.from
-      applied.push({ line: lineOf(text, d.from), why: d.actions[0].name.replace(/^'(.*)' に直す$/, "'$1' に修正") + (d.source === '誤字' ? ` (${d.message.replace(/。.*$/, '')})` : '') })
+      const name = (d.args || [])[0]
+      if (d.kind === 'UndefinedName' && name) {
+        const fix = { true: 'True', false: 'False', null: 'None', none: 'None', nil: 'None', TRUE: 'True', FALSE: 'False' }[name]
+        const imp = ALIASES[name] || (STDLIB.has(name) ? `import ${name}` : null)
+        if (fix) edits.push({ d, name, to: fix, why: `${name} を ${fix} にしました` })
+        else if (imp) imports.add(imp)
+        else {
+          const best = bestName(name, codeAll)
+          if (best) edits.push({ d, name, to: best, why: `${name} を ${best} にしました (打ち間違い)` })
+        }
+      } else if (d.kind === 'IsLiteral') {
+        edits.push({ d, line: true, why: "数値・文字列との比較の 'is' を '==' にしました" })
+      }
     }
-    // 直した結果、構文が壊れたら当てない
-    if (!applied.length || (checkSyntax(next) && !checkSyntax(text))) break
-    text = next
-    fixes.push(...applied.reverse())
+    if (!edits.length && !imports.size) break
+    const ls = lines(text)
+    // 後ろから (同じ行の位置がずれないように)
+    for (const e of edits.sort((a, b) => b.d.line - a.d.line || b.d.col - a.d.col)) {
+      const i = e.d.line - 1
+      if (e.line) { ls[i] = replaceInCode(ls[i], /\bis not\b/, '!='); ls[i] = replaceInCode(ls[i], /\bis\b/, '=='); fixes.push({ line: e.d.line, why: e.why }); continue }
+      const l = ls[i]
+      const at = l.slice((e.d.col || 1) - 1).search(new RegExp(`\\b${e.name}\\b`))
+      if (at < 0) continue
+      const pos = (e.d.col || 1) - 1 + at
+      ls[i] = l.slice(0, pos) + e.to + l.slice(pos + e.name.length)
+      fixes.push({ line: e.d.line, why: e.why })
+    }
+    text = ls.join('\n')
+    if (imports.size) {
+      const at = importPos(text)
+      const all = [...imports]
+      text = text.slice(0, at) + all.join('\n') + '\n' + text.slice(at)
+      for (const imp of all) fixes.push({ line: 1, why: `${imp} を追加しました` })
+    }
   }
   return { text, fixes }
 }
+// 打ち間違いの直し先 (よくある打ち間違い → 似た名前のうち、ほかより明らかに近いもの)
+const KEYWORDS = /^(import|return|else|elif|while|class|def|for|in|if|from|pass|break|continue|lambda|with|try|except|finally|raise|global|yield)$/
+function bestName(name, code) {
+  const t = TYPOS[name]
+  if (t && !KEYWORDS.test(t)) return t
+  const cands = similarNames(name, code)
+  if (!cands.length) return null
+  if (cands.length === 1 || cands[0].toLowerCase() === name.toLowerCase()) return cands[0]
+  const d0 = editDistance(name, cands[0], 4), d1 = editDistance(name, cands[1], 4)
+  return d0 < d1 ? cands[0] : null
+}
+function importPos(text) {
+  const ls = lines(text)
+  let pos = 0, off = 0
+  for (let i = 0; i < ls.length; i++) {
+    const t = ls[i]
+    if (/^\s*(import|from)\s/.test(t)) pos = off + t.length + 1
+    else if (!(/^\s*(#|$)/.test(t) || (i === 0 && /^\s*("""|''')/.test(t)))) break
+    off += t.length + 1
+  }
+  return Math.min(pos, text.length)
+}
 
-// ============================================================
-// まとめて直す
-// ============================================================
-export function fixAll(src, opts = {}) {
-  const fixes = []
-  let text = src
-  const syn = repairSyntax(text)
-  text = syn.text
-  fixes.push(...syn.fixes)
-  if (!syn.ok) return { text, fixes, ok: false, error: syn.error }
-  const lf = applyLintFixes(text, opts)
-  text = lf.text
-  fixes.push(...lf.fixes)
-  return { text, fixes, ok: true }
+export async function fixAll(py, src) {
+  const r = await repairSyntax(py, src)
+  if (!r.ok) return r
+  const l = await lintFixes(py, r.text)
+  return { text: l.text, fixes: [...r.fixes, ...l.fixes], ok: true, error: null }
 }
 
 // ============================================================
-// 近代化 (古い書き方 → 新しい書き方)
+// 新しい書き方に (動きは変えない)
 // ============================================================
-// コードのトークン (文字列・コメント以外) の位置を返す
-export function codeTokens(src) {
-  const lx = new Lexer(src)
-  lx.comments = []
-  const toks = []
+const MODERN_KINDS = { eq_none: 'None との比較を is / is not に', eq_bool: 'True / False との比較を、そのままの条件に', type_eq: 'type(x) == T を isinstance(x, T) に', len_zero: 'len(x) == 0 を not x に', open_encoding: 'open に encoding="utf-8" を付けました' }
+export async function modernize(py, src) {
+  const fixes = []
+  let text = src
+  // % と .format() の簡単なものを f-string に
+  text = text.split('\n').map((l, i) => {
+    const before = l
+    l = l.replace(/(["'])((?:(?!\1)[^\\{}])*)\1\s*%\s*\(([^()]*)\)/g, (m, q, body, args) => {
+      const parts = args.split(',').map(s => s.trim()).filter(Boolean)
+      const holes = body.match(/%[sd]/g) || []
+      if (holes.length !== parts.length || /%[^sd%]/.test(body)) return m
+      let k = 0
+      return 'f' + q + body.replace(/%[sd]/g, () => `{${parts[k++]}}`) + q
+    }).replace(/(["'])((?:(?!\1)[^\\])*)\1\s*%\s*([A-Za-z_][\w.]*)\b(?!\s*[([])/g, (m, q, body, v) => {
+      const holes = body.match(/%[sd]/g) || []
+      if (holes.length !== 1 || /%[^sd%]/.test(body) || /[{}]/.test(body)) return m
+      return 'f' + q + body.replace(/%[sd]/, `{${v}}`) + q
+    }).replace(/(["'])((?:(?!\1)[^\\])*)\1\.format\(([^()]*)\)/g, (m, q, body, args) => {
+      const parts = args.split(',').map(s => s.trim()).filter(Boolean)
+      if (parts.some(p => /=/.test(p))) return m
+      const holes = body.match(/\{\}/g) || []
+      if (holes.length !== parts.length || /\{[^}]/.test(body)) return m
+      let k = 0
+      return 'f' + q + body.replace(/\{\}/g, () => `{${parts[k++]}}`) + q
+    })
+    l = concatToFstring(l)
+    if (l !== before) fixes.push({ line: i + 1, why: '文字列の組み立てを f-string にしました' })
+    return l
+  }).join('\n')
+  // ast で見つけたもの
+  let rv
+  try { rv = await py('review', { code: text }) } catch { rv = null }
+  if (rv && rv.ok) {
+    const edits = []
+    for (const f of rv.findings) {
+      if (!MODERN_KINDS[f.kind] || !f.edits) continue
+      edits.push(...f.edits)
+      fixes.push({ line: f.line, why: MODERN_KINDS[f.kind] })
+    }
+    if (edits.length) text = applyEdits(text, edits).text
+  }
+  // 壊れていないか
+  if (await syntaxError(py, text)) return { text: src, fixes: [] }
+  return { text, fixes }
+}
+
+// "Hello " + name + "!" → f"Hello {name}!" (文字列のリテラルを含む + だけの式。str(x) は {x} に)
+const OPERAND = String.raw`(?:"(?:[^"\\{}\n]|\\.)*"|'(?:[^'\\{}\n]|\\.)*'|str\([A-Za-z_][\w.]*\)|[A-Za-z_][\w.]*(?:\[[^\[\]\n]*\])?)`
+const CHAIN = new RegExp(String.raw`(^|[=(,:]\s*|\breturn\s+|^\s*)(${OPERAND}(?:\s*\+\s*${OPERAND})+)(?=\s*(?:[),\]]|#|$))`, 'g')
+function concatToFstring(line) {
+  const mask = blankStrings(line)
+  return line.replace(CHAIN, (m, lead, chain, offset) => {
+    const at = offset + lead.length
+    if (mask[at] !== line[at]) return m
+    const ops = []
+    const re = new RegExp(OPERAND, 'y')
+    let i = 0
+    while (i < chain.length) {
+      re.lastIndex = i
+      const o = re.exec(chain)
+      if (!o) return m
+      ops.push(o[0])
+      i = re.lastIndex
+      const sep = /^\s*\+\s*/.exec(chain.slice(i))
+      if (sep) i += sep[0].length
+      else if (i < chain.length) return m
+    }
+    const lits = ops.filter(o => /^["']/.test(o))
+    if (!lits.length || lits.length === ops.length || ops.length < 2) return m
+    if (/^(True|False|None|and|or|not|in|is|if|else)$/.test(ops.find(o => !/^["']/.test(o)))) return m
+    const inner = lits.map(o => o.slice(1, -1))
+    const q = inner.some(t => t.includes('"')) ? (inner.some(t => t.includes("'")) ? null : "'") : '"'
+    if (!q) return m
+    const body = ops.map(o => (/^["']/.test(o) ? o.slice(1, -1).replace(/\\(["'])/g, (x, c) => (c === q ? x : c)) : `{${o.replace(/^str\((.*)\)$/, '$1')}}`)).join('')
+    return lead + 'f' + q + body + q
+  })
+}
+
+export async function formatCode(py, src, { aggressive = true } = {}) {
   try {
-    for (let t = lx.next(); t.t !== 'eof'; t = lx.next()) toks.push(t)
-  } catch { return null }
-  return toks
+    const out = await py('format', { code: src, aggressive })
+    return typeof out === 'string' ? out : src
+  } catch { return src }
 }
 
-export function modernize(src, opts = {}) {
-  let text = src
-  const fixes = []
-  // 1) エディタのチェックの置き換え (wait → task.wait、:connect → :Connect、:Remove → :Destroy)
-  const lf = applyLintFixes(text, { ...opts, undefinedGlobals: false }, { only: d => /(task\.|Connect|Destroy)/.test(d.actions[0].name) })
-  text = lf.text
-  fixes.push(...lf.fixes)
-  const toks = codeTokens(text)
-  if (!toks) return { text, fixes }
-  const edits = []
-  const isService = n => { try { return db.apiReady() ? db.isService(n) : /^(Players|ReplicatedStorage|ServerStorage|ServerScriptService|Lighting|TweenService|RunService|UserInputService|SoundService|StarterGui|StarterPack|StarterPlayer|Teams|Debris|HttpService|MarketplaceService|DataStoreService|CollectionService|PathfindingService|TextChatService|Chat|ContextActionService)$/.test(n) } catch { return false } }
-  for (let i = 0; i < toks.length; i++) {
-    const t = toks[i]
-    const prev = toks[i - 1]
-    if (prev && (prev.t === '.' || prev.t === ':')) continue
-    // game.Workspace / game:GetService("Workspace") → workspace
-    if (t.t === 'name' && t.v === 'game' && toks[i + 1] && toks[i + 1].t === '.' && toks[i + 2] && toks[i + 2].t === 'name') {
-      const name = toks[i + 2].v
-      const after = toks[i + 3]
-      if (after && (after.t === '=' || /=$/.test(after.t))) continue
-      if (name === 'Workspace') { edits.push({ from: t.s, to: toks[i + 2].e, insert: 'workspace', why: "'game.Workspace' → 'workspace'" }); i += 2; continue }
-      if (isService(name) && name !== 'Workspace') { edits.push({ from: t.s, to: toks[i + 2].e, insert: `game:GetService("${name}")`, why: `'game.${name}' → 'game:GetService("${name}")'` }); i += 2; continue }
-    }
-    if (t.t === 'name' && t.v === 'game' && toks[i + 1] && toks[i + 1].t === ':' && toks[i + 2] && toks[i + 2].v === 'GetService' && toks[i + 3] && toks[i + 3].t === '(' && toks[i + 4] && toks[i + 4].t === 'string' && toks[i + 4].v === 'Workspace' && toks[i + 5] && toks[i + 5].t === ')') {
-      edits.push({ from: t.s, to: toks[i + 5].e, insert: 'workspace', why: "'game:GetService(\"Workspace\")' → 'workspace'" }); i += 5; continue
-    }
-    // table.getn(t) → #t
-    if (t.t === 'name' && t.v === 'table' && toks[i + 1] && toks[i + 1].t === '.' && toks[i + 2] && toks[i + 2].v === 'getn' && toks[i + 3] && toks[i + 3].t === '(' && toks[i + 4] && toks[i + 4].t === 'name' && toks[i + 5] && toks[i + 5].t === ')') {
-      edits.push({ from: t.s, to: toks[i + 5].e, insert: '#' + toks[i + 4].v, why: "'table.getn(t)' → '#t'" }); i += 5; continue
-    }
-    // unpack( → table.unpack(
-    if (t.t === 'name' && t.v === 'unpack' && toks[i + 1] && toks[i + 1].t === '(' && !/\blocal\s+(function\s+)?unpack\b/.test(text)) edits.push({ from: t.s, to: t.e, insert: 'table.unpack', why: "'unpack' → 'table.unpack'" })
-  }
-  edits.sort((a, b) => b.from - a.from)
-  for (const e of edits) { fixes.push({ line: lineOf(text, e.from), why: e.why }); text = edit(text, e.from, e.to, e.insert) }
-  // 2) local x = Instance.new("Class", parent) → Parent は最後に
-  const r = moveParentLast(text)
-  text = r.text
-  fixes.push(...r.fixes)
-  // 3) x = x + 1 → x += 1 (右辺が 1 つの値のときだけ: 意味が変わらないように)
-  const lines = text.split('\n')
-  let changed = false
-  for (let i = 0; i < lines.length; i++) {
-    const m = /^(\s*)([A-Za-z_][\w.]*)\s*=\s*([A-Za-z_][\w.]*)\s*([+\-*/]|\.\.)\s*([A-Za-z_][\w.]*|\d+(?:\.\d+)?|"[^"\\]*")\s*(--.*)?$/.exec(lines[i])
-    if (m && m[2] === m[3]) {
-      lines[i] = `${m[1]}${m[2]} ${m[4]}= ${m[5]}${m[6] ? ' ' + m[6] : ''}`
-      fixes.push({ line: i + 1, why: `'${m[2]} = ${m[2]} ${m[4]} …' → '${m[2]} ${m[4]}= …'` })
-      changed = true
-    }
-  }
-  if (changed) {
-    const next = lines.join('\n')
-    if (!checkSyntax(next)) text = next
-  }
-  return { text, fixes: fixes.sort((a, b) => a.line - b.line) }
-}
-
-function moveParentLast(src) {
-  const lines = src.split('\n')
-  const fixes = []
-  for (let i = 0; i < lines.length; i++) {
-    const m = /^(\s*)local\s+([A-Za-z_]\w*)\s*=\s*Instance\.new\(\s*("[^"]+"|'[^']+')\s*,\s*(.+?)\)\s*(--.*)?$/.exec(lines[i])
-    if (!m) continue
-    const [, ind, name, cls, parent, cmt] = m
-    if (/[()]/.test(parent) && (parent.match(/\(/g) || []).length !== (parent.match(/\)/g) || []).length) continue
-    lines[i] = `${ind}local ${name} = Instance.new(${cls})${cmt ? ' ' + cmt : ''}`
-    // 続けて name.Xxx = ... を設定している行の後ろに Parent を置く
-    let j = i + 1
-    const re = new RegExp(`^${ind.replace(/\t/g, '\\t')}${name}\\.\\w+\\s*=`)
-    while (j < lines.length && re.test(lines[j])) j++
-    lines.splice(j, 0, `${ind}${name}.Parent = ${parent.trim()}`)
-    fixes.push({ line: i + 1, why: `Instance.new の第 2 引数をやめて、${name}.Parent を最後に設定 (速く・安全)` })
-  }
-  const text = lines.join('\n')
-  if (fixes.length && checkSyntax(text)) return { text: src, fixes: [] }
-  return { text, fixes }
-}
-
-// 整形 (字下げの単位は今のコードに合わせる)
-export function formatCode(src) {
-  const unit = detectIndentUnit(src) || '\t'
-  try { return formatLuau(src, unit) } catch { return src }
+// レビューの直し方をまとめて適用
+export function applyFindingEdits(text, findings) {
+  const edits = findings.flatMap(f => f.edits || [])
+  return edits.length ? applyEdits(text, edits).text : text
 }

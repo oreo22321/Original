@@ -7,9 +7,11 @@ import { TEMPLATES } from './templates.js'
 import { app, command } from './app.js'
 import * as vfs from './vfs.js'
 
+// 最初に作るサンプル
 const PURPOSES = [
-  ['studio', 'cube', 'Roblox Studio 用のスクリプト', 'ゲームを作る。Script / LocalScript / ModuleScript', ['Roblox の全 API を補完', 'サーバーとクライアントの間違いを指摘', 'GUI をその場でプレビュー']],
-  ['executor', 'bolt', 'エグゼキューター用のスクリプト', 'getgenv・writefile・hookfunction などの専用 API', ['エグゼキューター API を補完・模擬実行', 'ファイル関数は workspace フォルダに保存', 'ワンタップでコード全体をコピー']],
+  ['basics', 'bulb', 'Python をはじめて書く', '出力・変数・if・for・関数を順番に', ['1 行ずつ説明つきのサンプル', '間違いは日本語で教えてくれる', 'input() で入力もできる']],
+  ['game', 'gamepad', '小さなゲームを作る', 'random と input の数当てゲーム', ['すぐに遊べる', 'くり返しと条件分岐の練習に']],
+  ['data', 'layers', 'データを集計してグラフにする', 'CSV・matplotlib・ファイルへの保存', ['numpy / pandas / matplotlib が使える', 'グラフは出力にそのまま表示']],
 ]
 
 export function showOnboarding() {
@@ -18,7 +20,7 @@ export function showOnboarding() {
     const card = h('div', { class: 'onboard-card' })
     overlay.append(card)
     document.body.append(overlay)
-    const state = { purpose: 'studio', theme: getSettings().theme, fontSize: getSettings().fontSize }
+    const state = { purpose: 'basics', theme: getSettings().theme, fontSize: getSettings().fontSize }
     let step = 0
 
     const dots = () => h('div', { class: 'ob-dots' }, [0, 1, 2].map(i => h('span', { class: i === step ? 'on' : '' })))
@@ -37,12 +39,12 @@ export function showOnboarding() {
       card.textContent = ''
       if (step === 0) {
         card.append(
-          h('div', { class: 'ob-hero' }, h('img', { class: 'ob-logo', src: 'icons/icon.svg', alt: '', width: '64', height: '64' }), h('h1', null, 'ForgeCode へようこそ'), h('p', null, 'スマホ・iPad で書ける、Roblox 専用の Luau エディタです。どちらのスクリプトを書きますか?')),
+          h('div', { class: 'ob-hero' }, h('img', { class: 'ob-logo', src: 'icons/icon.svg', alt: '', width: '64', height: '64' }), h('h1', null, 'ForgeCode へようこそ'), h('p', null, 'スマホ・iPad で書けて、その場で動かせる Python エディタです。インストールは要りません。何から始めますか?')),
           h('div', { class: 'ob-options' }, PURPOSES.map(([key, ic, title, desc, points]) => h('button', {
             class: 'ob-option' + (state.purpose === key ? ' on' : ''),
             onclick: () => { state.purpose = key; render() },
-          }, h('span', { class: 'ob-ico k-' + key }, icon(ic, 26)), h('span', { class: 'ob-otext' }, h('b', null, title), h('small', null, desc), state.purpose === key ? h('ul', { class: 'ob-points' }, points.map(p => h('li', null, p))) : null), state.purpose === key ? icon('check', 20, 'ob-check') : null))),
-          h('p', { class: 'ob-sub' }, 'あとからプロジェクトごとに切り替えられます'),
+          }, h('span', { class: 'ob-ico k-python' }, icon(ic, 26)), h('span', { class: 'ob-otext' }, h('b', null, title), h('small', null, desc), state.purpose === key ? h('ul', { class: 'ob-points' }, points.map(p => h('li', null, p))) : null), state.purpose === key ? icon('check', 20, 'ob-check') : null))),
+          h('p', { class: 'ob-sub' }, 'ほかのサンプルも、あとからプロジェクト一覧で作れます'),
           dots(),
           h('div', { class: 'ob-foot' }, h('button', { class: 'btn ghost', onclick: () => finish(true) }, 'スキップ'), h('button', { class: 'btn primary', onclick: () => { step = 1; render() } }, '次へ')))
       } else if (step === 1) {
@@ -52,7 +54,8 @@ export function showOnboarding() {
           preview.style.background = c.bg
           preview.style.color = c.fg
           preview.style.fontSize = state.fontSize + 'px'
-          preview.innerHTML = `<span style="color:${c.keyword}">local</span> <span style="color:${c.def}">Players</span> = <span style="color:${c.builtin}">game</span>:<span style="color:${c.func}">GetService</span>(<span style="color:${c.string}">"Players"</span>)\n<span style="color:${c.comment};font-style:italic">-- コメント</span>\n<span style="color:${c.control}">for</span> i = <span style="color:${c.number}">1</span>, <span style="color:${c.number}">3</span> <span style="color:${c.control}">do</span>\n\t<span style="color:${c.builtin}">print</span>(i)\n<span style="color:${c.control}">end</span>`
+          const k = (t, c2, it) => `<span style="color:${c2}${it ? ';font-style:italic' : ''}">${t}</span>`
+          preview.innerHTML = `${k('# コメント', c.comment, 1)}\n${k('def', c.keyword)} ${k('greet', c.func)}(name):\n    ${k('return', c.control)} ${k('f"こんにちは、{name}"', c.string)}\n\n${k('for', c.control)} i ${k('in', c.keyword)} ${k('range', c.builtin)}(${k('3', c.number)}):\n    ${k('print', c.builtin)}(greet(${k('"Python"', c.string)}))`
         }
         const themes = h('div', { class: 'ob-themes' }, Object.entries(THEMES).map(([id, th]) => h('button', {
           class: 'ob-theme' + (state.theme === id ? ' on' : ''), style: { background: th.c.bg, color: th.c.fg, borderColor: state.theme === id ? th.c.keyword : 'transparent' },

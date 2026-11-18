@@ -9,64 +9,56 @@ export const isIOS = typeof navigator !== 'undefined' && (/iP(hone|ad|od)/.test(
 export const DEFAULTS = {
   // 見た目
   theme: 'forge-dark',
+  language: 'ja',      // 表示の言語: ja / en / auto (端末に合わせる)
   fontSize: smallScreen ? 13 : 15,
   fontFamily: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace',
   lineHeight: 1.55,
   layout: 'auto', // auto | mobile | desktop
   // エディタ
   tabSize: 4,
-  insertSpaces: false,
+  insertSpaces: true,   // Python はスペース 4 つが標準 (PEP 8)
   wordWrap: smallScreen,
   lineNumbers: true,
   highlightLine: true,
   autoClose: true,
-  autoEnd: true,       // then / do / function() を書いたら end を追加
-  autoEndDelete: true, // if / for / function などを消したら対の end も消す
   indentGuides: true,
-  stickyScroll: true,      // 画面の上に、いま見ている function / if の行を固定表示
-  highlightSymbols: true,  // カーソル位置の変数を同じ変数ごとハイライト
+  stickyScroll: true,      // 画面の上に、いま見ている def / class / if の行を固定表示
+  highlightSymbols: true,  // カーソルのある単語を、同じ単語ごとハイライト
   rainbowBrackets: true,
-  colorPicker: true,
   pinchZoom: true,
   // 補完
   autocomplete: true,
-  inlineSuggest: true,
   signatureHelp: true,
   hover: true,
   // チェック・誤字対策
   lint: true,
   lintUndefined: true,
   lintUnused: true,
-  lintTypos: true,     // スペルミスを検出して「もしかして」を提案
   errorLens: true,     // エラーの内容を行の右に表示
   fixInput: true,      // 全角記号・スマート引用符を自動で半角に
-  autoCorrect: true,   // fucntion → function などを自動修正
+  autoCorrect: true,   // pirnt( → print( などを自動修正
   // ファイル
   autoSave: true,
   autoSaveDelay: 600,
   formatOnSave: false,
-  autoFormat: true,    // 入力した行・エラーのないコード全体の見た目を裏で整える
   trimOnSave: true,
   // 実行
-  timeLimit: 10,
-  maxRunTime: 60,
+  maxRunTime: 0,       // 最大実行時間 (秒)。0 は無制限
   clearOnRun: true,
   groupOutput: true,   // 同じ出力をまとめる (×3)
-  outputTime: false,   // 出力に経過時間を表示
   explainErrors: true, // 実行エラーに日本語の解説を付ける
-  netProxy: '',        // 外部 URL を直接取得できないときの中継サーバー ('' / corsproxy / allorigins / 独自 URL)
-  liveRelay: '',       // 実機連携の中継サーバー (https://…)
   // AI
-  aiInline: true,      // 入力が止まったら AI (内蔵の統計モデル) が続きを提案
+  aiInline: true,      // 入力が止まったら AI (Forge AI) が続きを提案
   aiDelay: 700,
   aiLlm: '',           // 高性能モード (端末内 LLM): '' (使わない) / small / medium / large
   // モバイル
   keybar: true,
-  keybarKeys: '( ) { } [ ] " \' = . : , ; + - * / # ~ < > _ ` ! & | % ^ @ \\ $ ?',
+  keybarKeys: ': ( ) [ ] { } " \' = . , _ # + - * / < > % ! & | @ \\ ~ ^ ;',
   haptics: true,
   // その他
   onboarded: false,
   design: 2,           // デザインの版 (新しいデザインへの移行用)
+  python: 1,           // Python 版への移行済み
   confirmDelete: true,
 }
 
@@ -82,6 +74,15 @@ try {
       if (saved.theme === 'dark-plus' || !saved.theme) saved.theme = 'forge-dark'
       else if (saved.theme === 'light-plus') saved.theme = 'forge-light'
       saved.design = 2
+      dropped = true
+    }
+    // v12: Python になったので、字下げはスペース 4 つ (タブとスペースが混ざると Python ではエラー)、キーボードバーは Python の記号
+    if (!('python' in saved)) {
+      saved.insertSpaces = true
+      saved.tabSize = 4
+      saved.keybarKeys = DEFAULTS.keybarKeys
+      saved.maxRunTime = 0
+      saved.python = 1
       dropped = true
     }
     // v10: AI が内蔵になり無料で動くので、続きの提案を有効にする (以前は API の利用料を抑えるため既定でオフ)
@@ -109,17 +110,10 @@ export function resetSettings() {
 }
 export function onSettings(fn) { listeners.add(fn); return () => listeners.delete(fn) }
 
-// ---- モード: 'studio' (Roblox Studio 用スクリプト) / 'executor' (エグゼキューター用スクリプト) ----
-// 開いているプロジェクトごとに決まります。補完・エラーチェック・実行環境が切り替わります。
-let mode = 'studio'
-export const MODE_LABELS = { studio: 'Studio', executor: 'Executor' }
-export function getMode() { return mode }
-export function setMode(m) {
-  m = m === 'executor' ? 'executor' : 'studio'
-  if (m === mode) return
-  mode = m
-  emit('mode', m)
-}
+// 言語は Python だけ (以前の版の呼び出しのために残しています)
+export const MODE_LABELS = { python: 'Python' }
+export function getMode() { return 'python' }
+export function setMode() {}
 
 // セッション (開いているタブなど)
 export function loadSession() {

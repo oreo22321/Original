@@ -1,0 +1,55 @@
+# 自動テスト: main へのプッシュと、すべてのプルリクエストで実行します
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/package-lock.json
+
+      - name: ツールを入れる
+        working-directory: tools
+        run: npm ci
+
+      - name: ユニットテスト
+        run: node tests/run-all.mjs
+
+      - name: 配信用のファイルが最新か (node tools/build.mjs を実行してコミットしてください)
+        run: |
+          node tools/build.mjs
+          git diff --exit-code --stat
+
+      - name: ブラウザを入れる
+        working-directory: tools
+        run: npx playwright install --with-deps chromium
+
+      - name: ブラウザでの通し確認 (E2E)
+        run: node tests/e2e/run.mjs
+
+      - name: 失敗したときの画面
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: tests/e2e/out/
+          if-no-files-found: ignore

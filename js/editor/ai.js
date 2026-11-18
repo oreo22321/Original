@@ -1,6 +1,6 @@
 // エディタの AI 候補 (ゴーストテキスト)
 // ・統計モデル: プロジェクトと内蔵サンプルから学習し、行の続きを提案 (すぐに出る・オフライン)
-// ・コメントからコード: 「-- 触れたら死ぬ」と書いて次の行で AI キー (Alt + \) を押すと、コードを組み立てて提案
+// ・コメントからコード: 「# 1 から 100 まで足す」と書いて次の行で AI キー (Alt + \) を押すと、コードを組み立てて提案
 import { completeLine, codeFromComment, warmComplete } from '../ai/complete.js'
 
 // 返ってきた候補を整える (重複・前後のゴミを除く)
@@ -26,14 +26,14 @@ export function cleanSuggestion(text, before, after) {
 export function makeAiProvider(getFile) {
   return async (state, pos, { manual = false } = {}) => {
     const file = getFile()
-    if (file.lang && file.lang !== 'luau' && file.lang !== 'lua') return ''
+    if (file.lang && file.lang !== 'python') return ''
     const before = state.doc.sliceString(Math.max(0, pos - 4000), pos)
     const after = state.doc.sliceString(pos, Math.min(state.doc.length, pos + 400))
     // 行の途中 (カーソルの後ろに文字がある) は提案しない
     const restOfLine = after.split('\n')[0]
     if (restOfLine.trim() && !/^[)\]}"']*\s*$/.test(restOfLine)) return ''
     if (manual) {
-      const gen = await codeFromComment(before, file.mode)
+      const gen = await codeFromComment(before)
       if (gen) return gen.code
     }
     await warmComplete()

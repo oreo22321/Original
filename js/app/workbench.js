@@ -1,8 +1,7 @@
 // 画面全体のレイアウト (スマホ / タブレット・PC 両対応)
-import { live } from './live.js'
-import { app, command, runCommand, setProjectKind, setRunTarget } from './app.js'
-import { getSettings, setSettings, getMode, on, isTouch, MODE_LABELS } from './store.js'
-import { h, icon, menu, toast, copyText, shareFile, haptic, promptDialog } from './ui.js'
+import { app, command, runCommand, setRunTarget } from './app.js'
+import { getSettings, setSettings, on, isTouch } from './store.js'
+import { h, icon, menu, toast, copyText, shareFile, haptic } from './ui.js'
 import * as vfs from './vfs.js'
 import { bpStore } from './debug-panel.js'
 const bpStoreCount = () => Object.keys(bpStore.forRun()).length
@@ -13,9 +12,8 @@ import { KeyBar } from './keybar.js'
 import { SearchView, OutlineView } from './views.js'
 import { SettingsView } from './settings-ui.js'
 import { AiView } from './ai-panel.js'
-import { LANG_LABELS, KIND_LABELS, scriptKindOf } from '../editor/setup.js'
+import { LANG_LABELS } from '../editor/setup.js'
 import { openSearchPanel, toggleComment, foldAll, unfoldAll, undo, redo, selectAll } from '../../vendor/codemirror.js'
-import { minifyLuau } from '../editor/format.js'
 
 const VIEWS = [
   ['files', 'files', 'ファイル'],
@@ -42,10 +40,9 @@ export class Workbench {
     on('cursor', () => this.scheduleCursor())
     on('problems', () => this.updateStatus())
     on('running', () => { this.updateTop(); this.updateStatus() })
-    on('live', () => { this.updateTop(); this.updateStatus() })
+    on('python', () => this.updateStatus())
     on('breakpoints', () => { if (!(app.runner && app.runner.running)) this.updateTop() })
     on('project', () => { this.updateTop(); this.updateStatus() })
-    on('mode', () => { this.updateTop(); this.updateStatus() })
     on('saveState', () => this.updateStatus())
     on('fileOpened', () => { if (this.layout === 'mobile') this.toggleSidebar(false) })
   }
@@ -221,9 +218,8 @@ export class Workbench {
     const runner = app.runner
     const running = runner && runner.running
     const target = runner && runner.runTarget()
-    const runnable = !!target || (doc && doc.lang === 'luau') || app.files.some(f => !f.dir && /\.luau?$/.test(f.path))
+    const runnable = !!target || (doc && doc.lang === 'python') || app.files.some(f => !f.dir && /\.pyw?$/.test(f.path))
     const btn = (ic, title, fn, on) => h('button', { class: 'icon-btn' + (on ? ' on' : ''), title, 'aria-label': title, onclick: fn }, icon(ic, 20))
-    if (doc && doc.lang === 'luau') a.append(btn('copy', 'コードをコピー', () => runCommand('copyCode')))
     if (doc && doc.lang === 'markdown') a.append(btn('eye', 'プレビュー', () => { app.editors.togglePreview(); this.updateTop() }, app.editors.preview))
     if (this.layout === 'desktop' && app.editors.order.length > 1) a.append(btn('split', 'エディタを分割', () => { app.editors.toggleSplit(); this.updateTop() }, app.editors.split))
     a.append(btn('terminal', '出力パネル', () => this.togglePanel(), this.panelOpen))
@@ -234,8 +230,8 @@ export class Workbench {
     } else {
       const pinned = target && (!doc || doc.path !== target)
       const bps = runner && runner.debug ? bpStoreCount() : 0
-      a.append(h('button', { class: 'run-btn' + (bps ? ' has-bp' : ''), title: live.runsOnDevice() ? '実機で実行 (エグゼキューター)' : (target ? `${target} を実行` : '実行') + (bps ? ' — ブレークポイントで止まります' : '') + ' (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') },
-        icon(live.runsOnDevice() ? 'device' : bps ? 'bug' : 'play', 18), h('span', null, live.runsOnDevice() ? '実機で実行' : pinned ? vfs.basename(target).replace(/\.(server|client)?\.?luau?$/, '') : '実行')))
+      a.append(h('button', { class: 'run-btn' + (bps ? ' has-bp' : ''), title: (target ? `${target} を実行` : '実行') + (bps ? ' — ブレークポイントで止まります' : '') + ' (⌘/Ctrl + Enter)', 'aria-label': '実行', disabled: !runnable, onclick: () => runCommand('run') },
+        icon(bps ? 'bug' : 'play', 18), h('span', null, pinned ? vfs.basename(target).replace(/\.pyw?$/, '') : '実行')))
     }
     a.append(btn('more', 'その他', e => this.moreMenu(e.currentTarget)))
   }
@@ -243,20 +239,20 @@ export class Workbench {
   moreMenu(anchor) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
-    const luau = doc && doc.lang === 'luau'
+    const py = doc && doc.lang === 'python'
     const v = app.editors.activeView()
     const hasSel = v && !v.state.selection.main.empty
     menu([
       { label: '保存', icon: 'save', hint: '⌘S', run: () => runCommand('save'), disabled: !doc },
       { label: '整形', icon: 'format', hint: '⇧⌥F', run: () => runCommand('format'), disabled: !doc },
-      { label: 'この行のエラーを修正', icon: 'bulb', hint: '⌘.', run: () => runCommand('quickFix'), disabled: !luau },
-      { label: '誤字・全角記号をまとめて直す', icon: 'wand', run: () => runCommand('fixAllTypos'), disabled: !luau },
+      { label: 'この行のエラーを修正', icon: 'bulb', hint: '⌘.', run: () => runCommand('quickFix'), disabled: !py },
+      { label: '誤字・全角記号をまとめて直す', icon: 'wand', run: () => runCommand('fixAllTypos'), disabled: !py },
       '-',
-      hasSel && luau ? { label: '選択範囲だけ実行', icon: 'play', run: () => runCommand('runSelection') } : null,
+      hasSel && py ? { label: '選択範囲だけ実行', icon: 'play', run: () => runCommand('runSelection') } : null,
       { label: 'コードをコピー', icon: 'copy', run: () => runCommand('copyCode'), disabled: !doc },
-      { label: '圧縮してコピー', icon: 'copy', run: () => runCommand('copyMinified'), disabled: !luau },
-      getMode() === 'executor' ? { label: 'loadstring の 1 行を作る', icon: 'bolt', run: () => runCommand('copyLoader') } : null,
-      getMode() === 'executor' ? { label: 'UI ライブラリで GUI を作る', icon: 'layers', run: () => runCommand('uiGallery') } : null,
+      py ? { label: '定義へ移動', icon: 'target', hint: 'F12', run: () => runCommand('gotoDefinition') } : null,
+      py ? { label: '名前を変更 (すべての場所)', icon: 'rename', hint: 'F2', run: () => runCommand('renameSymbol') } : null,
+      { label: 'Python を再起動', icon: 'refresh', run: () => runCommand('restartPython') },
       { label: '共有 / ファイルに保存', icon: 'share', run: () => runCommand('shareFile'), disabled: !doc },
       '-',
       { label: '検索・置換', icon: 'search', hint: '⌘F', run: () => runCommand('find'), disabled: !doc },
@@ -277,17 +273,16 @@ export class Workbench {
   buildStatus() {
     const item = (cls, onclick, title) => h(onclick ? 'button' : 'span', { class: 'sb-item ' + cls, onclick, title })
     this.sb = {
-      mode: item('sb-mode', e => this.modeMenu(e.currentTarget), 'モードを切り替え'),
+      mode: item('sb-mode', e => this.pythonMenu(e.currentTarget), 'Python'),
       project: item('sb-project', () => runCommand('projects'), 'プロジェクト一覧'),
       problems: item('sb-problems', () => { this.togglePanel(true); app.runner.show('problems') }, '問題を表示'),
       save: item('sb-save', () => runCommand('save'), '保存の状態'),
       run: item('sb-run running hidden'),
-      live: item('sb-live hidden', () => runCommand('liveOpen'), '実機連携 (エグゼキューター)'),
       cursor: item('sb-cursor', () => runCommand('gotoLine'), '行へ移動'),
       indent: item('sb-indent hide-mobile', () => setSettings({ insertSpaces: !getSettings().insertSpaces }), 'タブ / スペースを切り替え'),
       kind: item('sb-kind'),
     }
-    this.status = h('footer', { class: 'statusbar' }, this.sb.mode, this.sb.project, this.sb.problems, this.sb.save, this.sb.run, this.sb.live, h('span', { class: 'sb-spacer' }), this.sb.cursor, this.sb.indent, this.sb.kind)
+    this.status = h('footer', { class: 'statusbar' }, this.sb.mode, this.sb.project, this.sb.problems, this.sb.save, this.sb.run, h('span', { class: 'sb-spacer' }), this.sb.cursor, this.sb.indent, this.sb.kind)
     this.sbCache = {}
   }
 
@@ -306,15 +301,11 @@ export class Workbench {
     const doc = app.editors && app.editors.activeDoc()
     const runner = app.runner
     const pc = runner ? runner.problemCount : { error: 0, warning: 0 }
-    const lv = live.status()
-    const showLive = !!lv.relay && lv.active
-    this.sb.live.classList.toggle('hidden', !showLive)
-    this.sb.live.dataset.state = lv.state
-    this.sbSet('live', showLive ? lv.state + lv.target + lv.device : '', () => (showLive ? [h('span', { class: 'sb-dot' }), lv.device ? '実機' : '実機連携'] : null))
-    const mode = getMode()
     const s = getSettings()
-    this.sb.mode.className = 'sb-item sb-mode k-' + mode
-    this.sbSet('mode', mode, () => [icon(mode === 'executor' ? 'bolt' : 'cube', 14), MODE_LABELS[mode]])
+    // Python の状態 (読み込み前 / 準備完了 3.14)
+    const pyv = runner && runner.pyStatus ? String(runner.pyStatus).replace(/^Python\s*/, '') : ''
+    this.sb.mode.className = 'sb-item sb-mode k-python' + (runner && runner.pyReady ? ' ready' : '')
+    this.sbSet('mode', pyv, () => [icon('python', 14), 'Python' + (pyv ? ' ' + pyv.split(' ')[0] : '')])
     this.sbSet('project', app.project ? app.project.name : '', () => (app.project ? [icon('folder', 13), h('span', { class: 'sb-clip' }, app.project.name)] : null))
     this.sb.problems.classList.toggle('err', pc.error > 0)
     this.sb.problems.classList.toggle('warn', !pc.error && pc.warning > 0)
@@ -335,9 +326,7 @@ export class Workbench {
     this.sb.kind.classList.toggle('none', !doc)
     if (doc) {
       this.sbSet('indent', s.insertSpaces + ':' + s.tabSize, () => (s.insertSpaces ? `スペース: ${s.tabSize}` : `タブ: ${s.tabSize}`))
-      const kind = scriptKindOf(doc.path, mode)
-      // Executor モードは左端に表示済みなので、ここでは言語名だけ
-      this.sbSet('kind', doc.lang + kind, () => (kind && kind !== 'executor' ? KIND_LABELS[kind].replace(/ \(.*\)$/, '') : LANG_LABELS[doc.lang] || doc.lang))
+      this.sbSet('kind', doc.lang, () => LANG_LABELS[doc.lang] || doc.lang)
       this.updateCursor()
     }
   }
@@ -357,13 +346,16 @@ export class Workbench {
     if (this.sbCache.cursor !== text) { this.sbCache.cursor = text; this.sb.cursor.textContent = text }
   }
 
-  modeMenu(anchor) {
-    const mode = getMode()
+  pythonMenu(anchor) {
+    const runner = app.runner
     menu([
-      { note: 'モードによって、補完・エラーチェック・実行環境が切り替わります' },
-      { label: 'Roblox Studio — ゲーム用のスクリプト', icon: 'cube', checked: mode === 'studio', run: () => runCommand('setMode', 'studio') },
-      { label: 'Executor — エグゼキューター API も使う', icon: 'bolt', checked: mode === 'executor', run: () => runCommand('setMode', 'executor') },
-    ], anchor, { title: 'このプロジェクトのモード' })
+      { note: runner && runner.pyReady ? `${runner.pyStatus} (ブラウザの中で動いています)` : 'Python は、はじめて実行したときに読み込みます' },
+      { label: '実行', icon: 'play', hint: '⌘Enter', run: () => runCommand('run') },
+      { label: 'Python を再起動', icon: 'refresh', run: () => runCommand('restartPython') },
+      { label: '出力を消す', icon: 'trash', run: () => runCommand('clearOutput') },
+      '-',
+      { label: '使えるライブラリ', icon: 'book', run: () => runCommand('help', 'packages') },
+    ], anchor, { title: 'Python' })
   }
 }
 
@@ -400,26 +392,9 @@ command('copyCode', 'コードをすべてコピー', async () => {
   haptic(10)
   toast(ok ? (sel ? '選択範囲をコピーしました' : 'コード全体をコピーしました') : 'コピーできませんでした', { icon: ok ? 'copy' : 'alert' })
 }, { icon: 'copy' })
-command('copyMinified', 'コードを圧縮してコピー', async () => {
-  const doc = app.editors.activeDoc()
-  if (!doc || doc.lang !== 'luau') return
-  try { await copyText(minifyLuau(doc.state.doc.toString())); toast('圧縮したコードをコピーしました', { icon: 'copy' }) } catch (e) { toast(e.message, { kind: 'error' }) }
-}, { icon: 'copy' })
-command('copyLoader', 'loadstring の 1 行を作る (エグゼキューター)', async () => {
-  const url = await promptDialog('loadstring の 1 行を作る', { label: 'スクリプトを置いた URL (GitHub の Raw や Pastebin の raw など)', placeholder: 'https://raw.githubusercontent.com/...', okLabel: 'コピー' })
-  if (!url) return
-  if (!/^https?:\/\//.test(url)) { toast('http:// か https:// で始まる URL を入力してください', { kind: 'error' }); return }
-  const ok = await copyText(`loadstring(game:HttpGet(${JSON.stringify(url)}))()`)
-  toast(ok ? 'コピーしました。エグゼキューターに貼り付けて実行できます' : 'コピーできませんでした', { icon: ok ? 'copy' : 'alert' })
-}, { icon: 'bolt' })
 command('shareFile', '共有 / ファイルに保存', () => {
   const doc = app.editors.activeDoc()
   if (doc) shareFile(doc.path.split('/').pop(), doc.state.doc.toString())
 }, { icon: 'share' })
-command('setMode', 'モードを切り替え (Studio / Executor)', async kind => {
-  const next = kind === 'studio' || kind === 'executor' ? kind : getMode() === 'studio' ? 'executor' : 'studio'
-  await setProjectKind(next)
-  toast(`${MODE_LABELS[next]} モードにしました`, { icon: next === 'executor' ? 'bolt' : 'cube' })
-}, { icon: 'swap' })
 command('unpinRun', '実行ファイルの固定を解除', () => setRunTarget(null).then(() => toast('開いているファイルを実行します')), { icon: 'pin' })
 command('reload', 'アプリを再読み込み', () => location.reload())

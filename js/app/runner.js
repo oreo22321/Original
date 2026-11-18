@@ -1,28 +1,17 @@
-// 実行パネル: 出力 / 問題 / ゲーム (GUI プレビュー・操作・オブジェクト一覧)
+// 実行パネル: 出力 (コンソール・input・図) / 問題 / デバッグ — Python
 import * as vfs from './vfs.js'
 import { app, command, refreshFiles, runCommand } from './app.js'
-import { getSettings, getMode, on, emit, isTouch } from './store.js'
-import { h, icon, toast, copyText, haptic, menu } from './ui.js'
+import { getSettings, on, emit, isTouch } from './store.js'
+import { h, icon, toast, copyText, haptic, menu, modal } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
-import { scriptKindOf, KIND_LABELS, langOf } from '../editor/setup.js'
-import { live, renderLivePanel } from './live.js'
+import { langOf } from '../editor/setup.js'
 import { explainError } from './explain.js'
-import { GuiStage, SCREENS } from './gui-preview.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
-import { proxyTemplate, remoteFailBlock, remoteActions } from './remote-ui.js'
 
 const MAX_DOM_LINES = 3000
-// 実機のエラーから「ファイル:行」を取り出す (チャンク名をファイルのパスにしているので、そのまま行へ移動できる)
-function fileLine(text) {
-  const m = /([\w./ -]*[\w-]\.luau?):(\d+):/.exec(String(text || ''))
-  return m && app.files.some(f => f.path === m[1]) ? { file: m[1], line: Number(m[2]) } : {}
-}
-function deviceTrace(text) {
-  const lines = String(text || '').split('\n').slice(1).map(l => l.trim()).filter(l => /\.luau?:\d+/.test(l))
-  return lines.length > 1 ? lines : null
-}
-
-const LINK_RE = /((?:[\w./ -]*[\w-]\.luau?)(?::| line )\d+)/
+// 'File "main.py", line 3' / 'main.py:3' をタップで開けるリンクにする
+const LINK_RE = /(File "[^"]+", line \d+|[\w./-]+\.py:\d+)/
+const LINK_PARTS = /^(?:File "([^"]+)", line (\d+)|([\w./-]+\.py):(\d+))$/
 
 export class Runner {
   constructor(root) {
@@ -36,21 +25,16 @@ export class Runner {
     this.query = ''
     this.problemCount = { error: 0, warning: 0 }
     this.problems = []
-    this.game = { tree: null, gui: null, interact: null, drawings: null }
-    this.screen = (() => { try { return localStorage.getItem('forgecode.screen') } catch { return null } })() || (isTouch ? 'phone' : 'pc')
     this.taps = new Set()          // 実行結果を受け取る側 (AI エージェントの「実行」など)
-    this.descWaits = new Map()
-    this.descSeq = 0
-    // ゲーム画面 (実行のたびに作り直さず、差分だけ反映する)
-    this.stage = new GuiStage({ onInput: m => this.sendInput(m), screen: this.screen })
-    this.stage.onFull = () => { if (this.tab === 'game') this.renderGame() }
-    this.stage.onVisible = on => { if (this.worker && this.running) this.worker.postMessage({ type: 'guiVisible', on }) }
+    this.seq = 0
+    this.evalWaits = new Map()
+    this.pyStatus = ''
     this.build()
     on('docchange', () => this.scheduleProblems())
     on('active', () => this.scheduleProblems(120))
-    on('mode', () => this.scheduleProblems(600))
-    // ▶ を押してすぐ実行できるよう、空いた時間にワーカーを起動しておく
-    setTimeout(() => this.ensureWorker(), 1200)
+    on('diagnostics', doc => { if (doc && doc.path === app.editors.active) this.scheduleProblems(60) })
+    // ▶ を押してすぐ実行できるよう、手が空いたら Python を準備しておく
+    setTimeout(() => this.ensureWorker(), 1500)
   }
 
   build() {
@@ -63,15 +47,9 @@ export class Runner {
     this.consoleEl = this.buildConsole()
     this.outWrap = h('div', { class: 'panel-view out-view' }, this.searchEl, this.outEl, this.consoleEl)
     this.probEl = h('div', { class: 'panel-view problems hidden' })
-    this.gameEl = h('div', { class: 'panel-view game-view hidden' })
     this.debugEl = h('div', { class: 'panel-view debug-view hidden' })
-    this.liveEl = h('div', { class: 'panel-view live-view hidden' })
     this.debug = new DebugPanel(this, this.debugEl)
-    this.root.append(this.head, this.outWrap, this.probEl, this.debugEl, this.gameEl, this.liveEl)
-    // 実機連携 (エグゼキューター) からの出力・エラー
-    live.onEvent(m => this.onLive(m))
-    on('live', () => { this.renderTabs(); if (this.tab === 'live') renderLivePanel(this.liveEl, this) })
-    if (live.relay && live.active) setTimeout(() => live.start(), 800)
+    this.root.append(this.head, this.outWrap, this.probEl, this.debugEl)
     this.renderTabs()
     this.placeholder()
   }
@@ -80,30 +58,28 @@ export class Runner {
     const t = (id, label, badge) => h('button', { class: 'panel-tab' + (this.tab === id ? ' active' : ''), role: 'tab', 'aria-selected': this.tab === id ? 'true' : 'false', onclick: () => this.show(id) }, label, badge ? h('span', { class: 'badge ' + (badge.kind || '') }, badge.n) : null)
     this.tabs.textContent = ''
     const pc = this.problemCount
-    const g = this.game
     this.tabs.append(
-      t('output', '出力'),
+      t('output', '出力', this.inputPending ? { n: '⌨', kind: 'live' } : null),
       t('problems', '問題', pc.error + pc.warning ? { n: pc.error + pc.warning, kind: pc.error ? 'error' : 'warn' } : null),
       t('debug', 'デバッグ', this.debug.paused ? { n: '⏸', kind: 'paused' } : bpStore.count() ? { n: bpStore.count(), kind: 'bp' } : null),
-      t('game', 'ゲーム', g.gui || g.interact ? { n: '●', kind: this.waiting ? 'live' : 'dot' } : null),
-      t('live', '実機', live.relay ? { n: '●', kind: live.state === 'online' ? 'live' : 'dot' } : null),
     )
     this.actions.textContent = ''
     const btn = (ic, title, fn, on) => h('button', { class: 'icon-btn' + (on ? ' on' : ''), title, 'aria-label': title, onclick: fn }, icon(ic, 18))
     const narrow = document.body.dataset.layout === 'mobile'
     if (this.tab === 'output' && narrow) {
-      // スマホ: 出力の操作は 1 つのメニューにまとめて、タブを広く使う
       this.actions.append(btn('more', '出力の操作', e => menu([
         { label: this.filter === 'all' ? 'エラーと警告だけ表示' : 'すべて表示', icon: 'filter', run: () => { this.filter = this.filter === 'all' ? 'issues' : 'all'; this.outEl.classList.toggle('only-issues', this.filter !== 'all'); this.renderTabs() } },
         { label: '出力を絞り込み', icon: 'search', run: () => { this.searchEl.classList.remove('hidden'); this.searchEl.focus() } },
         { label: '出力をコピー', icon: 'copy', run: () => copyText(this.outputText()).then(() => toast('出力をコピーしました', { icon: 'copy' })) },
         { label: 'クリア', icon: 'trash', run: () => this.clear() },
+        { label: 'Python を再起動', icon: 'refresh', run: () => this.restartPython() },
       ], e.currentTarget, { title: '出力' }), this.filter !== 'all'))
     } else if (this.tab === 'output') {
       this.actions.append(
         btn('filter', this.filter === 'all' ? 'エラーと警告だけ表示' : 'すべて表示', () => { this.filter = this.filter === 'all' ? 'issues' : 'all'; this.outEl.classList.toggle('only-issues', this.filter !== 'all'); this.renderTabs() }, this.filter !== 'all'),
         btn('search', '出力を絞り込み', () => { this.searchEl.classList.toggle('hidden'); if (this.searchEl.classList.contains('hidden')) { this.searchEl.value = ''; this.query = ''; this.applyQuery() } else this.searchEl.focus(); this.renderTabs() }, !this.searchEl.classList.contains('hidden')),
         btn('copy', '出力をコピー', () => copyText(this.outputText()).then(() => toast('出力をコピーしました', { icon: 'copy' }))),
+        btn('refresh', 'Python を再起動 (変数をすべて消す)', () => this.restartPython()),
         btn('trash', 'クリア', () => this.clear()))
     }
     this.actions.append(btn('close', 'パネルを閉じる', () => runCommand('togglePanel', false)))
@@ -113,13 +89,9 @@ export class Runner {
     this.tab = tab
     this.outWrap.classList.toggle('hidden', tab !== 'output')
     this.probEl.classList.toggle('hidden', tab !== 'problems')
-    this.gameEl.classList.toggle('hidden', tab !== 'game')
     this.debugEl.classList.toggle('hidden', tab !== 'debug')
-    this.liveEl.classList.toggle('hidden', tab !== 'live')
-    if (tab === 'live') renderLivePanel(this.liveEl, this)
     if (tab === 'debug') this.debug.render()
     if (tab === 'problems') this.renderProblems()
-    if (tab === 'game') this.renderGame()
     this.renderTabs()
   }
 
@@ -134,6 +106,7 @@ export class Runner {
     this.lineCount = 0
     this.last = null
     this.holdScroll = false
+    this.inputRow = null
     this.placeholder()
   }
 
@@ -146,21 +119,20 @@ export class Runner {
     for (const el of this.outEl.children) el.classList.toggle('q-hide', !!q && !(el.dataset.text || el.textContent).toLowerCase().includes(q))
   }
 
-  // ファイル:行 をタップで開けるリンクにする
+  // ファイルの行をタップで開けるリンクにする
   linkify(el, text) {
-    const parts = String(text).split(LINK_RE)
-    for (const p of parts) {
-      const m = /^([\w./ -]*[\w-]\.luau?)(?::| line )(\d+)$/.exec(p)
-      if (m && app.files.some(f => f.path === m[1])) {
-        el.append(h('a', { class: 'out-link', href: '#', onclick: e => { e.preventDefault(); app.editors.open(m[1], { line: Number(m[2]) }) } }, p))
+    for (const p of String(text).split(LINK_RE)) {
+      const m = LINK_PARTS.exec(p)
+      const file = m && (m[1] || m[3])
+      if (m && app.files.some(f => f.path === file)) {
+        el.append(h('a', { class: 'out-link', href: '#', onclick: e => { e.preventDefault(); app.editors.open(file, { line: Number(m[2] || m[4]) }) } }, p))
       } else if (p) el.append(p)
     }
   }
 
-  makeLine(kind, text, t) {
+  makeLine(kind, text) {
     const el = h('div', { class: 'out-line ' + kind })
     el.dataset.text = text
-    if (t !== undefined && getSettings().outputTime) el.append(h('span', { class: 'out-time' }, (t / 1000).toFixed(2)))
     const body = h('span', { class: 'out-text' })
     this.linkify(body, text)
     el.append(body)
@@ -177,24 +149,35 @@ export class Runner {
     const group = getSettings().groupOutput
     const frag = document.createDocumentFragment()
     for (const it of items) {
+      const kind = it.kind === 'error-text' ? 'stderr' : it.kind
       const last = this.last
-      if (group && last && last.kind === it.kind && last.text === it.text) {
+      // 改行のない行 (input の案内・end="" の print) の続きは、同じ行につなげる (入力した文字も、案内の横に)
+      if (last && last.partial && last.el.isConnected && (kind === 'input-echo' || kind === last.kind)) {
+        const body = last.el.querySelector('.out-text')
+        if (kind === 'input-echo') body.append(h('span', { class: 'out-echo' }, it.text))
+        else this.linkify(body, it.text)
+        last.text += it.text
+        last.el.dataset.text = last.text
+        last.partial = kind === 'input-echo' ? false : !!it.partial
+        continue
+      }
+      if (group && last && last.kind === kind && last.text === it.text && !it.partial) {
         last.n++
         if (!last.badge) { last.badge = h('span', { class: 'out-count' }); last.el.append(last.badge) }
         last.badge.textContent = '×' + last.n
         continue
       }
-      const el = this.makeLine(it.kind, it.text, it.t)
-      // 大量の出力はアニメーションしない (速さ優先)
+      const el = this.makeLine(kind, it.text)
       if (items.length > 20) el.classList.add('no-anim')
       frag.append(el)
       this.lineCount++
-      this.last = { kind: it.kind, text: it.text, el, n: 1, badge: null }
+      this.last = { kind, text: it.text, el, n: 1, badge: null, partial: !!it.partial }
     }
-    out.append(frag)
+    // 入力欄があれば、その手前に入れる
+    if (this.inputRow && this.inputRow.parentElement === out) out.insertBefore(frag, this.inputRow)
+    else out.append(frag)
     let extra = out.childElementCount - MAX_DOM_LINES
     while (extra-- > 0) out.firstElementChild.remove()
-    // エラーの解説を表示した後は、読んでいる位置を動かさない
     if (atBottom && !this.holdScroll) out.scrollTop = out.scrollHeight
   }
 
@@ -204,206 +187,164 @@ export class Runner {
   }
 
   // ============================================================
-  // ワーカー
+  // Python (ワーカー)
   // ============================================================
   ensureWorker() {
     if (this.worker) return this.worker
-    let w = null
-    if (!this.noWorker) {
-      try { w = new Worker(new URL('../workers/luau-worker.js', import.meta.url), { type: 'module' }) } catch { w = null }
+    let w
+    try { w = new Worker(new URL('../workers/python-worker.js', import.meta.url), { type: 'module' }) } catch (e) {
+      this.line('error', 'Python を起動できませんでした: ' + (e && e.message || e))
+      return null
     }
-    if (!w) { this.noWorker = true; w = this.inlineWorker() }
+    // 共有メモリ (input() と停止に使う)。使えない環境では、停止はワーカーごと止める
+    if (self.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined') {
+      this.shared = { interrupt: new SharedArrayBuffer(4), ctl: new SharedArrayBuffer(8), buf: new SharedArrayBuffer(64 * 1024), dctl: new SharedArrayBuffer(8), dbuf: new SharedArrayBuffer(256 * 1024) }
+    } else this.shared = null
+    w.onmessage = e => { if (this.worker === w) this.onMessage(e.data) }
     w.onerror = e => {
-      if (e.preventDefault) e.preventDefault()
+      if (e && e.preventDefault) e.preventDefault()
       if (this.worker !== w) return
       this.worker = null
-      // 一度も応答しないまま失敗した = この環境ではワーカーを使えない → メインスレッドで動かす
-      if (!w.alive && !w.inline) {
-        this.noWorker = true
-        const nw = this.ensureWorker()
-        if (this.running && this.lastRunMsg && nw) { nw.postMessage(this.lastRunMsg); nw.postMessage({ type: 'guiVisible', on: !!this.stage.visible }) }
-        return
-      }
-      if (this.running) { this.line('error', '実行エンジンでエラーが発生しました: ' + (e.message || 'このブラウザはモジュールワーカーに対応していない可能性があります')); this.finished('error') }
+      if (this.running) { this.line('error', 'Python でエラーが発生しました: ' + (e.message || '')); this.finished('error') }
     }
-    w.onmessage = e => { w.alive = true; if (this.worker === w) this.onMessage(e.data) }
-    w.postMessage({ type: 'warm' })
+    w.postMessage({ type: 'init', ...(this.shared || {}) })
     this.worker = w
     return w
   }
 
-  // ワーカーを作れない環境用: 同じ実行エンジンをメインスレッドで動かす (無限ループは時間切れで止まります)
-  inlineWorker() {
-    let handler = null, dead = false
-    const queue = []
-    const clone = d => { try { return structuredClone(d) } catch { return JSON.parse(JSON.stringify(d)) } }
-    const fake = {
-      inline: true, alive: true, onmessage: null, onerror: null,
-      postMessage(m) {
-        if (dead) return
-        const d = clone(m)
-        if (handler) setTimeout(() => { if (!dead) handler(d) })
-        else queue.push(d)
-      },
-      terminate() { if (handler && !dead) { try { handler({ type: 'stop' }) } catch {} } dead = true },
-    }
-    import('../workers/luau-worker.js').then(mod => {
-      if (dead) return
-      handler = mod.attachHost(m => { if (!dead) setTimeout(() => { if (!dead && fake.onmessage) fake.onmessage({ data: m }) }) })
-      for (const d of queue.splice(0)) setTimeout(() => { if (!dead) handler(d) })
-    }, e => { if (fake.onerror) fake.onerror({ message: e && e.message }) })
-    return fake
-  }
-
-  // いまの画面 (GUI・Drawing・Workspace) を文章で受け取る (AI 用)
-  describeScreen() {
-    return new Promise(resolve => {
-      const w = this.worker
-      if (!w) { resolve(null); return }
-      const id = ++this.descSeq
-      this.descWaits.set(id, resolve)
-      w.postMessage({ type: 'describe', id })
-      setTimeout(() => { if (this.descWaits.delete(id)) resolve(null) }, 2000)
-    })
-  }
-
-  // 実行して、出力・エラー・画面の様子をまとめて返す (AI エージェント用)
-  async runAndCollect({ path, seconds = 4, signal } = {}) {
-    const rec = { output: [], errors: [], done: null }
-    const tap = m => {
-      if (m.type === 'output') { for (const it of m.items) if (rec.output.length < 400) rec.output.push(it) }
-      else if (m.type === 'error') rec.errors.push({ text: m.text, file: m.file, line: m.line, traceback: m.traceback })
-      else if (m.type === 'done') rec.done = m.reason || 'done'
-    }
-    this.taps.add(tap)
-    try {
-      await this.run({ path, agent: true })
-      if (!this.running) return { ...rec, started: false }
-      const until = performance.now() + Math.max(0.5, Math.min(15, seconds)) * 1000
-      await new Promise(resolve => {
-        const iv = setInterval(() => {
-          if (rec.done || !this.running || performance.now() > until || (signal && signal.aborted)) { clearInterval(iv); resolve() }
-        }, 80)
-      })
-      // GUI の反映を少し待つ
-      await new Promise(r => setTimeout(r, 120))
-      const screen = await this.describeScreen()
-      return { ...rec, started: true, stillRunning: !!this.running, screen }
-    } finally { this.taps.delete(tap) }
-  }
-
   resetWorker() {
     if (this.worker) { try { this.worker.terminate() } catch {} this.worker = null }
-    // 次の実行に備えて起動しておく
+    this.inputPending = false
+    this.removeInput()
     setTimeout(() => this.ensureWorker(), 300)
   }
 
-  // ============================================================
-  // 実行
-  // ============================================================
+  restartPython() {
+    if (this.running) this.stop(true)
+    this.resetWorker()
+    this.line('meta', 'Python を再起動しました (変数をすべて消しました)')
+  }
+
   runTarget() {
     const p = app.project
     return p && p.runTarget && app.files.some(f => f.path === p.runTarget && !f.dir) ? p.runTarget : null
   }
 
-  // 実行に渡すファイル一覧 (開いているファイルは編集中の内容)
+  // 実行に渡すファイル (開いているファイルは編集中の内容)
   filesPayload() {
-    const files = {}, wsFiles = {}, wsFolders = []
+    const files = {}
     for (const f of app.files) {
+      if (f.dir) continue
       const content = app.editors.docs.has(f.path) ? app.editors.docs.get(f.path).state.doc.toString() : app.contents.get(f.path)
-      if (f.path.startsWith('workspace/')) {
-        const rel = f.path.slice('workspace/'.length)
-        if (f.dir) wsFolders.push(rel)
-        else wsFiles[rel] = content || ''
-      }
-      if (!f.dir && /\.(luau?|txt|json|csv|md)$/i.test(f.path)) files[f.path] = content || ''
+      if (content !== undefined && content !== null && content.length < 2_000_000) files[f.path] = content
     }
-    return { files, wsFiles, wsFolders }
+    return files
   }
 
-  runOptions(kind, extra = {}) {
-    const s = getSettings()
-    const mode = getMode()
-    const sc = SCREENS.find(x => x.id === this.screen) || SCREENS[0]
-    // 選んだ画面 (スマホ / タブレット / PC) の端末として動かす
-    // ワーカーを使えずメインスレッドで動かすときは、画面が固まらないよう連続実行の上限を短くする
-    const limit = this.noWorker ? Math.min(s.timeLimit, 4) : s.timeLimit
-    return { timeLimit: limit * 1000, maxRunTime: s.maxRunTime, executor: mode === 'executor', kind, touch: sc.id !== 'pc', device: sc.id, screen: [sc.w, sc.h], net: { proxy: proxyTemplate() }, ...extra }
-  }
-
-  async run({ selection = false, debug = false, path: forcePath = null, agent = false, device = false } = {}) {
+  async run({ selection = false, path: forcePath = null, agent = false, debug = false } = {}) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
     let path = null, source = null
     if (selection) {
       const v = app.editors.activeView()
-      if (!v || !doc || doc.lang !== 'luau' || v.state.selection.main.empty) { toast('実行したい部分を選択してください'); return }
+      if (!v || !doc || doc.lang !== 'python' || v.state.selection.main.empty) { toast('実行したい部分を選択してください'); return }
       path = doc.path
       // 行番号がずれないよう、選択より前は空行にする
       const sel = v.state.selection.main
-      source = '\n'.repeat(v.state.doc.lineAt(sel.from).number - 1) + v.state.sliceDoc(sel.from, sel.to)
+      const fromLine = v.state.doc.lineAt(sel.from)
+      const text = v.state.sliceDoc(fromLine.from, sel.to)
+      // 選択の字下げをそろえる
+      const ind = Math.min(...text.split('\n').filter(l => l.trim()).map(l => /^[ \t]*/.exec(l)[0].length))
+      source = '\n'.repeat(fromLine.number - 1) + text.split('\n').map(l => l.slice(Math.min(ind, /^[ \t]*/.exec(l)[0].length))).join('\n')
     } else {
       const target = forcePath && app.files.some(f => f.path === forcePath && !f.dir) ? forcePath : this.runTarget()
       if (target) path = target
-      else if (doc && doc.lang === 'luau') path = doc.path
+      else if (doc && doc.lang === 'python') path = doc.path
       else if (doc && doc.lang === 'markdown') { app.editors.togglePreview(true); return }
       else {
-        const main = app.files.find(f => !f.dir && /(^|\/)(main|init)[\w.]*\.luau?$/.test(f.path)) || app.files.find(f => !f.dir && langOf(f.path) === 'luau')
-        if (!main) { toast('実行する Luau ファイル (.luau / .lua) がありません'); return }
+        const main = app.files.find(f => !f.dir && /(^|\/)main\.py$/.test(f.path)) || app.files.find(f => !f.dir && langOf(f.path) === 'python')
+        if (!main) { toast('実行する Python のファイル (.py) がありません'); return }
         path = main.path
       }
       const open = app.editors.docs.get(path)
       source = open ? open.state.doc.toString() : app.contents.get(path)
       if (source === undefined) source = (await vfs.readFile(app.project.id, path)) || ''
     }
-    // 実機 (エグゼキューター) で実行
-    // 実機で実行 (自動のときは、ブレークポイントがあればエミュレーターでデバッグ)
-    const autoDevice = live.runsOnDevice() && !(live.target === 'auto' && Object.keys(bpStore.forRun()).length)
-    if (!agent && !debug && (device || autoDevice)) { this.runOnDevice(path, source, selection); return }
     if (this.running) this.stop(true)
-    // 保存は裏で行い、実行は待たせない (開いているファイルは編集中の内容を使う)
     app.editors.saveAll().catch(() => {})
-    runCommand('togglePanel', true)
-    if (this.tab !== 'output') this.show('output')
+    if (!agent) {
+      runCommand('togglePanel', true)
+      if (this.tab !== 'output') this.show('output')
+    }
     if (s.clearOnRun) this.clear()
     haptic(10)
     app.editors.clearRunErrors()
-    const mode = getMode()
-    const kind = scriptKindOf(path, mode)
-    const { files, wsFiles, wsFolders } = this.filesPayload()
-    if (!selection) files[path] = source
-    // ブレークポイントがあれば自動でデバッグ実行
-    const bps = bpStore.forRun()
-    const useDebug = debug || (!selection && Object.keys(bps).length > 0)
+    const files = this.filesPayload()
+    files[path] = source
     const w = this.ensureWorker()
-    if (!w) { this.line('error', '実行エンジンを起動できませんでした。ページを再読み込みしてください'); return }
-    this.game = { tree: null, gui: null, interact: null, drawings: null }
-    this.stage.reset()
-    this.stage.live = true
-    this.waiting = false
-    this.uiMode = false
-    this.waitNoted = false
-    this.sawGui = false
-    this.holdScroll = false
+    if (!w) return
     this.errors = 0
-    this.errorEls = new Map()
-    this.remoteShown = new Set()
-    this.setRunning({ path, kind, debug: useDebug })
+    this.holdScroll = false
+    const id = ++this.seq
+    this.runId = id
+    // ブレークポイントがあれば、そこで止まる (なくても ⏸ や breakpoint() で途中から止められる)
+    const bps = agent ? {} : bpStore.forRun()
+    const hasBps = Object.keys(bps).length > 0
+    this.dq = []
+    if (this.shared) Atomics.store(new Int32Array(this.shared.dctl), 0, 0)
+    if ((debug || hasBps) && !this.shared) this.append([{ kind: 'warn', text: 'デバッガーを使うには、ページを再読み込みしてください (はじめて開いたときは再読み込みが必要です)' }])
+    this.setRunning({ path, id, debug: !!this.shared && (debug || hasBps) })
     this.t0 = performance.now()
-    this.append([{ kind: 'meta', text: `${useDebug ? 'デバッグ:' : '実行:'} ${path}${selection ? ' (選択範囲)' : ''} — ${KIND_LABELS[kind]}${useDebug ? ' (デバッグ)' : ''}` }])
+    this.startWatchdog(id)
+    this.append([{ kind: 'meta', text: `実行: ${path}${selection ? ' (選択範囲)' : ''}` }])
+    if (!this.pyReady) this.append([{ kind: 'meta', text: 'Python を準備しています… (初回は少し時間がかかります)' }])
     this.renderTabs()
-    const options = this.runOptions(kind, useDebug ? { debug: { breakpoints: bps, watches: this.debug.watches } } : {})
-    if (agent) options.net = { ...options.net, agent: true }
-    this.lastRunMsg = { type: 'run', source, path, chunkName: path, files, wsFiles, wsFolders, projectName: app.project.name, options }
-    w.postMessage(this.lastRunMsg)
-    w.postMessage({ type: 'guiVisible', on: !!this.stage.visible })
+    if (this.shared) new Int32Array(this.shared.interrupt)[0] = 0
+    w.postMessage({ type: 'run', id, files, entry: path, debug: this.shared ? { bps, watches: this.debug.watches } : null })
   }
 
   // ============================================================
-  // コンソール: 式やコードをその場で実行 (実行後も同じ環境で続けられる)
+  // 入力 (input()) — 出力の下に入力欄を出す
+  // ============================================================
+  showInput() {
+    this.removeInput()
+    this.inputPending = true
+    const field = h('input', { class: 'input out-input-field', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': 'プログラムへの入力' })
+    const send = (eof = false) => {
+      if (!this.shared || !this.inputPending) return
+      const ctl = new Int32Array(this.shared.ctl)
+      const bytes = new TextEncoder().encode(field.value)
+      const buf = new Uint8Array(this.shared.buf)
+      const n = Math.min(bytes.length, buf.length)
+      buf.set(bytes.subarray(0, n))
+      Atomics.store(ctl, 1, n)
+      Atomics.store(ctl, 0, eof ? 2 : 1)
+      Atomics.notify(ctl, 0)
+      if (!eof) this.append([{ kind: 'input-echo', text: field.value }])
+      this.inputPending = false
+      this.removeInput()
+      this.renderTabs()
+    }
+    field.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); send() } })
+    this.inputRow = h('div', { class: 'out-input' }, icon('keyboard', 15), field,
+      h('button', { class: 'btn small primary', onclick: () => send() }, '送る'),
+      h('button', { class: 'btn small ghost', title: '入力を終える (EOF)', onclick: () => send(true) }, '終わり'))
+    this.outEl.append(this.inputRow)
+    this.outEl.scrollTop = this.outEl.scrollHeight
+    runCommand('togglePanel', true)
+    if (this.tab !== 'output') this.show('output')
+    this.renderTabs()
+    setTimeout(() => field.focus(), 30)
+  }
+  removeInput() {
+    if (this.inputRow) { this.inputRow.remove(); this.inputRow = null }
+  }
+
+  // ============================================================
+  // コンソール: 最後に実行したプログラムの続きで、式や文を試す
   // ============================================================
   buildConsole() {
-    const input = h('input', { class: 'console-input', placeholder: document.body.dataset.layout === 'mobile' ? '式やコードを入力 (例: 1 + 2)' : '式やコードを入力して Enter (例: 1 + 2, workspace:GetChildren())', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'go', 'aria-label': 'コンソール' })
+    const input = h('input', { class: 'console-input', placeholder: document.body.dataset.layout === 'mobile' ? '式やコードを入力 (例: 1 + 2)' : 'Python の式やコードを入力して Enter (例: 1 + 2, len(names))', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'go', 'aria-label': 'コンソール' })
     this.history = (() => { try { return JSON.parse(localStorage.getItem('forgecode.consoleHistory') || '[]') } catch { return [] } })()
     let hi = -1
     input.addEventListener('keydown', e => {
@@ -423,323 +364,241 @@ export class Runner {
       }
     })
     this.consoleInput = input
-    return h('div', { class: 'console-row' }, h('span', { class: 'console-prompt' }, '›'), input,
+    return h('div', { class: 'console-row' }, h('span', { class: 'console-prompt' }, '>>>'), input,
       h('button', { class: 'icon-btn sm', title: '実行', 'aria-label': '実行', onclick: () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) }, icon('send', 16)))
   }
 
-  evalConsole(code, { device = false } = {}) {
-    if (device || live.runsOnDevice()) { this.evalOnDevice(code); return }
+  evalConsole(code) {
     const w = this.ensureWorker()
     if (!w) return
     this.append([{ kind: 'input', text: code }])
     this.outEl.scrollTop = this.outEl.scrollHeight
-    const kind = getMode() === 'executor' ? 'executor' : 'client'
-    const init = app.project ? { path: 'コンソール', chunkName: 'コンソール', ...this.filesPayload(), projectName: app.project.name, options: this.runOptions(kind) } : null
-    if (!this.running && init) { this.t0 = performance.now(); this.setRunning({ path: 'コンソール', kind, repl: true }) }
-    w.postMessage({ type: 'eval', code, init })
+    const id = ++this.seq
+    // 一時停止中は、止まっている場所の変数で実行する
+    if (this.debug.paused && this.sendDebug({ type: 'eval', id, code })) return
+    if (this.running) { this.append([{ kind: 'warn', text: '実行中はコンソールを使えません (⏸ で一時停止すると、その場所の変数で試せます)' }]); return }
+    w.postMessage({ type: 'eval', id, code })
   }
 
   debugValue(expr) { return this.debug.valueFor(expr) }
 
+  // デバッガーへの指示 (共有メモリで渡す。走っている途中ならシグナルで知らせる)
+  sendDebug(cmd) {
+    if (!this.shared || !this.running) return false
+    this.dq = this.dq || []
+    this.dq.push(cmd)
+    this.pumpDebug()
+    return true
+  }
+  pumpDebug() {
+    clearTimeout(this.dqTimer)
+    if (!this.shared || !this.running) { this.dq = []; return }
+    const ctl = new Int32Array(this.shared.dctl)
+    while (this.dq.length && Atomics.load(ctl, 0) === 0) {
+      const bytes = new TextEncoder().encode(JSON.stringify(this.dq.shift()))
+      const buf = new Uint8Array(this.shared.dbuf)
+      if (bytes.length > buf.length) continue
+      buf.set(bytes)
+      Atomics.store(ctl, 1, bytes.length)
+      Atomics.store(ctl, 0, 1)
+      Atomics.notify(ctl, 0)
+      if (!this.debug.paused) { const ib = new Int32Array(this.shared.interrupt); if (ib[0] === 0) ib[0] = 10 }
+    }
+    if (this.dq.length) this.dqTimer = setTimeout(() => this.pumpDebug(), 30)
+  }
+
   setRunning(info) {
     this.running = info
+    if (!info) clearInterval(this.watchdog)
     emit('running', info)
   }
 
-  finished(reason) {
+  // 最大実行時間 (設定)。入力待ち・一時停止の間は数えない
+  startWatchdog(id) {
+    clearInterval(this.watchdog)
+    let used = 0, last = performance.now()
+    this.watchdog = setInterval(() => {
+      const now = performance.now()
+      const limit = getSettings().maxRunTime
+      if (!this.running || this.runId !== id) { clearInterval(this.watchdog); return }
+      if (!this.inputPending && !this.debug.paused) used += now - last
+      last = now
+      if (limit > 0 && used > limit * 1000) {
+        clearInterval(this.watchdog)
+        this.append([{ kind: 'warn', text: `最大実行時間 (${limit} 秒) を超えたので止めました (設定の「最大実行時間」で変えられます)` }])
+        this.stop()
+      }
+    }, 250)
+  }
+
+  finished(reason, ms) {
     this.debug.onFinished()
-    if (this.running && this.running.repl) { this.waiting = false; this.setRunning(null); this.renderTabs(); return }
-    const sec = ((performance.now() - this.t0) / 1000).toFixed(2)
-    const msg = reason === 'stopped' ? `■ 停止しました (${sec} 秒)` : reason === 'error' ? `✕ エラーで終了 (${sec} 秒)` : reason === 'timeout' ? `■ 時間切れ (${sec} 秒)` : this.errors ? `✕ 終了 — エラー ${this.errors} 件 (${sec} 秒)` : `✓ 完了 (${sec} 秒)`
-    this.append([{ kind: reason === 'error' || this.errors ? 'meta error' : 'meta', text: msg }])
-    this.waiting = false
-    this.stage.live = false
-    this.stage.closeText(true)
+    this.inputPending = false
+    this.removeInput()
+    const sec = ((ms !== undefined ? ms : performance.now() - this.t0) / 1000).toFixed(2)
+    const msg = reason === 'stopped' ? `■ 停止しました (${sec} 秒)` : reason === 'error' ? `✕ エラーで終了 (${sec} 秒)` : reason === 'load' ? '✕ Python を読み込めませんでした' : `✓ 完了 (${sec} 秒)`
+    this.append([{ kind: reason === 'error' || reason === 'load' ? 'meta error' : 'meta', text: msg }])
     this.setRunning(null)
     this.renderTabs()
-    if (this.tab === 'game') this.renderGame()
   }
 
   onMessage(m) {
     if (this.taps.size) for (const t of this.taps) { try { t(m) } catch {} }
     switch (m.type) {
-      case 'described': { const r = this.descWaits.get(m.id); if (r) { this.descWaits.delete(m.id); r(m) } break }
+      case 'status':
+        if (m.state === 'ready') { this.pyReady = true; this.pyStatus = m.text; emit('python', m) }
+        else if (m.state === 'error') { this.line('error', m.text) }
+        break
       case 'output': this.append(m.items); break
-      case 'error': this.showError(m); break
-      case 'remoteFail': {
-        // 外部スクリプトを取得できなかった: 中継・貼り付けのボタンを、続くエラー表示に入れる (URL ごとに 1 回)
-        if (!this.remoteShown) this.remoteShown = new Set()
-        if (this.remoteShown.has(m.url)) break
-        this.remoteShown.add(m.url)
-        const pending = { url: m.url, reason: m.reason }
-        this.pendingRemote = pending
-        // エラーにならなかった (pcall で包まれていた) ときは、別に案内を出す
-        setTimeout(() => {
-          if (this.pendingRemote !== pending) return
-          this.pendingRemote = null
-          if (!this.lineCount) this.outEl.textContent = ''
-          this.outEl.append(remoteFailBlock(m.url, m.reason, { rerun: () => this.run() }))
-          this.lineCount++
-          this.last = null
-        }, 600)
+      case 'paused':
+        if (!this.running) break
+        if (!this.running.debug) this.running.debug = true
+        this.debug.onPaused(m)
         break
-      }
-      case 'errorRepeat': {
-        // 同じエラーの繰り返し: 回数だけ更新
-        const el = this.errorEls && this.errorEls.get(m.text)
-        if (el) {
-          let b = el.querySelector('.oe-count')
-          if (!b) { b = h('span', { class: 'oe-count', title: '同じエラーが繰り返し発生しています' }); el.querySelector('.oe-head').append(b) }
-          b.textContent = '×' + m.n
-        }
-        break
-      }
-      case 'fs': this.onFs(m); break
-      case 'clipboard':
-        copyText(m.text).then(ok => {
-          if (ok) toast('setclipboard: クリップボードにコピーしました', { icon: 'copy' })
-          else toast('setclipboard が呼ばれました', { action: { label: 'コピー', run: () => copyText(m.text) }, duration: 6000 })
-        })
-        break
-      case 'clear': this.clear(); break
-      case 'gui':
-        this.stage.apply(m.patch)
-        this.game.gui = this.stage.nodes.size > 0
-        this.onGui()
-        break
-      case 'drawings':
-        // Drawing (エグゼキューター) をゲーム画面に重ねて描く
-        this.stage.setDrawings(m.list)
-        this.game.drawings = m.list
-        if (m.list.length) { this.game.gui = true; this.onGui() }
-        break
-      case 'guiAvail':
-        // ゲーム画面が隠れている間に GUI ができた
-        this.game.gui = true
-        this.onGui()
-        break
-      case 'guiFocus':
-        if (m.id !== null && this.tab !== 'game' && !this.stage.full) this.show('game')
-        this.stage.focusText(m)
-        break
-      case 'interact':
-        this.game.interact = m.interact
-        if (this.tab === 'game') this.renderGame(true)
-        break
-      case 'uiMode':
-        if (m.interact !== undefined) { this.game.interact = m.interact; if (this.tab === 'game') this.renderGame(true) }
-        this.uiMode = true
-        if (!this.waitNoted) { this.waitNoted = true; this.append([{ kind: 'meta', text: 'GUI を表示しています — 「ゲーム」タブで操作できます (■ で終了)' }]) }
-        break
-      case 'waiting':
-        this.applySnapshot(m)
-        this.waiting = true
-        if (!this.waitNoted) { this.waitNoted = true; this.append([{ kind: 'meta', text: '⏸ 操作を待っています — 「ゲーム」タブでボタンなどを試せます (■ で終了)' }]) }
-        emit('running', this.running)
-        this.onGui(true)
-        this.renderTabs()
-        break
-      case 'resumed': this.waiting = false; emit('running', this.running); break
-      case 'started':
-        // コンソールから、終了した実行の環境を動かし直したとき
-        if (m.repl && !this.running) { this.t0 = performance.now(); this.setRunning({ path: 'コンソール', kind: getMode() === 'executor' ? 'executor' : 'client', repl: true }) }
-        break
-      case 'paused': this.debug.onPaused(m); break
-      case 'debugResumed': this.debug.onResumed(); break
+      case 'resumed': if (this.debug.paused) this.debug.onResumed(); break
       case 'expanded': this.debug.onExpanded(m); break
       case 'watchValues': this.debug.onWatchValues(m); break
-      case 'evalDone': break
+      case 'input': this.showInput(); break
+      case 'inputDone': if (this.inputPending) { this.inputPending = false; this.removeInput(); this.renderTabs() } break
+      case 'image': this.showImage(m.data); break
+      case 'evalResult':
+        if (m.ok) { if (m.value !== null && m.value !== undefined) this.append([{ kind: 'result', text: m.value }]) }
+        else this.append([{ kind: 'error', text: m.error }])
+        break
       case 'done':
-        this.applySnapshot(m)
-        if (this.running) this.finished(m.reason === 'idle' ? 'done' : m.reason)
+        if (m.id !== this.runId) break
+        this.applyFiles(m.files)
+        if (m.error) this.showError(m.error)
+        else if (m.reason === 'load') this.line('error', m.error || 'Python を読み込めませんでした')
+        if (this.running) this.finished(m.reason === 'exit' ? 'done' : m.reason, m.ms)
         break
     }
   }
 
-  applySnapshot(m) {
-    if (m.gui) this.stage.apply(m.gui)
-    if (m.drawings !== undefined) this.stage.setDrawings(m.drawings || [])
-    Object.assign(this.game, { tree: m.tree, gui: this.stage.nodes.size > 0 || this.stage.drawList.length > 0, interact: m.interact, drawings: m.drawings })
-  }
-
-  onGui(force) {
-    const has = !!(this.game.gui || this.game.interact)
-    if (has && !this.sawGui) {
-      this.sawGui = true
-      this.renderTabs()
-      // GUI ができたら、エラーがなければプレビューへ切り替える
-      if (this.game.gui && !this.errors && this.tab === 'output') { this.show('game'); return }
+  // プログラムが作った・変えたファイルを、プロジェクトに反映する
+  async applyFiles(files) {
+    if (!files || !app.project) return
+    const entries = Object.entries(files)
+    if (!entries.length) return
+    const names = []
+    for (const [path, text] of entries) {
+      const d = app.editors.docs.get(path)
+      if (d && d.dirty) continue // 編集中のファイルは上書きしない
+      try {
+        if (text === null) { await vfs.remove(app.project.id, path); continue }
+        await vfs.writeFile(app.project.id, path, text)
+        app.contents.set(path, text)
+        if (app.editors.has(path)) app.editors.externalChange(path, text)
+        names.push(path)
+      } catch {}
     }
-    if (this.tab === 'game' && force) this.renderGame(true)
+    await refreshFiles()
+    if (names.length) this.line('meta', `プログラムが書いたファイル: ${names.slice(0, 5).join(', ')}${names.length > 5 ? ` ほか ${names.length - 5} 個` : ''}`)
   }
 
-  showError(m) {
+  showImage(b64) {
+    const src = 'data:image/png;base64,' + b64
+    const img = h('img', { class: 'out-image', src, alt: '図', onclick: () => modal({ title: '図', wide: true, body: h('img', { class: 'out-image-full', src, alt: '図' }), actions: [{ label: '保存', run: () => { const a = h('a', { href: src, download: 'figure.png' }); a.click(); return false } }, { label: '閉じる', primary: true, value: null }] }) })
+    if (!this.lineCount) this.outEl.textContent = ''
+    const wrap = h('div', { class: 'out-figure' }, img)
+    if (this.inputRow && this.inputRow.parentElement === this.outEl) this.outEl.insertBefore(wrap, this.inputRow)
+    else this.outEl.append(wrap)
+    this.lineCount++
+    this.last = null
+    img.addEventListener('load', () => { this.outEl.scrollTop = this.outEl.scrollHeight })
+  }
+
+  showError(err) {
     this.errors++
     const s = getSettings()
-    const kind = this.running ? this.running.kind : null
+    // いちばん内側 (最後) のプロジェクト内の場所
+    const frames = (err.frames || []).filter(f => app.files.some(x => x.path === f.file))
+    const at = err.syntax && err.file ? { file: err.file, line: err.line } : frames.length ? frames[frames.length - 1] : null
+    const title = `${err.type}: ${err.message}`
     const el = h('div', { class: 'out-error' })
-    el.dataset.text = m.text
-    if (!this.errorEls) this.errorEls = new Map()
-    this.errorEls.set(m.text, el)
+    el.dataset.text = err.text || title
     const head = h('div', { class: 'oe-head' }, icon('close', 15))
     const msg = h('span', { class: 'oe-msg' })
-    this.linkify(msg, m.text)
+    this.linkify(msg, at ? `${title}  (${at.file}:${at.line})` : title)
     head.append(msg)
     el.append(head)
-    // 外部スクリプトを読み込めなかったエラー: 解決ボタンをすぐ下に
-    if (this.pendingRemote && /HttpError|HttpGet|オフライン|時間切れ/.test(m.text)) {
-      el.append(h('div', { class: 'oe-actions oe-remote' }, remoteActions(this.pendingRemote.url, this.pendingRemote.reason, { rerun: () => this.run() })))
-      this.pendingRemote = null
+    if (err.syntax && err.text && err.text.includes('^')) {
+      el.append(h('pre', { class: 'oe-code' }, err.text.split('\n').slice(-4).join('\n')))
     }
-    const ex = s.explainErrors && !m.syntax ? explainError(m.message || m.text, { kind, mode: getMode() }) : null
+    const ex = s.explainErrors ? explainError(err) : null
     if (ex) {
       el.append(h('div', { class: 'oe-why' }, icon('info', 14), h('span', null, ex.why)))
       if (ex.fixes.length) el.append(h('ul', { class: 'oe-fixes' }, ex.fixes.map(f => h('li', null, f))))
     }
-    if (m.traceback && m.traceback.length > 1) {
-      const tr = h('div', { class: 'oe-trace' }, '呼び出し元: ')
-      this.linkify(tr, m.traceback.slice(0, 6).join(' ← '))
-      el.append(tr)
+    if (frames.length > 1 || (err.frames || []).length > frames.length) {
+      const tb = h('details', { class: 'oe-trace' }, h('summary', null, `トレースバック (${(err.frames || []).length})`))
+      const pre = h('div', { class: 'oe-tb' })
+      for (const f of err.frames || []) {
+        const row = h('div', { class: 'oe-frame' })
+        this.linkify(row, `File "${f.file}", line ${f.line}, in ${f.name}`)
+        if (f.code) row.append(h('div', { class: 'oe-frame-code' }, f.code))
+        pre.append(row)
+      }
+      tb.append(pre)
+      el.append(tb)
     }
     const acts = h('div', { class: 'oe-actions' })
-    if (m.file && m.line && app.files.some(f => f.path === m.file)) acts.append(h('button', { class: 'btn small', onclick: () => app.editors.open(m.file, { line: m.line }) }, `${m.line} 行目へ`))
-    acts.append(h('button', { class: 'btn small ghost', onclick: () => copyText(m.text).then(() => toast('エラーをコピーしました', { icon: 'copy' })) }, 'コピー'))
-    acts.append(h('button', { class: 'btn small ai-fix', onclick: () => runCommand('aiFixRunError', m.text + (m.traceback && m.traceback.length > 1 ? '\n呼び出し元: ' + m.traceback.slice(0, 5).join(' ← ') : '')) }, icon('sparkle', 14), 'AI で直す'))
+    if (at) acts.append(h('button', { class: 'btn small', onclick: () => app.editors.open(at.file, { line: at.line }) }, `${at.line} 行目へ`))
+    acts.append(h('button', { class: 'btn small ghost', onclick: () => copyText(err.text || title).then(() => toast('エラーをコピーしました', { icon: 'copy' })) }, 'コピー'))
+    acts.append(h('button', { class: 'btn small ai-fix', onclick: () => runCommand('aiFixRunError', err.text || title) }, icon('sparkle', 14), 'AI で直す'))
     el.append(acts)
     if (!this.lineCount) this.outEl.textContent = ''
     const out = this.outEl
-    out.append(el)
+    if (this.inputRow && this.inputRow.parentElement === out) out.insertBefore(el, this.inputRow)
+    else out.append(el)
     this.lineCount++
     this.last = null
-    if (m.line && m.file) app.editors.markRunError(m.file, m.line, m.message || m.text)
+    if (at) app.editors.markRunError(at.file, at.line, title)
     if (this.tab !== 'output') this.show('output')
-    // 最初のエラーは、メッセージの先頭が見える位置へ
     if (!this.holdScroll) { this.holdScroll = true; requestAnimationFrame(() => { out.scrollTop = Math.max(0, el.offsetTop - out.offsetTop - 6) }) }
   }
 
-  async onFs(m) {
-    const p = 'workspace/' + m.path
-    const pid = app.project.id
-    // まず手元の一覧を更新する (保存の完了を待たずに、すぐ次の実行で使えるように)
-    const has = path => app.files.some(f => f.path === path)
-    const addDirs = path => { const parts = path.split('/'); for (let i = 1; i < parts.length; i++) { const d = parts.slice(0, i).join('/'); if (!has(d)) app.files.push({ path: d, dir: true }) } }
-    if (m.op === 'write') { addDirs(p); if (!has(p)) app.files.push({ path: p, dir: false }); app.contents.set(p, m.content) }
-    else if (m.op === 'mkdir') { addDirs(p + '/x') }
-    else if (m.op === 'delete' || m.op === 'rmdir') { app.files = app.files.filter(f => f.path !== p && !f.path.startsWith(p + '/')); for (const k of [...app.contents.keys()]) if (k === p || k.startsWith(p + '/')) app.contents.delete(k) }
+  // 実行して、出力・エラーをまとめて返す (AI エージェント用)
+  async runAndCollect({ path, seconds = 6, signal } = {}) {
+    const rec = { output: [], errors: [], done: null }
+    const tap = m => {
+      if (m.type === 'output') { for (const it of m.items) if (rec.output.length < 400) rec.output.push(it) }
+      else if (m.type === 'done') { rec.done = m.reason || 'done'; if (m.error) rec.errors.push({ text: m.error.text || `${m.error.type}: ${m.error.message}`, file: m.error.file, line: m.error.line }) }
+    }
+    this.taps.add(tap)
     try {
-      if (m.op === 'write') { await vfs.writeFile(pid, p, m.content); app.editors.externalChange(p, m.content) }
-      else if (m.op === 'delete' || m.op === 'rmdir') { await vfs.remove(pid, p); app.editors.forceClose(p) }
-      else if (m.op === 'mkdir') await vfs.mkdir(pid, p)
-    } catch (e) {
-      this.line('warn', `ファイルを保存できませんでした (${p}): ${e.message}`)
-    }
-    clearTimeout(this.fsTimer)
-    this.fsTimer = setTimeout(() => refreshFiles(), 250)
+      await this.run({ path, agent: true })
+      if (!this.running) return { ...rec, started: false }
+      const until = performance.now() + Math.max(0.5, Math.min(30, seconds)) * 1000
+      await new Promise(resolve => {
+        const iv = setInterval(() => {
+          if (rec.done || !this.running || performance.now() > until || (signal && signal.aborted)) { clearInterval(iv); resolve() }
+        }, 80)
+      })
+      const still = !!this.running
+      if (still) this.stop()
+      return { ...rec, started: true, stillRunning: still }
+    } finally { this.taps.delete(tap) }
   }
 
-  // ============================================================
-  // 実機 (エグゼキューター) での実行
-  // ============================================================
-  async runOnDevice(path, source, selection) {
-    if (!live.relay) { runCommand('togglePanel', true); this.show('live'); toast('実機で実行するには、先に中継サーバーを設定してください'); return }
-    if (this.running) this.stop(true)
-    app.editors.saveAll().catch(() => {})
-    runCommand('togglePanel', true)
-    if (this.tab !== 'output') this.show('output')
-    if (getSettings().clearOnRun) this.clear()
-    haptic(10)
-    app.editors.clearRunErrors()
-    this.errors = 0
-    this.errorEls = new Map()
-    this.holdScroll = false
-    if (!live.running) live.start()
-    this.deviceRun = live.run(path, source)
-    this.setRunning({ path, kind: 'device', device: true })
-    this.t0 = performance.now()
-    const who = live.peer ? live.peer.executor : 'エグゼキューター'
-    this.append([{ kind: 'meta', text: `実機 (${who}) で実行: ${path}${selection ? ' (選択範囲)' : ''}` }])
-    if (live.state !== 'online') this.append([{ kind: 'meta', text: 'エグゼキューターがまだつながっていません。つながると実行されます (5 分以内)' }])
-    this.renderTabs()
-  }
-
-  evalOnDevice(code) {
-    this.append([{ kind: 'input', text: code }])
-    this.outEl.scrollTop = this.outEl.scrollHeight
-    if (!live.relay) { this.line('error', '実機につながっていません (「実機」タブで設定してください)'); return }
-    if (!live.running) live.start()
-    live.eval(code).then(r => {
-      if (r.ok) this.append((r.values && r.values.length ? r.values : ['nil']).map(v => ({ kind: 'result', text: v })))
-      else this.showError({ text: r.error, message: r.error, ...fileLine(r.error) })
-    }, e => this.line('error', e.message))
-  }
-
-  // 実機から届いたもの
-  onLive(m) {
-    switch (m.t) {
-      case 'log': {
-        const kind = m.kind === 'MessageError' ? 'error' : m.kind === 'MessageWarning' ? 'warn' : m.kind === 'MessageInfo' ? 'info' : ''
-        if (kind === 'error') this.showError({ text: m.text, message: m.text, device: true, ...fileLine(m.text) })
-        else this.append([{ kind, text: m.text }])
-        break
-      }
-      case 'started': break
-      case 'result':
-        if (m.ok) this.append([{ kind: 'meta', text: '実機: 実行しました (つないだイベントやループは、ゲームの中で動き続けます)' }])
-        else if (m.skipped) this.append([{ kind: 'meta', text: '実機: ' + m.error }])
-        else this.showError({ text: m.error.split('\n')[0], message: m.error, syntax: !!m.syntax, device: true, traceback: deviceTrace(m.error), ...fileLine(m.error) })
-        if (this.running && this.running.device && m.id === this.deviceRun) { this.setRunning(null); this.renderTabs() }
-        break
-      case 'stopped': break
-      case 'hello': this.append([{ kind: 'meta', text: `実機: ${m.executor || 'エグゼキューター'} がつながりました${m.game ? ' — ' + m.game : ''}` }]); break
-    }
-  }
-
-  // サーバーなしモード: クリップボードで受け取った結果を表示
-  showDeviceResult(r) {
-    runCommand('togglePanel', true)
-    if (this.tab !== 'output') this.show('output')
-    this.errors = 0
-    this.errorEls = new Map()
-    this.append([{ kind: 'meta', text: `実機の結果: ${r.path || ''}` }])
-    if (r.syntax) this.showError({ text: r.syntax, message: r.syntax, syntax: true, ...fileLine(r.syntax) })
-    for (const l of r.logs || []) {
-      if (l.k === 'MessageError') this.showError({ text: l.t, message: l.t, ...fileLine(l.t) })
-      else this.append([{ kind: l.k === 'MessageWarning' ? 'warn' : l.k === 'MessageInfo' ? 'info' : '', text: l.t }])
-    }
-    if (r.error) this.showError({ text: String(r.error).split('\n')[0], message: r.error, traceback: deviceTrace(r.error), ...fileLine(r.error) })
-    if (!r.syntax && !r.error && !(r.logs || []).length) this.append([{ kind: 'meta', text: '(出力はありませんでした)' }])
-  }
-
+  // 止める: KeyboardInterrupt を送り、止まらなければワーカーごと止める
   stop(silent) {
     if (!this.running) return
-    if (this.running.device) {
-      live.stopRuns()
-      if (!silent) this.finished('stopped')
-      else this.setRunning(null)
+    const info = this.running
+    if (this.shared) {
+      new Int32Array(this.shared.interrupt)[0] = 2
+      // input() で待っている途中なら、待つのをやめさせる
+      if (this.inputPending) { const ctl = new Int32Array(this.shared.ctl); Atomics.store(ctl, 0, 2); Atomics.notify(ctl, 0) }
+      setTimeout(() => {
+        if (this.running !== info) return
+        this.resetWorker()
+        if (!silent) this.finished('stopped'); else this.setRunning(null)
+      }, 1500)
       return
     }
-    this.debug.onFinished()
     this.resetWorker()
     if (!silent) this.finished('stopped')
-    else { this.waiting = false; this.setRunning(null) }
-  }
-
-  sendInput(msg) {
-    if (!this.running || !this.worker) {
-      if (msg.phase !== 'move') toast('実行が終了しています。▶ でもう一度実行すると操作できます')
-      return
-    }
-    if (msg.phase === 'down' || (!msg.phase && msg.kind !== 'text' && msg.kind !== 'wheel')) haptic(6)
-    this.worker.postMessage({ type: 'input', ...msg })
-  }
-
-  setScreen(id) {
-    this.screen = id
-    try { localStorage.setItem('forgecode.screen', id) } catch {}
-    this.stage.setScreen(id)
-    const sc = SCREENS.find(x => x.id === id) || SCREENS[0]
-    if (this.worker) this.worker.postMessage({ type: 'screen', w: sc.w, h: sc.h })
-    this.renderGame()
+    else this.setRunning(null)
   }
 
   // ============================================================
@@ -771,8 +630,6 @@ export class Runner {
     if (!view || !list.length) { el.append(h('div', { class: 'out-hint' }, '問題は見つかりませんでした')); return }
     const order = { error: 0, warning: 1, info: 2 }
     const sorted = [...list].sort((a, b) => order[a.d.severity] - order[b.d.severity] || a.from - b.from)
-    const fixable = sorted.filter(p => p.d.actions && p.d.actions.length && (p.d.source === '誤字' || p.d.source === '全角'))
-    if (fixable.length > 1) el.append(h('div', { class: 'prob-bar' }, h('button', { class: 'btn small primary', onclick: () => runCommand('fixAllTypos') }, icon('wand', 14), `誤字をまとめて直す (${fixable.length})`)))
     for (const { d, from, to } of sorted) {
       const line = view.state.doc.lineAt(Math.min(from, view.state.doc.length))
       const row = h('div', { class: 'problem ' + d.severity },
@@ -786,96 +643,10 @@ export class Runner {
       el.append(row)
     }
   }
-
-  // ============================================================
-  // ゲーム: GUI プレビュー / 操作 / Drawing / オブジェクト一覧
-  // ============================================================
-  renderGame(soft) {
-    const el = this.gameEl
-    const g = this.game
-    // 入力欄に入力中は作り直さない
-    if (soft && el.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return
-    const scroll = el.scrollTop
-    // ゲーム画面は使い回す (外してから中身を作り直す)
-    if (this.stage.frame.parentElement === el) this.stage.frame.remove()
-    el.textContent = ''
-    if (!g.tree && !g.gui && !this.running) {
-      el.append(h('div', { class: 'game-empty' },
-        h('div', { class: 'ge-art' }, icon('gamepad', 30)),
-        h('div', { class: 'ge-title' }, 'ゲーム画面'),
-        h('div', { class: 'out-hint' }, 'スクリプトを実行すると、作った GUI がここに表示され、タップやドラッグで操作できます。ゲーム内のオブジェクト (Workspace・Players など) も確認できます'),
-        getMode() === 'executor' ? h('button', { class: 'btn primary small', onclick: () => runCommand('uiGallery') }, icon('layers', 15), 'UI ライブラリで試す') : null))
-      return
-    }
-    const live = !!this.running
-    if (g.gui || live) {
-      el.append(h('div', { class: 'game-head' },
-        h('span', { class: 'game-title' }, 'ゲーム画面'),
-        h('span', { class: 'game-state' + (live ? ' live' : '') }, live ? (isTouch ? 'タップ・ドラッグで操作できます' : 'クリック・ドラッグ・キー入力で操作できます') : '終了 (表示のみ)'),
-        h('span', { class: 'sb-spacer' }),
-        h('div', { class: 'seg' }, SCREENS.map(sc => h('button', { class: 'seg-btn' + (this.screen === sc.id ? ' on' : ''), title: `${sc.w} × ${sc.h}`, onclick: () => this.setScreen(sc.id) }, sc.label))),
-        h('button', { class: 'icon-btn sm', title: '全画面で表示', 'aria-label': '全画面で表示', onclick: () => this.stage.toggleFull(true) }, icon('expand', 17))))
-      if (!this.stage.full) this.stage.attach(el)
-      else el.append(h('div', { class: 'out-hint' }, '全画面で表示中です'))
-    }
-    if (!g.gui && !live && getMode() === 'executor') {
-      el.append(h('div', { class: 'game-tip' }, icon('layers', 16), h('span', null, 'GUI はありませんでした。UI ライブラリを使うと、すぐに操作できる画面を作れます'), h('button', { class: 'btn small', onclick: () => runCommand('uiGallery') }, '試す')))
-    }
-    if (g.interact && g.interact.length) {
-      const box = h('div', { class: 'interact' }, h('div', { class: 'game-title' }, '操作できるもの'))
-      for (const it of g.interact) {
-        if (it.kind === 'keys') {
-          const keys = ['W', 'A', 'S', 'D', 'Space', 'E', 'F', 'Q', 'R', 'LeftShift', 'One', 'Two']
-          const custom = h('input', { class: 'input key-input', placeholder: 'キー名 (例: G)', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false' })
-          custom.addEventListener('keydown', e => { if (e.key === 'Enter' && custom.value.trim()) { this.sendInput({ kind: 'key', key: custom.value.trim().replace(/^[a-z]$/, c => c.toUpperCase()) }); custom.select() } })
-          box.append(h('div', { class: 'it-row' }, h('span', { class: 'it-name' }, 'キー入力 (UserInputService)'),
-            h('div', { class: 'key-row' }, keys.map(k => h('button', { class: 'key-btn', onclick: () => this.sendInput({ kind: 'key', key: k }) }, k === 'LeftShift' ? 'Shift' : k === 'One' ? '1' : k === 'Two' ? '2' : k)), custom)))
-        } else {
-          box.append(h('div', { class: 'it-row' }, h('span', { class: 'it-name', title: it.path }, it.path || it.name),
-            h('button', { class: 'btn small', disabled: !live, onclick: () => this.sendInput({ kind: it.kind, id: it.id }) }, it.label)))
-        }
-      }
-      el.append(box)
-    }
-    if (g.tree) {
-      el.append(h('div', { class: 'game-title tree-title' }, 'オブジェクト'))
-      el.append(this.treeNode(g.tree, 0, true))
-    } else if (live) el.append(h('div', { class: 'out-hint' }, '実行中…'))
-    el.scrollTop = scroll
-  }
-
-  treeNode(n, depth, open) {
-    const kids = n.k || []
-    const row = h('div', { class: 'gt-row', style: { paddingLeft: 6 + depth * 14 + 'px' } },
-      kids.length ? icon(open ? 'chevronDown' : 'chevronRight', 12, 'twisty') : h('span', { class: 'twisty-space' }),
-      h('span', { class: 'gt-icon c-' + classGroup(n.c) }), h('span', { class: 'gt-name' }, n.n), n.n !== n.c ? h('span', { class: 'gt-class' }, n.c) : null)
-    const box = h('div', null, row)
-    if (kids.length) {
-      const kidBox = h('div', { class: open ? '' : 'hidden' })
-      let built = false
-      const build = () => { if (built) return; built = true; for (const k of kids) kidBox.append(this.treeNode(k, depth + 1, false)); if (n.more) kidBox.append(h('div', { class: 'gt-more', style: { paddingLeft: 20 + depth * 14 + 'px' } }, `… 他 ${n.more} 個`)) }
-      if (open) build()
-      row.addEventListener('click', () => { build(); kidBox.classList.toggle('hidden'); row.querySelector('.twisty').replaceWith(icon(kidBox.classList.contains('hidden') ? 'chevronRight' : 'chevronDown', 12, 'twisty')) })
-      box.append(kidBox)
-    }
-    return box
-  }
-
 }
 
-// オブジェクト一覧のアイコン色の分類
-function classGroup(c) {
-  if (/Script$/.test(c)) return 'script'
-  if (/Gui$|Frame$|Label$|Button$|TextBox$|^UI/.test(c)) return 'gui'
-  if (/Part$|^Model$|Union|Terrain|SpawnLocation/.test(c)) return 'part'
-  if (/Value$/.test(c)) return 'value'
-  if (/Remote|Bindable/.test(c)) return 'remote'
-  if (/^Player|Humanoid|Backpack|^Tool$/.test(c)) return 'player'
-  if (/Folder|Service$|Storage$|^Workspace$|^Lighting$|^Players$|^Teams$|^Chat$/.test(c)) return 'folder'
-  return 'other'
-}
-
-command('run', '実行', () => app.runner.run(), { icon: 'play', key: '⌘Enter' })
+command('run', '実行', () => app.runner.run(), { icon: 'play' })
 command('runSelection', '選択範囲だけ実行', () => app.runner.run({ selection: true }), { icon: 'play' })
 command('stop', '停止', () => app.runner.stop(), { icon: 'stop' })
+command('restartPython', 'Python を再起動 (変数をすべて消す)', () => app.runner.restartPython(), { icon: 'refresh' })
 command('clearOutput', '出力をクリア', () => app.runner.clear(), { icon: 'trash' })

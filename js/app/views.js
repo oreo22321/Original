@@ -142,7 +142,7 @@ export class OutlineView {
     if (!doc) { this.list.append(h('div', { class: 'tree-empty' }, 'ファイルを開いてください')); return }
     const syms = outlineSymbols(doc.state.doc.toString(), doc.lang)
     if (!syms.length) { this.list.append(h('div', { class: 'tree-empty' }, '関数や変数が見つかりません')); return }
-    const KIND_ICON = { '関数': 'ƒ', 'メソッド': 'ƒ', 'サービス': '◆', '変数': 'x', '型': 'T', 'イベント': '⚡', '見出し': '#', 'クラス': 'C' }
+    const KIND_ICON = { '関数': 'ƒ', 'メソッド': 'ƒ', '変数': 'x', '定数': 'K', '見出し': '#', 'クラス': 'C' }
     for (const s of syms) {
       this.list.append(h('button', { class: 'outline-item', style: { paddingLeft: 10 + s.depth * 14 + 'px' }, onclick: () => app.editors.gotoLine(s.line) },
         h('span', { class: 'ol-kind k-' + s.kind }, KIND_ICON[s.kind] || '•'), h('span', { class: 'ol-name' }, s.name), h('span', { class: 'ol-line' }, s.line)))
@@ -201,101 +201,79 @@ export async function showHistory(path) {
 // ============================================================
 // ヘルプ
 // ============================================================
-export function showHelp() {
+export function showHelp(section) {
   const body = h('div', { class: 'help' })
   body.innerHTML = `
   <h3>はじめかた</h3>
   <ol>
-    <li>左上の <b>☰</b> (iPad / PC では左端のアイコン) でファイル一覧を開き、ファイルをタップして開きます。</li>
+    <li>左上の <b>☰</b> (iPad / PC では左端のアイコン) でファイル一覧を開き、<code>main.py</code> などのファイルをタップして開きます。</li>
     <li>コードを書くと自動で保存されます。保存の状態は画面下のバーに表示されます。</li>
-    <li><b>▶</b> を押すと実行します。結果は下の「出力」、作った GUI は「ゲーム」タブに表示されます。</li>
+    <li><b>▶</b> を押すと実行します。<code>print</code> の結果やエラーは下の「出力」に表示されます。</li>
   </ol>
-  <h3>AI (Forge AI)</h3>
+  <h3>実行 (Python 3.14)</h3>
   <ul>
-    <li><b>AI パネル</b> (サイドバーの星形のアイコン): アプリに内蔵された AI です。インターネットも API キーも要らず、すぐに答えます。コードの内容は外に送りません。</li>
-    <li><b>直す</b>: 「直して」— 構文エラー (end の不足、<code>!=</code> や <code>{ }</code> などの他の言語の書き方)・打ち間違い・非推奨の書き方・よくあるバグ (pcall の使い方、<code>.Value</code> の付け忘れ など) を自動で修正。実行エラーの「AI で直す」からも頼めます。</li>
-    <li><b>整える</b>: 「整形して」「整理して」(wait → task.wait などの新しい書き方へ)、「最適化して」(GetService をまとめる・重い書き方の指摘)。</li>
-    <li><b>説明する</b>: 「説明して」でファイルの概要と流れを日本語で。範囲を選ぶと 1 行ずつ。「コメントを追加して」「型注釈を付けて」も。</li>
-    <li><b>作る</b>: 「触れたら死ぬブロック」「E キーでドアが開く」「Shift で走る」「ショップの UI」「データを保存」のように日本語で頼むと、コードを組み立ててファイルを作ります。「ダメージを 50 にして」のように続けて手直しもできます。</li>
-    <li><b>答える</b>: 「RemoteEvent の使い方は?」「TweenService とは」「attempt to index nil って何?」のような質問に、例のコード付きで答えます。</li>
-    <li><b>変更の取り消し</b>: AI が変えたファイルは「差分」で確認、「すべて元に戻す」で取り消せます。</li>
-    <li><b>エディタで</b>: キーボードバーの AI キー (Alt + \\) で続きを提案 (Tab で確定)。<code>-- 触れたら死ぬ</code> のようなコメントの次の行で AI キーを押すと、コードを組み立てます。範囲を選んで AI キー (⌘/Ctrl + I) で、直す・整理・コメント・型注釈・説明。</li>
-    <li><b>高性能モード</b>: 設定 → AI で端末内の言語モデル (Qwen2.5-Coder) をオンにすると、決まった型に当てはまらない自由な依頼にも答えます。初回だけモデルのダウンロード (約 300 MB〜) が必要で、WebGPU に対応したブラウザ (iOS 26 以降の Safari、PC の Chrome / Edge など) で動きます。</li>
+    <li>本物の Python (CPython 3.14 を WebAssembly にした Pyodide) が、端末の中で動きます。サーバーには送りません。</li>
+    <li><b>input()</b>: 入力を待つと、出力の下に入力欄が出ます。Enter で送ります。「終わり」で入力の終わり (EOF) を送ります。</li>
+    <li><b>■</b> でいつでも止められます (<code>KeyboardInterrupt</code> になります)。無限ループも止まります。設定 → 実行 → 最大実行時間 で、自動で止める時間も決められます。</li>
+    <li><b>いくつものファイル</b>: 同じプロジェクトの <code>.py</code> は <code>import</code> できます (フォルダは <code>__init__.py</code> を置くとパッケージに)。</li>
+    <li><b>ファイルの読み書き</b>: <code>open("data.csv")</code> でプロジェクトのファイルを読めます。プログラムが書いたファイルは、終わったあとファイル一覧に入ります。</li>
+    <li><b>グラフ</b>: matplotlib の <code>plt.show()</code> で、出力に図が表示されます (タップで拡大)。</li>
+    <li>ファイルを長押し → <b>▶ で常にこのファイルを実行</b> を選ぶと、別のファイルを編集中でもそのファイルを実行します。範囲を選んで「選択範囲を実行」もできます。</li>
   </ul>
-  <h3>実機連携 (Delta などのエグゼキューター)</h3>
+  <h3 id="help-packages">使えるライブラリ</h3>
   <ul>
-    <li><b>できること</b>: ▶ のスクリプトを <b>実際のゲームの中で</b> 実行し、出力・エラーを ForgeCode に表示します (エラーは「◯ 行目へ」「AI で直す」も使えます)。コンソールの式もゲームの中で評価し、ゲームのオブジェクトを一覧できます。</li>
-    <li><b>つなぎ方 (最初の 1 回だけ)</b>: 出力パネルの「実機」タブで 1 行をコピーし、エグゼキューターの autoexec (自動実行) に入れます。あとはゲームを開くだけで自動でつながり、▶ はゲームの中で実行されます (「▶ の実行先」が「自動」のとき)。ForgeCode を閉じていても、開いたときにつながります。テレポートしてもつながったままです。</li>
-    <li><b>中継サーバー</b>: ForgeCode とエグゼキューターは、小さな中継サーバーを通してつながります。公開している人が用意していれば設定は不要です。自分で用意するときは「実機」タブの「Render で作る」(無料) から作り、できた URL を開くか貼り付けます。</li>
-    <li><b>iPhone 1 台でも</b>: ▶ を押してから Roblox に切り替えると実行され、ForgeCode に戻ると出力が届いています (中継サーバーが一時的に預かります)。</li>
-    <li><b>サーバーなしで</b>: 「実機用にコピー」→ エグゼキューターで実行 → 数秒後に「結果を貼り付け」。</li>
-    <li><b>安全</b>: エグゼキューターへコードを送れるのは、鍵を持つこの ForgeCode だけです (接続コードは鍵から計算するので、中継サーバーが再起動しても他の人に乗っ取られません)。1 行は他の人に見せず、心配なときは「接続コードを作り直す」。公開ゲームでのエグゼキューターの使用は Roblox の利用規約違反になるので、自分のゲームで試しましょう。</li>
-    <li><b>制限</b>: 実機では 1 つのファイルとして実行します (プロジェクトの他のファイルの require は使えません)。ブレークポイントで止めるデバッグはエミュレーターだけです (「自動」のときは、ブレークポイントがあればエミュレーターで実行します)。</li>
+    <li><b>標準ライブラリ</b>: <code>random</code>・<code>math</code>・<code>datetime</code>・<code>json</code>・<code>csv</code>・<code>re</code>・<code>collections</code>・<code>itertools</code>・<code>pathlib</code>・<code>dataclasses</code> など、ほぼすべて使えます (オフラインでも)。</li>
+    <li><b>追加のライブラリ</b>: <code>numpy</code>・<code>pandas</code>・<code>matplotlib</code>・<code>scipy</code>・<code>sympy</code>・<code>scikit-learn</code>・<code>pillow</code>・<code>beautifulsoup4</code> など、Pyodide が用意しているものは <code>import</code> するだけで使えます。はじめて使うときだけインターネットから読み込み (数 MB〜)、あとは端末に保存されます。</li>
+    <li>使えないもの: <code>tkinter</code>・<code>turtle</code> (画面を開くもの)、<code>pip install</code>、<code>subprocess</code>、ふつうのネットワーク通信 (<code>socket</code> / <code>requests</code>)。</li>
   </ul>
-  <h3>2 つのモード</h3>
+  <h3>コンソール</h3>
   <ul>
-    <li><b>Studio</b>: Roblox Studio に貼り付けるスクリプト用。ファイル名で種類が決まります — <code>〜.server.luau</code> は Script、<code>〜.client.luau</code> は LocalScript、それ以外は ModuleScript。</li>
-    <li><b>Executor</b>: エグゼキューター用。<code>getgenv</code>・<code>writefile</code>・<code>hookmetamethod</code>・<code>Drawing</code> などを補完し、模擬的に実行できます。ファイル関数の保存先は <code>workspace</code> フォルダです。</li>
-    <li>切り替えは、画面下の左端 (Studio / Executor) をタップします。プロジェクトごとに記憶されます。</li>
+    <li>「出力」の一番下の欄に Python の式やコードを入れて Enter で、その場で実行できます (例: <code>1 + 2</code>、<code>len(names)</code>)。</li>
+    <li>実行が終わった後も変数が残るので、結果を調べられます。デバッガーで止まっている間は、その場所の変数を使えます。</li>
   </ul>
   <h3>入力を助ける機能</h3>
   <ul>
-    <li><b>補完</b>: <code>game:GetService("</code> でサービス名、<code>part.</code> でプロパティ、<code>:</code> でメソッド。自分で作ったテーブル・クラス (<code>setmetatable</code>)・関数の戻り値・<code>type</code> 定義・<code>require</code> したモジュールの中身も、型を推論して候補に出します。<code>if x:IsA("BasePart") then</code> の中では <code>x</code> を BasePart として扱います。</li>
-    <li><b>その場面に合う候補</b>: <code>part.Material = </code> で Enum の一覧、<code>humanoid:ChangeState(</code> で引数の Enum、<code>frame.Size = UD</code> で <code>UDim2.new(...)</code>、<code>TweenService:Create(part, info, {</code> でアニメーションできるプロパティ、<code>GetAttribute("</code> でこのファイルで使った属性名が出ます。見えている変数は型と一緒に、近くで宣言したものほど上に並びます。</li>
-    <li><b>インライン候補</b>: 薄い文字の続きは <b>Tab</b> (スマホはキーボードの上の <b>✓</b>) で確定。<code>PlayerAdded:Connect(</code> では引数名 (player) まで入り、<code>frame.Parent = </code> では親にふさわしい変数 (ScreenGui など)、<code>Instance.new("TextLabel")</code> の次の行では次に設定するプロパティを提案します。同じような行をくり返すと次の行を予測します。</li>
-    <li><b>自動整形</b>: 書き終えた行の空白 (<code>x=1+2</code> → <code>x = 1 + 2</code>、カンマの後など) を整え、入力が止まったときにエラーがなければファイル全体の字下げ・空行も直します。カーソルのある行には触れず、<kbd>⌘Z</kbd> は自分の入力だけを戻します。設定 → エディタ でオフにできます。</li>
-    <li><b>end の自動入力・自動削除</b>: <code>if ... then</code> / <code>for ... do</code> / <code>function()</code> を書いた時点で、次の行に <code>end</code> が入ります。自分で <code>end</code> を書いても二重になりません。<code>if</code> や <code>function</code> を消すと、対になっていた <code>end</code> も一緒に消えます (<kbd>⌘Z</kbd> 1 回で元に戻せます)。</li>
-    <li><b>スティッキースクロール</b>: 長いコードをスクロールすると、いま見ている <code>function</code> / <code>if</code> の行が画面の上に固定されます (タップでその行へ)。</li>
-    <li><b>引数ヒント</b>: 関数の <code>(</code> の中で、引数の名前と型が表示されます (自分で作った関数も対象)。</li>
-    <li><b>色の選択</b>: <code>Color3.fromRGB(...)</code> の左の四角をタップすると色を選べます。</li>
+    <li><b>補完</b>: 変数・関数・モジュールの中身 (<code>math.</code>・<code>"abc".</code>・自分のクラスのメソッド・ほかのファイルの関数) を、型を推論して候補に出します (jedi)。</li>
+    <li><b>引数ヒント・説明</b>: 関数の <code>(</code> の中で引数の名前を表示します。名前を長押し (PC はマウスを乗せる) と説明 (docstring) が出ます。</li>
+    <li><b>続きの提案</b>: 薄い文字の続きは <b>Tab</b> (スマホはキーボードの上の <b>✓</b>) で確定。<code># 1 から 100 まで足す</code> のようなコメントの次の行で AI キー (<kbd>Alt + \\</kbd>) を押すと、コードを組み立てます。</li>
+    <li><b>整形</b> (<kbd>Shift + Alt + F</kbd>): PEP 8 に合わせて、空白・字下げ・空行をそろえます (autopep8)。設定 → 保存 で、保存のたびに整形することもできます。</li>
+    <li><b>字下げ</b>: <code>:</code> の後で改行すると自動で字下げします。スペース 4 つが基本です。</li>
+    <li><b>スティッキースクロール</b>: 長いコードをスクロールすると、いま見ている <code>def</code> / <code>class</code> / <code>for</code> の行が上に固定されます (タップでその行へ)。</li>
   </ul>
   <h3>誤字・エラー対策</h3>
   <ul>
-    <li><b>もしかして</b>: <code>GetServise</code>・<code>"Playrs"</code>・<code>part.Tranparency</code> のようなスペルミスを見つけて、正しい名前を提案します。</li>
-    <li><b>直し方を選ぶ</b>: 行の右に出る赤・黄色の説明をタップ (PC は <kbd>⌘/Ctrl + .</kbd>、スマホは修正キー) すると、ワンタップで修正できます。</li>
-    <li><b>自動修正</b>: <code>fucntion</code> → <code>function</code> などの打ち間違い、全角の <code>（）＝”</code> や全角スペース、iPhone が勝手に変える <code>“ ”</code> を自動で直します (文字列とコメントの中はそのまま)。</li>
-    <li><b>end の過不足</b>: どの <code>if</code> / <code>function</code> の <code>end</code> が足りないかを指摘し、正しい位置に追加できます。</li>
-    <li><b>実行エラーの解説</b>: <code>attempt to index nil</code> などのエラーに、日本語で原因と直し方を表示します。</li>
+    <li><b>エラーチェック</b>: 構文エラーと、定義されていない名前・使っていない import などを、書いている間に日本語で知らせます (pyflakes)。</li>
+    <li><b>もしかして</b>: <code>prnt</code> → <code>print</code>、<code>lenght</code> → <code>length</code> のような打ち間違いに、正しい名前を提案します。</li>
+    <li><b>直し方を選ぶ</b>: 行の右に出る説明をタップ (PC は <kbd>⌘/Ctrl + .</kbd>、スマホは修正キー) すると、ワンタップで直せます (<code>:</code> の付け忘れ・import 忘れ・字下げ など)。</li>
+    <li><b>自動修正</b>: 全角の <code>（）：＝”</code> や全角スペース、iPhone が変える <code>“ ”</code>、よくある打ち間違いを、入力した時点で直します (文字列とコメントの中はそのまま)。設定でオフにできます。</li>
+    <li><b>実行エラーの解説</b>: <code>NameError</code>・<code>TypeError</code>・<code>IndexError</code> などに、日本語で原因と直し方を表示します。エラーの「AI で直す」で、そのまま直せます。</li>
   </ul>
   <h3>コードの移動・名前の変更</h3>
   <ul>
-    <li><b>定義へ移動</b> (<kbd>F12</kbd>): 変数・関数の宣言へジャンプします。モジュールの関数 (<code>Util.format</code>) は他のファイルからも探します。</li>
-    <li><b>参照を検索</b> (<kbd>⇧F12</kbd>): その変数・関数を使っている場所を一覧表示します。</li>
-    <li><b>名前を変更</b> (<kbd>F2</kbd>): 変数の名前をすべての場所で一度に変えます。同じ名前の別の変数 (内側の local など) は変わりません。</li>
-    <li>カーソルを置いた変数は、使われている場所がすべてハイライトされます (代入している場所は黄色)。</li>
+    <li><b>定義へ移動</b> (<kbd>F12</kbd>): 変数・関数・クラスの定義へジャンプします (ほかのファイルも)。</li>
+    <li><b>参照を検索</b> (<kbd>⇧F12</kbd>): その名前を使っている場所を、プロジェクト全体から一覧表示します。</li>
+    <li><b>名前を変更</b> (<kbd>F2</kbd>): 変数・関数の名前を、使っているすべての場所 (ほかのファイルも) で一度に変えます。</li>
+    <li><b>アウトライン</b>: ファイルの関数・クラスの一覧から移動できます。</li>
     <li>スマホでは、キーボードの上のバーの ◎ (コード操作) から使えます。</li>
   </ul>
   <h3>デバッガー (止めて調べる)</h3>
   <ul>
-    <li>行番号の左をタップすると赤い点 (<b>ブレークポイント</b>) が付きます (<kbd>F9</kbd>)。▶ で実行すると、その行の手前で止まります。</li>
-    <li>止まっている間は「デバッグ」タブで<b>変数の値</b>・<b>呼び出し履歴</b>を確認できます。テーブルや Instance はタップで中身を開けます。エディタで変数にカーソルを合わせても値が見えます。</li>
-    <li><b>ステップ</b> (<kbd>F10</kbd>) で 1 行ずつ、<b>中へ</b> (<kbd>F11</kbd>) で関数の中へ、<b>外へ</b> (<kbd>⇧F11</kbd>) で呼び出し元へ進みます。<b>続行</b> (<kbd>F5</kbd>) で次のブレークポイントまで。</li>
+    <li>行番号の左をタップすると赤い点 (<b>ブレークポイント</b>) が付きます (<kbd>F9</kbd>)。▶ で実行すると、その行の手前で止まります。コードに <code>breakpoint()</code> と書いても止まります。</li>
+    <li>止まっている間は「デバッグ」タブで<b>変数の値</b>・<b>呼び出し履歴</b>を確認できます。リスト・辞書・オブジェクトはタップで中身を開けます。</li>
+    <li><b>ステップ</b> (<kbd>F10</kbd>) で 1 行ずつ、<b>中へ</b> (<kbd>F11</kbd>) で関数の中へ、<b>外へ</b> (<kbd>⇧F11</kbd>) で呼び出し元へ進みます。<b>続行</b> (<kbd>F5</kbd>) で次のブレークポイントまで。実行中に <b>一時停止</b> もできます。</li>
     <li>赤い点を長押しすると、<b>条件付き</b> (例: <code>i == 10</code> のときだけ止まる) や<b>ログポイント</b> (止めずに <code>{変数}</code> の値を出力) にできます。</li>
     <li><b>ウォッチ</b>: 式を登録すると、止まるたびにその値を表示します。</li>
   </ul>
-  <h3>コンソール</h3>
+  <h3>AI (Forge AI)</h3>
   <ul>
-    <li>「出力」の一番下の欄に式やコードを入力して Enter で、その場で実行できます (例: <code>1 + 2</code>、<code>workspace:GetChildren()</code>)。</li>
-    <li>実行が終わった後も同じ環境が残るので、スクリプトの変数や作ったオブジェクトを調べられます。デバッガーで止まっている間は、その場所の変数を使えます。</li>
-  </ul>
-  <h3>実行</h3>
-  <ul>
-    <li>ブラウザ内の Luau 互換エンジンで実行します。<code>game</code>・<code>workspace</code>・<code>Instance.new</code>・<code>task.wait</code>・<code>TweenService</code>・<code>DataStoreService</code>・<code>RemoteEvent</code> など Roblox の API を模擬的に使えます (物理演算や 3D の描画は行いません)。</li>
-    <li><b>ゲーム画面</b>: スクリプトが作った ScreenGui を、Roblox と同じ規則で大きさ・位置を計算して「ゲーム」タブに表示します (UIListLayout・UIPadding・AutomaticSize・ScrollingFrame・UIScale など)。タップ・ドラッグ (スライダーやウィンドウの移動)・スクロール・文字入力・キー入力がそのままスクリプトに届きます。右上の ⛶ で全画面 (スマホは自動で横向き)。</li>
-    <li><b>スマホ / タブレット / PC</b>: ゲーム画面の大きさと、端末の種類 (TouchEnabled など) を切り替えられます。</li>
-    <li><b>操作できるもの</b>: ClickDetector・ProximityPrompt・Touched・キー入力に関数を接続していると、「ゲーム」タブから試せます。</li>
-    <li><b>レイキャスト・カメラ</b>: <code>workspace:Raycast</code>・<code>GetPartBoundsInRadius</code> などは、パーツの位置と大きさから実際に計算します。<code>camera:WorldToViewportPoint</code> や <code>mouse.Hit</code> もカメラの向きから計算します。</li>
-    <li><b>Drawing</b> (Executor): <code>Drawing.new</code> で描いた線・四角・円・文字は、ゲーム画面に重ねてリアルタイムに表示されます (ESP などの確認に)。</li>
-    <li>ファイルを長押し → <b>▶ で常にこのファイルを実行</b> を選ぶと、別のファイルを編集中でもそのファイルを実行します。</li>
-    <li>無限ループは自動で止まります。<b>■</b> でいつでも停止できます。</li>
-  </ul>
-  <h3>loadstring と UI ライブラリ</h3>
-  <ul>
-    <li><code>loadstring(game:HttpGet("URL"))()</code> はそのまま実行できます。Obsidian・LinoriaLib・Orion・Kavo・WindUI などの UI ライブラリも、実際に表示して操作できます。</li>
-    <li>読み込んだスクリプトはこの端末に保存され、<b>オフラインでも</b>同じように動きます (設定 → 実行 → 取得した外部スクリプト)。</li>
-    <li>エディタに loadstring の行があると、裏でライブラリの中身を読み取り、<b>補完・ゴーストテキスト・ヒント</b>に使います。<code>local Window = </code> と打つと <code>Library:CreateWindow({...})</code> を提案し、<code>Groupbox:AddToggle(</code> では設定項目 (Text・Default・Callback など) の雛形が出ます。</li>
-    <li>ブラウザの制限 (CORS) で直接読み込めないサイトは、エラーの下の「中継を使って再実行」か「中身を登録」で使えます。GitHub の URL (<code>github.com/…/blob/…</code>) は自動で読み込める形に直します。</li>
-    <li>「…」メニューの <b>UI ライブラリで GUI を作る</b> から、すぐ動くサンプルを作れます。</li>
+    <li><b>AI パネル</b> (サイドバーの星形のアイコン): アプリに内蔵された AI です。インターネットも API キーも要らず、すぐに答えます。</li>
+    <li><b>直す</b>: 「直して」— 構文エラー (<code>:</code> 忘れ・字下げ・括弧・全角記号・他の言語の書き方)・打ち間違い・import 忘れ・<code>== None</code> や何でも受ける <code>except:</code> などのよくあるバグを直します。</li>
+    <li><b>整える</b>: 「整形して」「整理して」(f-string などの新しい書き方へ)、「最適化して」。</li>
+    <li><b>説明する</b>: 「説明して」でファイルの概要と流れを日本語で。範囲を選ぶと 1 行ずつ。「コメントを追加して」「型ヒントを付けて」もできます。</li>
+    <li><b>作る</b>: 「数当てゲームを作って」「CSV を読んでグラフにして」「1 から 100 まで足すプログラム」のように日本語で頼むと、コードを作ります。</li>
+    <li><b>答える</b>: 「リストと辞書の違いは?」「for 文の使い方」「enumerate とは」「TypeError って何?」のような質問に、例のコード付きで答えます。</li>
+    <li><b>変更の取り消し</b>: AI が変えたファイルは「差分」で確認、「すべて元に戻す」で取り消せます。</li>
+    <li><b>高性能モード</b>: 設定 → AI で端末内の言語モデル (Qwen2.5-Coder) をオンにすると、決まった型に当てはまらない自由な依頼にも答えます (WebGPU が使える端末のみ)。</li>
   </ul>
   <h3>スマホでの操作</h3>
   <ul>
@@ -317,75 +295,34 @@ export function showHelp() {
     <tr><td><kbd>⌘/Ctrl + D</kbd></td><td>同じ単語を追加選択 (マルチカーソル)</td></tr>
     <tr><td><kbd>Alt + ↑/↓</kbd></td><td>行を移動</td></tr>
     <tr><td><kbd>Shift + Alt + F</kbd></td><td>整形</td></tr>
+    <tr><td><kbd>F9</kbd> / <kbd>F10</kbd> / <kbd>F11</kbd></td><td>ブレークポイント / ステップ / 中へ</td></tr>
     <tr><td><kbd>⌘/Ctrl + B</kbd> / <kbd>⌘/Ctrl + J</kbd></td><td>サイドバー / パネルの表示切り替え</td></tr>
     <tr><td><kbd>Tab</kbd> / <kbd>⌘/Ctrl + →</kbd></td><td>インライン候補を確定 / 1 単語だけ確定</td></tr>
   </table>`
   modal({ title: '使い方', body, wide: true })
+  if (typeof section === 'string') {
+    const el = body.querySelector('#help-' + section.replace(/[^\w-]/g, ''))
+    if (el) setTimeout(() => el.scrollIntoView({ block: 'start' }), 60)
+  }
 }
 
 // バージョンアップ後に 1 度だけ表示する変更点
 export function showWhatsNew() {
   const body = h('div', { class: 'help whats-new' })
   body.innerHTML = `
-  <p>ForgeCode 10.3 — 実機連携を自動に、全体を速くしました。</p>
+  <p>ForgeCode 12 — <b>Python のエディタ</b>になりました。</p>
   <ul>
-    <li><b>実機連携が自動に</b> — エグゼキューターの autoexec に 1 行入れておけば、あとはゲームを開くだけで自動でつながります。▶ の実行先は「自動」(つながっていればゲームの中、いなければエミュレーター)。ForgeCode を閉じていても待ち続け、テレポートしてもつながったまま。中継サーバーが止まっても自動でつなぎ直します。</li>
-    <li><b>中継サーバーも簡単に</b> — 「Render で作る」ボタンから無料で作れます。できた URL を開けば、ForgeCode 本体もそこで使えて設定は不要です。</li>
-    <li><b>起動が速く</b> — 起動時に読み込むファイルを減らし、まとめて先読みするようにしました (遅い回線で約 2 割速く)。AI の本体は、手が空いたときに読み込みます。</li>
-    <li><b>大きなファイルでも軽く</b> — 数千行のファイルで入力中に固まる時間を約 4 分の 1 に。エラーチェック・AI の学習・括弧の色分けなどが、同じ計算をくり返さず、手が空いたときに少しずつ動くようになりました。</li>
-  </ul>
-  <p>ForgeCode 10.2 — 実機連携 (エグゼキューター) に対応しました。</p>
-  <ul>
-    <li><b>実機で実行</b> — Delta などのエグゼキューターとつなぐと、▶ で実際のゲームの中でスクリプトを実行し、出力・エラーを ForgeCode に表示します。エラーから行へ移動・AI で直す、もそのまま使えます。</li>
-    <li><b>実機のコンソール・オブジェクト</b> — コンソールの式をゲームの中で評価し、ゲームのオブジェクトを一覧できます (パスのコピー・エディタへの挿入)。</li>
-    <li><b>iPhone 1 台でも</b> — アプリを切り替えている間の依頼と出力は、中継サーバーが預かります。サーバーなしで使える「コピー & 貼り付け」モードもあります。</li>
-    <li><b>安全</b> — コードを送れるのは鍵を持つ自分の ForgeCode だけです。中継サーバー (relay/server.mjs) は自分で無料で動かせます。</li>
-  </ul>
-  <p>ForgeCode 10.1 — デザインを一新しました。</p>
-  <ul>
-    <li><b>落ち着いた見た目</b> — 無彩色の画面に、控えめなアクセント 1 色。細い線・小さめの角丸で、すっきり見やすくしました。</li>
-    <li><b>新しい標準テーマ</b> — エディタの配色に「Forge Dark」「Forge Light」を追加 (彩度を抑えた読みやすい色)。テーマを変えても、画面の枠の色はぶれません。</li>
-    <li><b>実行ボタン・ステータスバー</b> — 実行ボタンは白黒の反転色に、ステータスバーは色を付けず、モードは小さな点で表示します。</li>
-    <li><b>なめらかな動き</b> — 開く・閉じる・切り替えの動きを短く、跳ねない動きにそろえました (端末の「視差効果を減らす」設定にも対応)。</li>
-    <li><b>新しいアイコン</b> — アプリのアイコンを新しくしました。</li>
-  </ul>
-  <p>ForgeCode 10 の機能:</p>
-  <ul>
-    <li><b>AI を自前で内蔵 (Forge AI)</b> — インターネットも API キーも不要。アプリの中だけで動き、すぐに答えます。</li>
-    <li><b>自動修正</b> — 構文エラーを「候補を試して直る形を探す」方法で修正 (end・then・括弧の不足、<code>!=</code> <code>&amp;&amp;</code> <code>{ }</code> <code>//</code> など他の言語の書き方、キーワードの打ち間違い)。打ち間違い・非推奨 API・よくあるバグもまとめて直します。</li>
-    <li><b>コードレビュー</b> — pcall に関数を渡していない、<code>:Connect(f())</code>、OnServerEvent の最初の引数、<code>.Value</code> の付け忘れ、Touched のデバウンス忘れ、毎フレームの重い処理、クライアントの値をそのまま信用している、などを見つけます。</li>
-    <li><b>説明・コメント・型注釈</b> — コードの流れを日本語で説明し、コメントや型注釈を自動で付けます。</li>
-    <li><b>コード生成</b> — 「きっかけ (触れたら・クリック・キー・ボタン・チャット・◯秒ごと)」と「動作 (倒す・ダメージ・速さ・テレポート・色・コイン…)」を組み合わせて作るほか、データ保存・ショップ・ラウンド・NPC・ESP などのまとまった仕組みも作れます。</li>
-    <li><b>質問に回答</b> — Luau・Roblox・エグゼキューター・このアプリの使い方を、内蔵の知識と API データから答えます。</li>
-    <li><b>続きの提案</b> — プロジェクトのコードから学習して、行の続きを提案します。コメントからコードも作れます。</li>
-    <li><b>高性能モード (任意)</b> — 端末内の言語モデルで、自由な依頼にも挑戦。答えのコードは内蔵 AI が構文チェック・自動修正してから表示します。</li>
-    <li><b>見直し</b> — 全体の安定性・速度・安全性を見直しました。Claude 版 (claude.ai) と API キーの設定は廃止し、保存されていた API キーも端末から消去します。</li>
-  </ul>
-  <p>ForgeCode 9 の機能:</p>
-  <ul>
-    <li><b>どこでも実行</b> — Web Worker や eval が使えない環境でも、構文木を直接実行するエンジンに切り替えて動きます。</li>
-    <li><b>リンク切れ対策</b> — 末尾に記号が付いたリンクなど、存在しない URL を開いてもアプリに戻ります。</li>
-  </ul>
-  <p>ForgeCode 8 の機能:</p>
-  <ul>
-    <li><b>賢くなった補完</b> — 変数のスコープを正しく見分け、自分で作った関数の戻り値・クラス (<code>setmetatable</code> と <code>self.X</code>)・<code>type</code> 定義・<code>IsA</code> での絞り込みまで型を推論します。大きなファイルでも速さはそのままです。</li>
-    <li><b>その場面に合う候補</b> — <code>part.Material = </code> で Enum の一覧、<code>humanoid:ChangeState(</code> で引数の Enum、<code>TweenService:Create(part, info, {</code> でアニメーションできるプロパティ、<code>GetAttribute("</code> で使った属性名。変数は型付きで、近いものから並びます。</li>
-    <li><b>ゴーストテキストの強化</b> — <code>frame.Parent = </code> で親にふさわしい ScreenGui / Frame、<code>Instance.new("TextLabel")</code> の次の行で次に設定するプロパティ、<code>mt.__namecall = </code> でフックのひな形、<code>Drawing.new</code> の設定などを提案します。</li>
-    <li><b>自動整形</b> — 書き終えた行の空白を整え、入力が止まるとファイル全体の字下げ・空行も裏で直します (エラーがないときだけ。カーソルの行には触れません)。整形した行は一瞬光ります。</li>
-    <li><b>実行の強化</b> — <code>Raycast</code>・範囲内のパーツ・<code>WorldToViewportPoint</code>・<code>mouse.Hit</code> を実際に計算。<code>Drawing</code> はゲーム画面にリアルタイムで重ねて表示します。</li>
-  </ul>
-  <p>ForgeCode 7 の機能:</p>
-  <ul>
-    <li><b>loadstring がそのまま動く</b> — <code>loadstring(game:HttpGet(URL))()</code> で読み込む Obsidian・LinoriaLib・Orion・Kavo・WindUI などの UI ライブラリを、実際に表示してタップ・ドラッグで操作できます。</li>
-    <li><b>本物に近いゲーム画面</b> — GUI の大きさ・位置を Roblox と同じ規則で計算します (UIListLayout・AutomaticSize・ScrollingFrame・UIScale など)。スライダーのドラッグ、文字入力、スクロール、キー入力にも対応。全画面表示もできます。</li>
-    <li><b>ライブラリの補完</b> — loadstring の行を書くと、裏でライブラリを読み取って補完に追加します。<code>local Window = </code> → <code>Library:CreateWindow({...})</code>、<code>AddToggle(</code> → 設定項目の雛形、のようにゴーストテキストでも提案します。</li>
-    <li><b>オフラインでも実行</b> — 一度読み込んだ外部スクリプトは端末に保存されます。読み込めないサイトは「中継」か「中身を登録」で使えます。</li>
-    <li><b>UI ライブラリのサンプル</b> — 「…」メニュー → UI ライブラリで GUI を作る。</li>
-    <li><b>実行エンジンの強化</b> — <code>setfenv</code> / <code>getfenv</code>、<code>string.pack</code>、古い Enum 名、TweenService の上書き、Stats、同じエラーのまとめ表示など。</li>
+    <li><b>本物の Python 3.14</b> — 端末の中で CPython が動きます。<code>input()</code>・■ で停止・いくつものファイルの <code>import</code>・ファイルの読み書きに対応。</li>
+    <li><b>ライブラリ</b> — numpy・pandas・matplotlib などは <code>import</code> するだけで使えます。<code>plt.show()</code> のグラフは出力に表示されます。</li>
+    <li><b>賢い補完とチェック</b> — jedi による補完・引数ヒント・説明、pyflakes によるエラーチェック (日本語・ワンタップで修正)、autopep8 による整形。</li>
+    <li><b>定義へ移動・参照・名前の変更</b> — ほかのファイルもまとめて扱います。</li>
+    <li><b>デバッガー</b> — ブレークポイント (条件付き・ログ)・ステップ・一時停止・変数とウォッチ・<code>breakpoint()</code>。止まった場所でコンソールも使えます。</li>
+    <li><b>Forge AI も Python に</b> — 直す・説明・コメント・型ヒント・レビュー・コード生成・質問への回答。</li>
+    <li>これまでの Luau / Roblox のプロジェクトはそのまま残ります (ファイルの編集・保存はできますが、実行はできません)。</li>
   </ul>`
   modal({ title: '新しくなりました', body, actions: [{ label: '使い方を見る', run: () => { setTimeout(showHelp, 200) } }, { label: 'OK', primary: true }] })
 }
 
 command('history', 'ファイルの履歴を表示', p => showHistory(typeof p === 'string' ? p : undefined), { icon: 'history' })
-command('help', '使い方を表示', () => showHelp(), { icon: 'book' })
+command('help', '使い方を表示', section => showHelp(section), { icon: 'book' })
 command('whatsNew', '新機能を表示', () => showWhatsNew(), { icon: 'sparkle' })

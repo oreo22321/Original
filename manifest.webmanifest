@@ -1,7 +1,7 @@
 {
-  "name": "ForgeCode — Roblox Luau エディタ",
+  "name": "ForgeCode — Python エディタ",
   "short_name": "ForgeCode",
-  "description": "スマホ・iPad で使える Roblox 専用の Luau エディタ。Roblox Studio 用とエグゼキューター用のスクリプトを書いて、その場で試せます",
+  "description": "スマホ・iPad で使える Python エディタ。Python 3.14 が端末の中で動き、補完・エラーチェック・デバッガー・内蔵 AI でコードを書いて、その場で試せます",
   "lang": "ja",
   "start_url": "./",
   "scope": "./",
