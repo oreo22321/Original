@@ -19,69 +19,15 @@
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/app.css">
-  <!-- modulepreload:start (tools/build-sw.mjs) -->
-  <link rel="modulepreload" href="vendor/codemirror.js">
-  <link rel="modulepreload" href="js/ai/complete.js">
-  <link rel="modulepreload" href="js/ai/llm.js">
-  <link rel="modulepreload" href="js/ai/repair.js">
-  <link rel="modulepreload" href="js/app/agent.js">
-  <link rel="modulepreload" href="js/app/ai-actions.js">
-  <link rel="modulepreload" href="js/app/ai-host.js">
-  <link rel="modulepreload" href="js/app/ai-panel.js">
-  <link rel="modulepreload" href="js/app/app.js">
-  <link rel="modulepreload" href="js/app/code-nav.js">
-  <link rel="modulepreload" href="js/app/debug-panel.js">
-  <link rel="modulepreload" href="js/app/editors.js">
-  <link rel="modulepreload" href="js/app/explain.js">
-  <link rel="modulepreload" href="js/app/explorer.js">
-  <link rel="modulepreload" href="js/app/extlibs.js">
-  <link rel="modulepreload" href="js/app/github-core.js">
-  <link rel="modulepreload" href="js/app/github-sync.js">
-  <link rel="modulepreload" href="js/app/gui-preview.js">
-  <link rel="modulepreload" href="js/app/keybar.js">
-  <link rel="modulepreload" href="js/app/live-config.js">
-  <link rel="modulepreload" href="js/app/live-instrument.js">
-  <link rel="modulepreload" href="js/app/live.js">
-  <link rel="modulepreload" href="js/app/markdown.js">
-  <link rel="modulepreload" href="js/app/onboarding.js">
-  <link rel="modulepreload" href="js/app/palette.js">
-  <link rel="modulepreload" href="js/app/remote-ui.js">
-  <link rel="modulepreload" href="js/app/runner.js">
-  <link rel="modulepreload" href="js/app/safe-storage.js">
-  <link rel="modulepreload" href="js/app/settings-ui.js">
-  <link rel="modulepreload" href="js/app/sha256.js">
-  <link rel="modulepreload" href="js/app/store.js">
-  <link rel="modulepreload" href="js/app/templates.js">
-  <link rel="modulepreload" href="js/app/ui.js">
-  <link rel="modulepreload" href="js/app/vfs.js">
-  <link rel="modulepreload" href="js/app/views.js">
-  <link rel="modulepreload" href="js/app/workbench.js">
-  <link rel="modulepreload" href="js/data/executor-api.js">
-  <link rel="modulepreload" href="js/data/luau-api.js">
-  <link rel="modulepreload" href="js/data/snippets.js">
-  <link rel="modulepreload" href="js/editor/ai.js">
-  <link rel="modulepreload" href="js/editor/apidb.js">
-  <link rel="modulepreload" href="js/editor/autoend.js">
-  <link rel="modulepreload" href="js/editor/autoformat.js">
-  <link rel="modulepreload" href="js/editor/blocks.js">
-  <link rel="modulepreload" href="js/editor/breakpoints.js">
-  <link rel="modulepreload" href="js/editor/errorlens.js">
-  <link rel="modulepreload" href="js/editor/extlib.js">
-  <link rel="modulepreload" href="js/editor/extras.js">
-  <link rel="modulepreload" href="js/editor/format.js">
-  <link rel="modulepreload" href="js/editor/inline.js">
-  <link rel="modulepreload" href="js/editor/lint.js">
-  <link rel="modulepreload" href="js/editor/luau-index.js">
-  <link rel="modulepreload" href="js/editor/luau-intel.js">
-  <link rel="modulepreload" href="js/editor/luau-lang.js">
-  <link rel="modulepreload" href="js/editor/setup.js">
-  <link rel="modulepreload" href="js/editor/symbols.js">
-  <link rel="modulepreload" href="js/editor/themes.js">
-  <link rel="modulepreload" href="js/editor/typecheck.js">
-  <link rel="modulepreload" href="js/editor/typo.js">
-  <link rel="modulepreload" href="js/luau/lexer.js">
-  <link rel="modulepreload" href="js/luau/parser.js">
-  <link rel="modulepreload" href="js/luau/remote.js">
+  <!-- modulepreload:start (tools/build.mjs) -->
+  <link rel="modulepreload" href="dist/app/main.js">
+  <link rel="modulepreload" href="dist/chunks/chunk-GZBEBVPB.js">
+  <link rel="modulepreload" href="dist/chunks/chunk-M4YAIX4P.js">
+  <link rel="modulepreload" href="dist/chunks/chunk-OOBI3R4X.js">
+  <link rel="modulepreload" href="dist/chunks/chunk-RHAKUTQ2.js">
+  <link rel="modulepreload" href="dist/chunks/chunk-TRSZNM54.js">
+  <link rel="modulepreload" href="dist/chunks/chunk-UCLDEFRU.js">
+  <link rel="modulepreload" href="dist/chunks/chunk-VC46IEJQ.js">
   <!-- modulepreload:end -->
   <link rel="preload" href="data/roblox-api.json" as="fetch" crossorigin>
 </head>
@@ -94,6 +40,6 @@
     </div>
   </div>
   <noscript>このアプリを使うには JavaScript を有効にしてください。</noscript>
-  <script type="module" src="js/app/main.js"></script>
+  <script type="module" src="boot.js"></script>
 </body>
 </html>

@@ -197,7 +197,7 @@ export function createRelay({ log = () => {}, serve = true } = {}) {
 
   // ---- ForgeCode 本体の配信 ----
   const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.lua': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8', '.wasm': 'application/wasm' }
-  const PUBLIC = /^\/(?:index\.html|404\.html|sw\.js|manifest\.webmanifest|(?:css|js|vendor|data|icons|live)\/[\w./-]+)$/
+  const PUBLIC = /^\/(?:index\.html|404\.html|sw\.js|boot\.js|manifest\.webmanifest|(?:css|js|dist|vendor|data|icons|live)\/[\w./-]+)$/
   const fileCache = new Map()
   function serveStatic(req, res, url) {
     if (!serve || (req.method !== 'GET' && req.method !== 'HEAD')) return false
