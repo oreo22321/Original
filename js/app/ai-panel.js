@@ -1,5 +1,6 @@
 // AI パネル (Forge AI: アプリに内蔵した AI。インターネット・API キー不要)
 import { app, command, runCommand } from './app.js'
+import { highlightPython } from '../editor/themes.js'
 import { on, emit } from './store.js'
 import { h, icon, toast, copyText, modal, confirmDialog } from './ui.js'
 import { renderMarkdown } from './markdown.js'
@@ -161,7 +162,12 @@ export class AiView {
     let mm
     while ((mm = re.exec(text))) codes.push(mm[1].replace(/\n$/, ''))
     body.querySelectorAll('.ai-code').forEach((block, i) => {
-      block.querySelector('code').textContent = codes[i] || ''
+      const codeEl = block.querySelector('code')
+      const lang = (block.querySelector('.ai-code-bar span') || {}).textContent || ''
+      // エディタと同じ色で (Python のとき。書いている途中の長いコードは色を付けない)
+      if ((!lang || /^(python|py|code)$/i.test(lang)) && (codes[i] || '').length < 20000 && !(m.pending && i === codes.length - 1)) codeEl.replaceChildren(highlightPython(codes[i] || ''))
+      else codeEl.textContent = codes[i] || ''
+      codeEl.classList.add('hx')
       block.querySelector('.ai-code-actions').addEventListener('click', e => {
         const act = e.target.dataset.act
         if (!act) return

@@ -39,7 +39,11 @@ def on_finish(fn):
 _orig_sleep = _time.sleep
 
 
+_slept = [False]
+
+
 def sleep(secs):
+    _slept[0] = True
     if isinstance(secs, (str, bytes)) or secs is None or not (hasattr(type(secs), "__float__") or hasattr(type(secs), "__index__")):
         return _orig_sleep(secs)
     s = float(secs)
@@ -342,6 +346,11 @@ def run_coro(coro):
 def begin(argv=None):
     _notes.clear()
     _finishers.clear()
+    _evq.clear()
+    _slept[0] = False
+    _figs["keys"].clear()
+    _figs["sites"].clear()
+    _figs["anims"].clear()
     if argv is not None:
         sys.argv = list(argv)
         # プロジェクトのモジュールは読み直す (書き換えたものが使われるように) / turtle は新しい画面から
@@ -349,9 +358,13 @@ def begin(argv=None):
             f = getattr(m, "__file__", None) or ""
             if f.startswith(PROJECT + "/"):
                 del sys.modules[name]
-        t = sys.modules.get("turtle")
-        if t is not None and hasattr(t, "_reset_all"):
-            t._reset_all()
+        for lib in ("turtle", "pygame._base", "tkinter"):
+            t = sys.modules.get(lib)
+            if t is not None and hasattr(t, "_reset_all"):
+                try:
+                    t._reset_all()
+                except Exception:
+                    pass
         import importlib
         importlib.invalidate_caches()
     if not _user["active"]:
@@ -375,27 +388,251 @@ def end():
 
 
 # ============================================================
+# 画面からの操作 (キー・クリック・タップ): turtle / pygame / tkinter / 図 で分けて受け取る
+# ============================================================
+_evq = {}
+
+
+def _pump_events():
+    while True:
+        s = js.__fc_ev_poll()
+        if not s:
+            return
+        try:
+            evs = json.loads(s)
+        except Exception:
+            continue
+        for ev in evs:
+            q = _evq.setdefault(ev.get("s") or "turtle", [])
+            q.append(ev)
+            if len(q) > 2000:
+                del q[:1000]
+
+
+def take_events(source):
+    """source ("turtle" / "pg" / "tk" / "fig") あての操作を取り出す"""
+    _pump_events()
+    q = _evq.get(source)
+    if not q:
+        return []
+    out = list(q)
+    q.clear()
+    return out
+
+
+def events_ok():
+    return bool(js.__fc_ev_ok())
+
+
+def wait_events(ms):
+    """操作が届くか、ms ミリ秒たつか、■ が押されるまで待つ"""
+    return js.__fc_ev_wait(int(max(1, ms)))
+
+
+def rpc(op, args=None, data=None):
+    """画面 (メインスレッド) に頼んで、結果を待つ (画像の読み込み・ダイアログなど)"""
+    if data is not None:
+        from pyodide.ffi import to_js
+        data = to_js(data)
+    r = js.__fc_rpc(op, json.dumps(args or {}), data)
+    if r is None:
+        raise KeyboardInterrupt
+    return r
+
+
+# ============================================================
 # 表示: display() / 画像 / 表
 # ============================================================
-_fig_gen = [0]
-
-
 def _png(data, key=None):
     js.__fc_image(base64.b64encode(data).decode(), key)
 
 
-def show_figures(live=False):
+# ---- matplotlib の図: 1 つの画面で描き直す (plt.pause・アニメーション・ion・ループの中の plt.show) ----
+# 図は PNG にせず、Agg の画素 (RGBA) をそのまま画面のキャンバスへ送るので、速くなめらかに動きます
+_figs = {"gen": 0, "seq": 0, "keys": {}, "sites": {}, "scale": {}, "anims": [], "closed": set()}
+
+
+def _site():
+    f = sys._getframe(2)
+    while f is not None:
+        fn = f.f_code.co_filename
+        if fn.startswith(PROJECT + "/") or fn.startswith("<"):
+            return "%s:%d" % (fn, f.f_lineno)
+        f = f.f_back
+    return "?"
+
+
+def _agg_canvas(fig):
+    c = fig.canvas
+    if hasattr(c, "buffer_rgba") and hasattr(c, "draw"):
+        return c
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    return FigureCanvasAgg(fig)
+
+
+def present(fig, key, title=None):
+    """図を描いて、画面の key の場所へ送る (同じ key なら同じ場所で描き直す)"""
+    canvas = _agg_canvas(fig)
+    sc = _figs["scale"].get(key, 2.0)
+    dpi0 = fig.dpi
+    t0 = _time.monotonic()
+    try:
+        fig.dpi = dpi0 * sc
+        canvas.draw()
+        mv = memoryview(canvas.buffer_rgba())
+        h, w = mv.shape[0], mv.shape[1]
+        if title is None:
+            try:
+                title = fig.canvas.manager.get_window_title()
+            except Exception:
+                title = "Figure %s" % getattr(fig, "number", "")
+        js.__fc_frame(key, w, h, mv, sc, str(title or ""))
+    finally:
+        fig.dpi = dpi0
+    # 描くのに時間がかかる図は、少し粗くして速く動かす
+    dt = _time.monotonic() - t0
+    if dt > 0.07 and sc > 1.0:
+        _figs["scale"][key] = max(1.0, sc * 0.8)
+
+
+def _fig_key(fig, site=None):
+    num = getattr(fig, "number", id(fig))
+    k = _figs["keys"].get(num)
+    if k is None and site is not None:
+        # 同じ行の plt.show() を、待ちながら何度も呼んでいる (ループのアニメーション) → 同じ場所で描き直す
+        prev = _figs["sites"].get(site)
+        if prev and _slept[0]:
+            k = prev.get(num)
+    if k is None:
+        _figs["seq"] += 1
+        k = "fig-%d" % _figs["seq"]
+    _figs["keys"][num] = k
+    return k
+
+
+def _fignums(plt):
+    try:
+        return list(plt.get_fignums())
+    except Exception:
+        return []
+
+
+def show_figures(live=False, site=None):
     plt = sys.modules.get("matplotlib.pyplot")
     if plt is None:
         return
-    for num in plt.get_fignums():
+    nums = _fignums(plt)
+    if not nums:
+        return
+    if not live and _run_animations(plt):
+        nums = _fignums(plt)
+    keys = {}
+    for num in nums:
         fig = plt.figure(num)
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
-        _png(buf.getvalue(), "fig%d-%d" % (_fig_gen[0], num))
+        k = _fig_key(fig, site)
+        keys[num] = k
+        present(fig, k)
     if not live:
+        if site is not None:
+            _figs["sites"][site] = keys
+        _slept[0] = False
         plt.close("all")
-        _fig_gen[0] += 1
+        _figs["keys"].clear()
+
+
+def _live(fig):
+    # plt.draw()・fig.canvas.draw_idle()・flush_events() (plt.ion() のとき): その図だけ描き直す
+    try:
+        present(fig, _fig_key(fig))
+    except Exception:
+        pass
+
+
+# ---- matplotlib.animation (FuncAnimation / ArtistAnimation): plt.show() で再生する ----
+def _run_animations(plt):
+    import weakref
+    live = []
+    for r in _figs["anims"]:
+        a = r()
+        if a is None or getattr(a, "_fc_done", False):
+            continue
+        fig = getattr(a, "_fig", None)
+        if fig is None or getattr(fig, "number", None) not in _fignums(plt):
+            continue
+        live.append(a)
+    _figs["anims"].clear()
+    if not live:
+        return False
+    note("anim", "matplotlib: アニメーションを再生しています (■ で止めます)")
+    slots = []
+    for a in live:
+        a._fc_done = True
+        fig = a._fig
+        try:
+            a._blit = False  # 毎回ぜんぶ描く (ブリットは使わない)
+        except Exception:
+            pass
+        try:
+            a.event_source.stop()
+        except Exception:
+            pass
+        key = _fig_key(fig)
+        try:
+            present(fig, key)  # 最初の描画 (ここで init_func が呼ばれる)
+        except Exception:
+            pass
+        interval = max(0.001, float(getattr(a, "_interval", 200) or 200) / 1000.0)
+        slots.append([a, iter(a.new_frame_seq()), interval, _time.monotonic(), key, fig, 0])
+    while slots:
+        now = _time.monotonic()
+        nxt = min(s[3] for s in slots)
+        if nxt > now:
+            sleep(nxt - now)
+        for ev in take_events("fig"):
+            if ev.get("t") == "close":
+                slots = [s for s in slots if s[4] != ev.get("key")]
+        for s in list(slots):
+            if s not in slots or s[3] > _time.monotonic():
+                continue
+            a = s[0]
+            try:
+                fd = next(s[1])
+            except StopIteration:
+                if not getattr(a, "_repeat", False):
+                    slots.remove(s)
+                    continue
+                s[6] += 1
+                try:
+                    a._init_draw()
+                except Exception:
+                    pass
+                s[1] = iter(a.new_frame_seq())
+                try:
+                    fd = next(s[1])
+                except StopIteration:
+                    slots.remove(s)
+                    continue
+                delay = float(getattr(a, "_repeat_delay", 0) or 0) / 1000.0
+                if delay:
+                    s[3] = _time.monotonic() + delay
+                    continue
+            a._draw_frame(fd)
+            present(s[5], s[4])
+            s[3] += s[2]
+            if s[3] < _time.monotonic() - 0.25:
+                s[3] = _time.monotonic()
+    return True
+
+
+def _hook_animation(anim):
+    import weakref
+    orig = anim.Animation.__init__
+
+    def __init__(self, *args, **kwargs):
+        orig(self, *args, **kwargs)
+        _figs["anims"].append(weakref.ref(self))
+
+    anim.Animation.__init__ = __init__
 
 
 def _pil_png(img):
@@ -409,10 +646,9 @@ def _pil_png(img):
 
 def _display_one(o):
     mod = type(o).__module__ or ""
-    if mod.startswith("matplotlib") and hasattr(o, "savefig"):
-        buf = io.BytesIO()
-        o.savefig(buf, format="png", dpi=110, bbox_inches="tight")
-        _png(buf.getvalue())
+    if mod.startswith("matplotlib") and hasattr(o, "savefig") and hasattr(o, "canvas"):
+        _figs["seq"] += 1
+        present(o, "fig-%d" % _figs["seq"])
         return
     if mod.startswith("PIL") and hasattr(o, "save") and hasattr(o, "mode"):
         _png(_pil_png(o))
@@ -475,21 +711,42 @@ def _hook_pyplot(plt):
         matplotlib.use("agg")
     except Exception:
         pass
+    orig_draw = plt.draw
 
-    def show(*args, **kwargs):
-        show_figures()
+    def show(*args, block=None, **kwargs):
+        show_figures(live=(block is False), site=_site())
 
     def pause(interval):
-        show_figures(live=True)
+        nums = _fignums(plt)
+        for num in nums:
+            _live(plt.figure(num))
         sleep(interval)
+
+    def draw():
+        orig_draw()
+        if _fignums(plt):
+            _live(plt.gcf())
 
     show.__doc__ = plt.show.__doc__
     pause.__doc__ = plt.pause.__doc__
+    draw.__doc__ = orig_draw.__doc__
     plt.show = show
     plt.pause = pause
+    plt.draw = draw
+    try:
+        from matplotlib.backend_bases import FigureCanvasBase
+
+        def flush_events(self):
+            if self.figure is not None and getattr(self.figure, "number", None) in _fignums(plt):
+                _live(self.figure)
+
+        FigureCanvasBase.flush_events = flush_events
+    except Exception:
+        pass
 
 
 on_import("matplotlib.pyplot", _hook_pyplot)
+on_import("matplotlib.animation", _hook_animation)
 
 
 def _hook_pil(Image):
@@ -1112,8 +1369,83 @@ from threading import Thread as Process
 const MP_QUEUES = String.raw`from multiprocessing import Queue, JoinableQueue, SimpleQueue
 `
 
+// winsound / playsound: 画面側の Web Audio で鳴らす
+const WINSOUND = String.raw`"""winsound (ForgeCode 互換版: 画面で音を鳴らします)"""
+import json as _json
+import js as _js
+
+SND_FILENAME = 0x20000
+SND_ALIAS = 0x10000
+SND_LOOP = 0x0008
+SND_MEMORY = 0x0004
+SND_PURGE = 0x0040
+SND_ASYNC = 0x0001
+SND_NODEFAULT = 0x0002
+SND_NOSTOP = 0x0010
+SND_NOWAIT = 0x2000
+MB_ICONASTERISK = 0x40
+MB_ICONEXCLAMATION = 0x30
+MB_ICONHAND = 0x10
+MB_ICONQUESTION = 0x20
+MB_OK = 0x0
+_n = [0]
+
+
+def Beep(frequency, duration):
+    if not 37 <= frequency <= 32767:
+        raise ValueError("frequency must be in 37 thru 32767")
+    _js.__fc_sound(_json.dumps({"op": "beep", "freq": int(frequency), "ms": int(duration)}), None)
+    import time
+    time.sleep(duration / 1000.0)
+
+
+def MessageBeep(type=MB_OK):
+    _js.__fc_sound(_json.dumps({"op": "beep", "freq": 660, "ms": 150, "wave": "sine"}), None)
+
+
+def PlaySound(sound, flags):
+    if sound is None or flags & SND_PURGE:
+        _js.__fc_sound(_json.dumps({"op": "stopall"}), None)
+        return
+    if flags & SND_ALIAS:
+        MessageBeep()
+        return
+    data = bytes(sound) if flags & SND_MEMORY else open(sound, "rb").read()
+    from pyodide.ffi import to_js
+    _n[0] += 1
+    _js.__fc_sound(_json.dumps({"op": "play", "id": "ws%d" % _n[0], "channel": "winsound", "loops": -1 if flags & SND_LOOP else 0}), to_js(data))
+`
+
+const PLAYSOUND = String.raw`"""playsound (ForgeCode 互換版: 画面で音を鳴らします)"""
+import json as _json
+import js as _js
+
+_n = [0]
+
+
+class PlaysoundException(Exception):
+    pass
+
+
+def playsound(sound, block=True):
+    import os
+    path = os.fspath(sound)
+    if path.startswith("http://") or path.startswith("https://"):
+        raise PlaysoundException("この環境では、プロジェクトの中の音のファイルだけ鳴らせます")
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        raise PlaysoundException(str(e))
+    from pyodide.ffi import to_js
+    _n[0] += 1
+    _js.__fc_sound(_json.dumps({"op": "play", "id": "ps%d" % _n[0]}), to_js(data))
+`
+
 export function runtimeFiles(turtle) {
   return {
+    'winsound.py': WINSOUND,
+    'playsound.py': PLAYSOUND,
     '_forgecode.py': FORGECODE,
     'webbrowser.py': WEBBROWSER,
     'multiprocessing/__init__.py': MP,

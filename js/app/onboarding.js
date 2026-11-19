@@ -55,7 +55,8 @@ export function showOnboarding() {
           preview.style.color = c.fg
           preview.style.fontSize = state.fontSize + 'px'
           const k = (t, c2, it) => `<span style="color:${c2}${it ? ';font-style:italic' : ''}">${t}</span>`
-          preview.innerHTML = `${k('# コメント', c.comment, 1)}\n${k('def', c.keyword)} ${k('greet', c.func)}(name):\n    ${k('return', c.control)} ${k('f"こんにちは、{name}"', c.string)}\n\n${k('for', c.control)} i ${k('in', c.keyword)} ${k('range', c.builtin)}(${k('3', c.number)}):\n    ${k('print', c.builtin)}(greet(${k('"Python"', c.string)}))`
+          const v = c.variable || c.fg
+          preview.innerHTML = `${k('# コメント', c.comment, !c.variable)}\n${k('def', c.keyword)} ${k('greet', c.func)}(${k('name', v)}):\n    ${k('return', c.control)} ${k('f', c.variable ? c.keyword : c.string)}${k('"こんにちは、', c.string)}${k('{', c.variable ? c.keyword : c.string)}${k('name', v)}${k('}', c.variable ? c.keyword : c.string)}${k('"', c.string)}\n\n${k('for', c.control)} ${k('i', v)} ${k('in', c.keyword)} ${k('range', c.cls)}(${k('3', c.number)}):\n    ${k('print', c.func)}(${k('greet', c.func)}(${k('"Python"', c.string)}))`
         }
         const themes = h('div', { class: 'ob-themes' }, Object.entries(THEMES).map(([id, th]) => h('button', {
           class: 'ob-theme' + (state.theme === id ? ' on' : ''), style: { background: th.c.bg, color: th.c.fg, borderColor: state.theme === id ? th.c.keyword : 'transparent' },

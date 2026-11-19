@@ -1,13 +1,15 @@
 // 実行パネル: 出力 (コンソール・input・図) / 問題 / デバッグ — Python
 import * as vfs from './vfs.js'
 import { app, command, refreshFiles, runCommand } from './app.js'
-import { getSettings, on, emit, isTouch } from './store.js'
+import { getSettings, setSettings, on, emit, isTouch } from './store.js'
 import { h, icon, toast, copyText, haptic, menu, modal } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { langOf } from '../editor/setup.js'
+import { highlightPython } from '../editor/themes.js'
 import { explainError } from './explain.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
 import { TurtleView } from './turtle-view.js'
+import { SurfaceView, SoundPlayer, handleRpc } from './surface.js'
 
 const MAX_DOM_LINES = 3000
 // 'File "main.py", line 3' / 'main.py:3' をタップで開けるリンクにする
@@ -51,7 +53,12 @@ export class Runner {
     this.seq = 0
     this.evalWaits = new Map()
     this.pyStatus = ''
+    this.full = false
+    this.surfaces = new Map()
+    this.sound = new SoundPlayer()
     this.build()
+    // 実行画面 (全画面) は、ブラウザの「戻る」でも閉じられる
+    addEventListener('popstate', () => { if (this.full) { this.pushed = false; this.exitFull() } })
     on('docchange', () => this.scheduleProblems())
     on('active', () => this.scheduleProblems(120))
     on('diagnostics', doc => { if (doc && doc.path === app.editors.active) this.scheduleProblems(60) })
@@ -71,7 +78,47 @@ export class Runner {
     this.probEl = h('div', { class: 'panel-view problems hidden' })
     this.debugEl = h('div', { class: 'panel-view debug-view hidden' })
     this.debug = new DebugPanel(this, this.debugEl)
-    this.root.append(this.head, this.outWrap, this.probEl, this.debugEl)
+    // 全画面の実行画面の上部 (左上に小さな「戻る」)
+    this.runTitle = h('span', { class: 'rh-file' })
+    this.runState = h('span', { class: 'rh-state' })
+    this.runActions = h('div', { class: 'rh-actions' })
+    this.runHead = h('div', { class: 'run-head' },
+      h('button', { class: 'rh-back', 'aria-label': '戻る', title: '戻る (Esc)', onclick: () => this.exitFull() }, icon('chevronLeft', 18), h('span', null, '戻る')),
+      h('div', { class: 'rh-title' }, this.runTitle, this.runState),
+      this.runActions)
+    this.root.append(this.runHead, this.head, this.outWrap, this.probEl, this.debugEl)
+    // 実行中に実行画面を閉じたとき、戻るためのボタン
+    this.pill = h('button', { class: 'run-pill hidden', onclick: () => this.enterFull() }, h('span', { class: 'spinner' }), h('span', { class: 'rp-text' }, '実行中'), h('span', { class: 'rp-open' }, '画面を開く'))
+    document.body.append(this.pill)
+    // スマホ: 実行画面の左端から右へスワイプで戻る
+    let sx = null, sy = 0
+    this.root.addEventListener('touchstart', e => { const t = e.touches[0]; sx = this.full && e.touches.length === 1 && t.clientX < 26 ? t.clientX : null; sy = t.clientY }, { passive: true })
+    this.root.addEventListener('touchmove', e => {
+      if (sx === null) return
+      const t = e.touches[0]
+      if (Math.abs(t.clientY - sy) > 70) { sx = null; this.root.style.transform = ''; return }
+      const dx = Math.max(0, t.clientX - sx)
+      this.root.style.transition = 'none'
+      this.root.style.transform = `translateX(${dx}px)`
+    }, { passive: true })
+    this.root.addEventListener('touchend', e => {
+      if (sx === null) return
+      const dx = e.changedTouches[0].clientX - sx
+      sx = null
+      this.root.style.transition = ''
+      this.root.style.transform = ''
+      if (dx > 90) this.exitFull()
+    })
+    document.addEventListener('keydown', e => {
+      // 実行画面で ⌘/Ctrl + Enter: もう一度実行
+      if (this.full && (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !this.running) { e.preventDefault(); this.rerun(); return }
+      if (!this.full || e.key !== 'Escape' || e.defaultPrevented) return
+      if (document.querySelector('.modal-overlay, .menu-overlay, .sf-max')) return
+      const t = e.target
+      if (t && /^(INPUT|TEXTAREA)$/.test(t.tagName) && t.value) return
+      e.preventDefault()
+      this.exitFull()
+    })
     this.renderTabs()
     this.placeholder()
   }
@@ -131,6 +178,9 @@ export class Runner {
     this.inputRow = null
     if (this.turtle) { this.turtle.finish(); this.turtle = null }
     this.imgKeys = new Map()
+    this.endSurfaces()
+    this.surfaces = new Map()
+    if (this.tk) { this.tk.destroyAll(); this.tk = null }
     this.placeholder()
   }
 
@@ -153,7 +203,7 @@ export class Runner {
       let file = m && (m[1] || m[3])
       if (file && file.startsWith(PROJECT_DIR)) file = file.slice(PROJECT_DIR.length)
       if (m && app.files.some(f => f.path === file)) {
-        el.append(h('a', { class: 'out-link', href: '#', onclick: e => { e.preventDefault(); app.editors.open(file, { line: Number(m[2] || m[4]) }) } }, p))
+        el.append(h('a', { class: 'out-link', href: '#', onclick: e => { e.preventDefault(); this.exitFull(); app.editors.open(file, { line: Number(m[2] || m[4]) }) } }, p))
       } else if (p) el.append(p)
     }
   }
@@ -168,7 +218,8 @@ export class Runner {
       body.append(text.slice(0, LONG))
       const more = h('button', { class: 'btn small ghost out-more', onclick: () => { more.remove(); body.append(text.slice(LONG)) } }, `… 続きを表示 (${(text.length - LONG).toLocaleString()} 文字)`)
       body.append(more)
-    } else this.linkify(body, text)
+    } else if (kind === 'input' && text.length < 4000) { body.classList.add('hx'); body.append(highlightPython(text)) }
+    else this.linkify(body, text)
     el.append(body)
     if (this.query && !text.toLowerCase().includes(this.query)) el.classList.add('q-hide')
     return el
@@ -232,7 +283,7 @@ export class Runner {
     }
     // 共有メモリ (input() と停止に使う)。使えない環境では、停止はワーカーごと止める
     if (self.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined') {
-      this.shared = { interrupt: new SharedArrayBuffer(4), ctl: new SharedArrayBuffer(8), buf: new SharedArrayBuffer(64 * 1024), dctl: new SharedArrayBuffer(8), dbuf: new SharedArrayBuffer(256 * 1024), ectl: new SharedArrayBuffer(8), ebuf: new SharedArrayBuffer(64 * 1024) }
+      this.shared = { interrupt: new SharedArrayBuffer(4), ctl: new SharedArrayBuffer(8), buf: new SharedArrayBuffer(64 * 1024), dctl: new SharedArrayBuffer(8), dbuf: new SharedArrayBuffer(256 * 1024), ectl: new SharedArrayBuffer(8), ebuf: new SharedArrayBuffer(64 * 1024), fack: new SharedArrayBuffer(8) }
     } else this.shared = null
     w.onmessage = e => { if (this.worker === w) this.onMessage(e.data) }
     w.onerror = e => {
@@ -275,11 +326,16 @@ export class Runner {
     return files
   }
 
-  async run({ selection = false, path: forcePath = null, agent = false, debug = false } = {}) {
+  async run({ selection = false, path: forcePath = null, agent = false, debug = false, source: forceSource = null } = {}) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
     let path = null, source = null
-    if (selection) {
+    this.scratchId = 0
+    if (forceSource !== null) {
+      // AI が作ったコードを試す (プロジェクトのファイルは変えない)
+      path = '_forge_ai_check.py'
+      source = forceSource
+    } else if (selection) {
       const v = app.editors.activeView()
       if (!v || !doc || doc.lang !== 'python' || v.state.selection.main.empty) { toast('実行したい部分を選択してください'); return }
       path = doc.path
@@ -307,7 +363,8 @@ export class Runner {
     if (this.running) this.stop(true)
     app.editors.saveAll().catch(() => {})
     if (!agent) {
-      runCommand('togglePanel', true)
+      if (this.useFull(debug)) this.enterFull()
+      else runCommand('togglePanel', true)
       if (this.tab !== 'output') this.show('output')
     }
     if (s.clearOnRun) this.clear()
@@ -322,10 +379,18 @@ export class Runner {
     if (this.turtle) this.turtle.flushAll()
     this.turtle = null
     this.imgKeys = new Map()
+    this.endSurfaces()
+    this.surfaces = new Map()
+    this.tk = null
+    this.sound.stopAll()
+    this.runPath = path
+    this.runSelection = !!selection
+    this.lastReason = null
     this.eq = []
     if (this.shared) Atomics.store(new Int32Array(this.shared.ectl), 0, 0)
     const id = ++this.seq
     this.runId = id
+    if (forceSource !== null) this.scratchId = id
     // ブレークポイントがあれば、そこで止まる (なくても ⏸ や breakpoint() で途中から止められる)
     const bps = agent ? {} : bpStore.forRun()
     const hasBps = Object.keys(bps).length > 0
@@ -370,9 +435,11 @@ export class Runner {
       h('button', { class: 'btn small ghost', title: '入力を終える (EOF)', onclick: () => send(true) }, '終わり'))
     this.outEl.append(this.inputRow)
     this.outEl.scrollTop = this.outEl.scrollHeight
-    runCommand('togglePanel', true)
+    if (this.useFull()) this.enterFull()
+    else runCommand('togglePanel', true)
     if (this.tab !== 'output') this.show('output')
     this.renderTabs()
+    this.updateRunHead()
     setTimeout(() => field.focus(), 30)
   }
   removeInput() {
@@ -450,6 +517,7 @@ export class Runner {
     this.running = info
     if (!info) clearInterval(this.watchdog)
     emit('running', info)
+    this.updateRunHead()
   }
 
   // 最大実行時間 (設定)。入力待ち・一時停止の間は数えない
@@ -472,7 +540,11 @@ export class Runner {
 
   finished(reason, ms) {
     this.debug.onFinished()
-    if (this.turtle) this.turtle.finish()
+    if (this.turtle) { this.turtle.finish(); this.turtle.el.classList.remove('sf-sticky') }
+    this.endSurfaces()
+    this.sound.stopAll()
+    this.lastReason = reason
+    this.lastSec = ((ms !== undefined ? ms : performance.now() - this.t0) / 1000)
     this.eq = []
     this.inputPending = false
     this.removeInput()
@@ -481,6 +553,7 @@ export class Runner {
     this.append([{ kind: reason === 'error' || reason === 'load' ? 'meta error' : 'meta', text: msg }])
     this.setRunning(null)
     this.renderTabs()
+    this.updateRunHead()
   }
 
   onMessage(m) {
@@ -505,6 +578,11 @@ export class Runner {
       case 'html': this.showHtml(m.html, m.text); break
       case 'link': this.showLink(m.url); break
       case 'turtle': this.showTurtle(m.ops); break
+      case 'frame': this.showFrame(m); break
+      case 'surface': this.onSurface(m); break
+      case 'rpc': handleRpc(m); break
+      case 'sound': this.sound.handle(m); break
+      case 'tk': this.showTk(m.ops); break
       case 'evTaken': this.pumpEvents(); break
       case 'evalResult':
         if (m.ok) { if (m.html) this.showHtml(m.html, m.value); else if (m.value !== null && m.value !== undefined) this.append([{ kind: 'result', text: m.value }]) }
@@ -512,10 +590,11 @@ export class Runner {
         break
       case 'done':
         if (m.id !== this.runId) break
-        this.applyFiles(m.files)
+        if (m.id !== this.scratchId) this.applyFiles(m.files)
         if (m.error) this.showError(m.error)
         else if (m.reason === 'load') this.line('error', m.error || 'Python を読み込めませんでした')
         if (this.running) this.finished(m.reason === 'exit' ? 'done' : m.reason, m.ms)
+        if (m.fatal) { this.pyReady = false; this.resetWorker() }
         break
     }
   }
@@ -590,12 +669,8 @@ export class Runner {
       this.turtle = new TurtleView(ev => this.sendEvent(ev))
       this.turtle.live = !!this.running
       this.appendBlock(this.turtle.el)
-      // 絵が見えるように、画面の上端までスクロールして止める (あとの出力で流れないように)
-      if (!this.holdScroll) {
-        this.holdScroll = true
-        const el = this.turtle.el, out = this.outEl
-        requestAnimationFrame(() => { out.scrollTop = Math.max(0, el.offsetTop - out.offsetTop - 6) })
-      }
+      // 絵は出力の上に留めて、あとの出力 (print) はその下に流す
+      if (this.running) this.pin(this.turtle.el)
     }
     this.turtle.push(ops)
   }
@@ -621,6 +696,135 @@ export class Runner {
         Atomics.notify(ctl, 0)
       }
     } else this.eqTimer = setTimeout(() => this.pumpEvents(), 40)
+  }
+
+  // ============================================================
+  // 図・ゲームの画面 (1 つのキャンバスで描き直す)
+  // ============================================================
+  showFrame(m) {
+    let sv = this.surfaces.get(m.key)
+    if (!sv || !sv.el.isConnected) {
+      sv = new SurfaceView({ key: m.key, kind: m.kind || 'fig', onEvent: ev => this.sendEvent(ev), ack: seq => this.ackFrame(seq) })
+      sv.live = !!this.running
+      this.surfaces.set(m.key, sv)
+      this.appendBlock(sv.el)
+      // 図がたくさんあるときは、古いものから画像にしてメモリを空ける
+      const all = [...this.surfaces.values()].filter(x => !x.frozen && x !== sv)
+      if (all.length > 16) for (const old of all.slice(0, all.length - 16)) { old.live = false; old.freeze() }
+      if (sv.kind === 'pg' && this.running) this.pin(sv.el)
+      if (sv.kind === 'pg' && this.pgKeys) sv.setKeys(this.pgKeys)
+    } else if (sv.frames === 1 && this.running) this.pin(sv.el) // 2 枚目が来た = 動いている図
+    sv.frame(m)
+  }
+  ackFrame(seq) {
+    if (!this.shared || !this.shared.fack) return
+    const a = new Int32Array(this.shared.fack)
+    if (seq > Atomics.load(a, 0)) { Atomics.store(a, 0, seq); Atomics.notify(a, 0) }
+  }
+  // 動いている絵は、出力の上に留める (print はその下に流れる)
+  pin(el) {
+    for (const x of this.outEl.querySelectorAll('.sf-sticky')) if (x !== el) x.classList.remove('sf-sticky')
+    el.classList.add('sf-sticky')
+  }
+  onSurface(m) {
+    if (m.op === 'keys') {
+      this.pgKeys = m.keys || []
+      for (const sv of this.surfaces.values()) if (sv.kind === 'pg') sv.setKeys(this.pgKeys)
+    } else if (m.op === 'close') {
+      const sv = this.surfaces.get(m.key)
+      if (sv) sv.finish()
+    } else if (m.op === 'caption') {
+      const sv = this.surfaces.get(m.key)
+      if (sv) sv.title = m.title
+      if (this.full) this.runTitle.textContent = m.title || this.runTitle.textContent
+    }
+  }
+  endSurfaces() {
+    this.pgKeys = null
+    for (const sv of this.surfaces.values()) sv.finish()
+    if (this.tk) this.tk.finish()
+  }
+  // tkinter の画面
+  async showTk(ops) {
+    if (!this.tk || !this.tk.el.isConnected) {
+      const { TkView } = await import('./tk-view.js')
+      if (!this.tk || !this.tk.el.isConnected) {
+        this.tk = new TkView(ev => this.sendEvent(ev))
+        this.tk.live = !!this.running
+        this.appendBlock(this.tk.el)
+      }
+    }
+    this.tk.push(ops)
+  }
+
+  // ============================================================
+  // 全画面の実行画面
+  // ============================================================
+  useFull(debug = false) {
+    const mode = getSettings().runView || 'full'
+    if (mode !== 'full' || debug || (this.debug && this.debug.paused)) return false
+    return !(this.running && this.running.debug)
+  }
+  enterFull() {
+    if (this.full) { this.updateRunHead(); return }
+    this.full = true
+    this.wasPanelOpen = !!(app.wb && app.wb.panelOpen)
+    this.root.classList.add('run-full')
+    document.body.classList.add('run-full-open')
+    if (this.tab !== 'output') this.show('output')
+    this.updateRunHead()
+    try { history.pushState({ fcRun: 1 }, ''); this.pushed = true } catch {}
+    requestAnimationFrame(() => { this.root.classList.add('run-full-in') })
+  }
+  exitFull() {
+    if (!this.full) return
+    this.full = false
+    this.root.classList.remove('run-full', 'run-full-in')
+    document.body.classList.remove('run-full-open')
+    for (const sv of this.surfaces.values()) sv.toggleMax(false)
+    if (app.wb) { app.wb.panelOpen = false; app.wb.togglePanel(this.wasPanelOpen && document.body.dataset.layout !== 'mobile') }
+    if (this.pushed) { this.pushed = false; try { if (history.state && history.state.fcRun) history.back() } catch {} }
+    this.updateRunHead()
+    const v = app.editors && app.editors.activeView()
+    if (v && document.body.dataset.layout !== 'mobile') setTimeout(() => v.focus(), 60)
+  }
+  updateRunHead() {
+    if (!this.runHead) return
+    const running = this.running
+    this.root.classList.toggle('is-running', !!running)
+    this.pill.classList.toggle('hidden', !running || this.full || (getSettings().runView || 'full') !== 'full')
+    const pt = this.pill.querySelector('.rp-text')
+    if (pt) pt.textContent = this.inputPending ? '入力待ち' : '実行中'
+    if (!this.full) return
+    if (this.consoleInput) this.consoleInput.placeholder = innerWidth < 600 ? '式やコードを入力 (例: 1 + 2)' : 'Python の式やコードを入力して Enter (例: 1 + 2, len(names))'
+    this.runTitle.textContent = this.runPath ? vfs.basename(this.runPath) + (this.runSelection ? ' (選択範囲)' : '') : '実行'
+    this.runState.className = 'rh-state'
+    this.runState.textContent = ''
+    if (running) {
+      this.runState.classList.add(this.inputPending ? 'wait' : 'run')
+      this.runState.append(h('span', { class: 'spinner' }), this.inputPending ? '入力待ち' : '実行中')
+    } else if (this.lastReason) {
+      const r = this.lastReason
+      this.runState.classList.add(r === 'error' || r === 'load' ? 'err' : r === 'stopped' ? 'stop' : 'ok')
+      this.runState.append(r === 'error' || r === 'load' ? '✕ エラー' : r === 'stopped' ? '■ 停止' : '✓ 完了', h('span', { class: 'rh-sec' }, ` ${(this.lastSec || 0).toFixed(2)} 秒`))
+    }
+    this.runActions.textContent = ''
+    const btn = (ic, title, fn, cls = '') => h('button', { class: 'icon-btn ' + cls, title, 'aria-label': title, onclick: fn }, icon(ic, 18))
+    if (running) this.runActions.append(h('button', { class: 'run-btn stop', title: '停止', 'aria-label': '停止', onclick: () => runCommand('stop') }, icon('stop', 16), h('span', null, '停止')))
+    else this.runActions.append(h('button', { class: 'run-btn', title: 'もう一度実行', 'aria-label': 'もう一度実行', onclick: () => this.rerun() }, icon('refresh', 16), h('span', null, 'もう一度')))
+    this.runActions.append(btn('more', 'その他', e => menu([
+      { label: '出力をコピー', icon: 'copy', run: () => copyText(this.outputText()).then(() => toast('出力をコピーしました', { icon: 'copy' })) },
+      { label: 'クリア', icon: 'trash', run: () => this.clear(), disabled: !!running },
+      { label: 'エラーと警告だけ表示', icon: 'filter', checked: this.filter !== 'all', run: () => { this.filter = this.filter === 'all' ? 'issues' : 'all'; this.outEl.classList.toggle('only-issues', this.filter !== 'all'); this.renderTabs() } },
+      { label: 'Python を再起動', icon: 'refresh', run: () => this.restartPython() },
+      '-',
+      { label: '実行結果を下のパネルに出す (全画面にしない)', icon: 'terminal', run: () => { setSettings({ runView: 'panel' }); this.exitFull(); runCommand('togglePanel', true); toast('実行結果は下のパネルに出します (設定 → 実行 で戻せます)') } },
+    ], e.currentTarget, { title: '実行' })))
+  }
+  rerun() {
+    const p = this.runPath
+    if (this.runSelection) { this.exitFull(); return }
+    this.run(p ? { path: p } : {})
   }
 
   showError(err) {
@@ -658,9 +862,9 @@ export class Runner {
       el.append(tb)
     }
     const acts = h('div', { class: 'oe-actions' })
-    if (at) acts.append(h('button', { class: 'btn small', onclick: () => app.editors.open(at.file, { line: at.line }) }, `${at.line} 行目へ`))
+    if (at) acts.append(h('button', { class: 'btn small', onclick: () => { this.exitFull(); app.editors.open(at.file, { line: at.line }) } }, `${at.line} 行目へ`))
     acts.append(h('button', { class: 'btn small ghost', onclick: () => copyText(err.text || title).then(() => toast('エラーをコピーしました', { icon: 'copy' })) }, 'コピー'))
-    acts.append(h('button', { class: 'btn small ai-fix', onclick: () => runCommand('aiFixRunError', err.text || title) }, icon('sparkle', 14), 'AI で直す'))
+    acts.append(h('button', { class: 'btn small ai-fix', onclick: () => { this.exitFull(); runCommand('aiFixRunError', err.text || title) } }, icon('sparkle', 14), 'AI で直す'))
     el.append(acts)
     if (!this.lineCount) this.outEl.textContent = ''
     const out = this.outEl
@@ -669,12 +873,60 @@ export class Runner {
     this.lineCount++
     this.last = null
     if (at) app.editors.markRunError(at.file, at.line, title)
+    if (at) this.aiFixFor(err, el, at)
     if (this.tab !== 'output') this.show('output')
     if (!this.holdScroll) { this.holdScroll = true; requestAnimationFrame(() => { out.scrollTop = Math.max(0, el.offsetTop - out.offsetTop - 6) }) }
   }
 
+  // 端末内 AI に任せる設定なら、エラーの直し方を AI に考えてもらい、確かめた直し方だけ出す
+  async aiFixFor(err, el, at) {
+    let mod
+    try { mod = await import('./ai-assist.js') } catch { return }
+    if (!mod.assistOn()) return
+    const doc = app.editors.docs.get(at.file)
+    const code = doc ? doc.state.doc.toString() : app.contents.get(at.file)
+    if (!code) return
+    const label = h('span', null, 'AI が直し方を考えています…')
+    const box = h('div', { class: 'oe-ai' }, h('div', { class: 'oe-ai-head' }, icon('sparkle', 14), label, h('span', { class: 'spinner' })))
+    const acts = el.querySelector('.oe-actions')
+    el.insertBefore(box, acts)
+    let r = null
+    try { r = await mod.suggestFix({ code, path: at.file, error: { ...err, line: at.line } }) } catch {}
+    if (!r) { label.textContent = 'AI の直し方は見つかりませんでした'; box.querySelector('.spinner')?.remove(); box.classList.add('none-found'); setTimeout(() => box.remove(), 4000); return }
+    box.replaceChildren(h('div', { class: 'oe-ai-head' }, icon('sparkle', 14), h('span', null, `AI の直し方 (${r.start === r.end ? r.start + ' 行目' : r.start + '〜' + r.end + ' 行目'})`)))
+    // 変わった行だけを見せる
+    const a = r.before.split('\n'), b = r.after.split('\n')
+    let p = 0
+    while (p < a.length && p < b.length && a[p] === b[p]) p++
+    let q = 0
+    while (q < a.length - p && q < b.length - p && a[a.length - 1 - q] === b[b.length - 1 - q]) q++
+    const diff = h('div', { class: 'oe-ai-diff hx' })
+    for (const l of a.slice(p, a.length - q)) diff.append(h('div', { class: 'del' }, h('span', { class: 'mk' }, '−'), highlightPython(l)))
+    for (const l of b.slice(p, b.length - q)) diff.append(h('div', { class: 'add' }, h('span', { class: 'mk' }, '+'), highlightPython(l)))
+    box.append(diff)
+    if (r.why) box.append(h('div', { class: 'oe-ai-why' }, r.why))
+    const apply = async andRun => {
+      this.exitFull()
+      await app.editors.open(at.file, { line: r.start })
+      const v = app.editors.activeView()
+      if (!v) return
+      const st = v.state
+      if (r.end > st.doc.lines) return
+      const from = st.doc.line(r.start).from, to = st.doc.line(r.end).to
+      if (st.doc.sliceString(from, to) !== r.before) { toast('コードが変わったので、この直し方は使えません', { icon: 'alert' }); return }
+      v.dispatch({ changes: { from, to, insert: r.after }, userEvent: 'input.ai', scrollIntoView: true })
+      box.remove()
+      toast('AI の直し方を適用しました', { icon: 'sparkle' })
+      if (andRun) setTimeout(() => this.run(), 150)
+    }
+    box.append(h('div', { class: 'oe-ai-acts' },
+      h('button', { class: 'btn small primary', onclick: () => apply(true) }, icon('play', 13), '直して実行'),
+      h('button', { class: 'btn small', onclick: () => apply(false) }, '直すだけ'),
+      h('button', { class: 'btn small ghost', onclick: () => box.remove() }, '閉じる')))
+  }
+
   // 実行して、出力・エラーをまとめて返す (AI エージェント用)
-  async runAndCollect({ path, seconds = 6, signal } = {}) {
+  async runAndCollect({ path, seconds = 6, signal, source = null } = {}) {
     const rec = { output: [], errors: [], done: null }
     const tap = m => {
       if (m.type === 'output') { for (const it of m.items) if (rec.output.length < 400) rec.output.push(it) }
@@ -682,7 +934,7 @@ export class Runner {
     }
     this.taps.add(tap)
     try {
-      await this.run({ path, agent: true })
+      await this.run({ path, agent: true, source })
       if (!this.running) return { ...rec, started: false }
       const until = performance.now() + Math.max(0.5, Math.min(30, seconds)) * 1000
       await new Promise(resolve => {
@@ -768,3 +1020,4 @@ command('runSelection', '選択範囲だけ実行', () => app.runner.run({ selec
 command('stop', '停止', () => app.runner.stop(), { icon: 'stop' })
 command('restartPython', 'Python を再起動 (変数をすべて消す)', () => app.runner.restartPython(), { icon: 'refresh' })
 command('clearOutput', '出力をクリア', () => app.runner.clear(), { icon: 'trash' })
+command('openRunScreen', '実行画面を開く', () => { if (getSettings().runView === 'panel') runCommand('togglePanel', true); else app.runner.enterFull() }, { icon: 'terminal' })

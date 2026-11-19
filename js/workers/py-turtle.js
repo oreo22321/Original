@@ -121,16 +121,16 @@ _state = {"pending": 0.0, "last_update": 0.0, "dispatching": False}
 
 
 # js の __ で始まる名前は、クラスの中で書くと名前が変わってしまうので、ここで包む
-def _ev_poll():
-    return _js.__fc_ev_poll()
+def _ev_take():
+    return _fc.take_events("turtle")
 
 
 def _ev_ok():
-    return _js.__fc_ev_ok()
+    return _fc.events_ok()
 
 
 def _ev_wait(ms):
-    return _js.__fc_ev_wait(ms)
+    return _fc.wait_events(ms)
 
 
 def _reset_all():
@@ -530,12 +530,8 @@ class _Screen:
         _state["dispatching"] = True
         try:
             self._run_timers()
-            while True:
-                s = _ev_poll()
-                if not s:
-                    break
-                for ev in _json.loads(s):
-                    self._dispatch(ev)
+            for ev in _ev_take():
+                self._dispatch(ev)
         finally:
             _state["dispatching"] = False
 

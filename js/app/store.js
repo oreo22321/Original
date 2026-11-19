@@ -8,7 +8,7 @@ export const isIOS = typeof navigator !== 'undefined' && (/iP(hone|ad|od)/.test(
 
 export const DEFAULTS = {
   // 見た目
-  theme: 'forge-dark',
+  theme: 'vscode-dark',
   language: 'ja',      // 表示の言語: ja / en / auto (端末に合わせる)
   fontSize: smallScreen ? 13 : 15,
   fontFamily: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace',
@@ -45,11 +45,13 @@ export const DEFAULTS = {
   // 実行
   maxRunTime: 0,       // 最大実行時間 (秒)。0 は無制限
   clearOnRun: true,
+  runView: 'full',     // 実行結果の表示: full (全画面の実行画面) / panel (下のパネル)
   groupOutput: true,   // 同じ出力をまとめる (×3)
   explainErrors: true, // 実行エラーに日本語の解説を付ける
   // AI
   aiInline: true,      // 入力が止まったら AI (Forge AI) が続きを提案
   aiDelay: 700,
+  aiAssist: true,      // 端末内 AI をダウンロードしたら、エラー検知・実行エラーの修正・続きの提案を AI に任せる
   aiLlm: '',           // 高性能モード (端末内 LLM): '' (使わない) / small / medium / large
   // モバイル
   keybar: true,
@@ -57,7 +59,7 @@ export const DEFAULTS = {
   haptics: true,
   // その他
   onboarded: false,
-  design: 2,           // デザインの版 (新しいデザインへの移行用)
+  design: 3,           // デザインの版 (新しいデザインへの移行用)
   python: 1,           // Python 版への移行済み
   confirmDelete: true,
 }
@@ -74,6 +76,13 @@ try {
       if (saved.theme === 'dark-plus' || !saved.theme) saved.theme = 'forge-dark'
       else if (saved.theme === 'light-plus') saved.theme = 'forge-light'
       saved.design = 2
+      dropped = true
+    }
+    // v13: 色を VS Code と同じに。以前の標準テーマのままの人は、VS Code の標準 (Dark Modern / Light Modern) に
+    if ((saved.design || 0) < 3) {
+      if (!saved.theme || saved.theme === 'forge-dark') saved.theme = 'vscode-dark'
+      else if (saved.theme === 'forge-light') saved.theme = 'vscode-light'
+      saved.design = 3
       dropped = true
     }
     // v12: Python になったので、字下げはスペース 4 つ (タブとスペースが混ざると Python ではエラー)、キーボードバーは Python の記号

@@ -6,7 +6,7 @@ import { h, icon, toast, modal, confirmDialog, download } from './ui.js'
 import * as vfs from './vfs.js'
 import { app, command, runCommand } from './app.js'
 
-export const APP_VERSION = '12.1.0'
+export const APP_VERSION = '13.0.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -68,6 +68,7 @@ const SCHEMA = [
     { key: 'githubSync', type: 'action', label: 'GitHub と同期 (自動バックアップ)', desc: 'プロジェクトを GitHub のリポジトリに自動で保存します。端末が壊れても消えず、PC からも開けます', button: '設定', run: () => runCommand('githubSync') },
   ] },
   { group: '実行', icon: 'play', items: [
+    { key: 'runView', type: 'select', label: '実行結果の表示', options: [['full', '全画面の実行画面 (おすすめ)'], ['panel', '下のパネル']], desc: '全画面では、左上の「戻る」でコードに戻れます' },
     { key: 'clearOnRun', type: 'bool', label: '実行前に出力をクリア' },
     { key: 'groupOutput', type: 'bool', label: '同じ出力をまとめる (×3 のように表示)' },
     { key: 'maxRunTime', type: 'range', min: 0, max: 600, step: 10, label: '最大実行時間', unit: '秒', desc: '0 で無制限。超えたら止めます (無限ループ対策)。input() の入力待ちと一時停止の間は数えません' },
@@ -78,6 +79,7 @@ const SCHEMA = [
     { key: 'aiInline', type: 'bool', label: '入力が止まったら AI が続きを提案', desc: 'プロジェクトと内蔵サンプルから学習した統計モデルで、行の続きを薄い文字で出します (Tab で確定)。オフでも AI キーや Alt + \\ で頼めます' },
     { key: 'aiDelay', type: 'range', min: 300, max: 3000, step: 100, label: '自動で提案するまでの待ち時間', unit: 'ms' },
     { key: 'aiLlm', type: 'custom', label: '高性能モード 端末内 LLM 言語モデル WebGPU', render: () => llmRow() },
+    { key: 'aiAssist', type: 'bool', label: 'ダウンロードした AI に任せる (エラー検知・実行エラーの修正・続きの提案)', desc: '高性能モードのモデルを使うとき、書くのが止まると AI がバグを探して波線 (AI) で知らせ、実行エラーには確かめた直し方を出し、続きを書いて提案します。起動したら、手が空いたときにモデルを読み込みます' },
   ] },
   { group: 'スマホ・タブレット', icon: 'keyboard', items: [
     { key: 'keybar', type: 'bool', label: 'キーボードバー (記号・矢印)' },
@@ -252,7 +254,7 @@ function llmRow() {
   const box = h('div', { class: 'set-row col llm-row' })
   const st = llm.status()
   const title = h('div', { class: 'set-label' }, '高性能モード (端末内 LLM)')
-  const desc = h('div', { class: 'set-desc' }, '言語モデル (Qwen2.5-Coder) を端末にダウンロードし、GPU で動かします。決まった型に当てはまらない自由な依頼・質問にも答えられるようになります。会話は端末の中だけで処理されます。最初の 1 回だけダウンロードが必要で、電池と容量を使います。')
+  const desc = h('div', { class: 'set-desc' }, 'プログラミング用の言語モデル (Qwen2.5-Coder) を端末にダウンロードし、GPU で動かします。自由な依頼・質問に答え、作ったコードは構文チェック・実行で確かめてから出します。「AI に任せる」がオンなら、エラー検知・実行エラーの修正・続きの提案も AI が行います。会話とコードは端末の中だけで処理されます。最初の 1 回だけダウンロードが必要で、電池と容量を使います。')
   const sel = h('select', { class: 'select', 'aria-label': 'モデル' }, h('option', { value: '' }, '使わない'), ...llm.LLM_MODELS.map(m => h('option', { value: m.key, selected: s.aiLlm === m.key }, `${m.label} — ${m.desc}`)))
   const info = h('div', { class: 'set-desc llm-status' })
   const bar = h('div', { class: 'llm-bar hidden' }, h('div', { class: 'llm-bar-fill' }))
@@ -268,7 +270,7 @@ function llmRow() {
     if (cur.state === 'loading') info.textContent = cur.progress.text || '読み込み中…'
     else if (cur.state === 'ready' && cur.model === key) info.textContent = '使えます (メモリに読み込み済み)'
     else if (cur.state === 'error') info.textContent = cur.error
-    else info.textContent = 'AI パネルで必要になったときに読み込みます (初回はダウンロード)'
+    else info.textContent = getSettings().aiAssist ? '保存済みなら起動後に読み込みます。まだなら「いま読み込む」でダウンロードします' : 'AI パネルで必要になったときに読み込みます (初回はダウンロード)'
     if (cur.state !== 'loading') {
       if (!(cur.state === 'ready' && cur.model === key)) acts.append(h('button', { class: 'btn small primary', onclick: async () => {
         try { await llm.load(key); toast('端末内の AI モデルを読み込みました', { icon: 'sparkle' }) } catch (e) { toast(e.message, { kind: 'error', duration: 6000 }) }

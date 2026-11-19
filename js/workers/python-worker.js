@@ -7,16 +7,16 @@
 // ・Pyodide にないライブラリは、import したときに PyPI から自動で入れます (micropip。pure Python のもの)
 // ・asyncio・スレッド・time.sleep・urllib・turtle などは py-runtime.js / py-turtle.js で、ふつうの Python に近づけています
 import { loadPyodide } from '../../vendor/pyodide/pyodide.mjs'
-import { runtimeFiles, FC_LIB } from './py-runtime.js'
-import { TURTLE } from './py-turtle.js'
+import { libFiles, FC_LIB, SHIMS } from './py-lib.js'
 import { PIP_NAMES, NO_PIP } from './py-packages.js'
+import { installPgCanvas } from './pg-canvas.js'
 
 const PROJECT = '/home/pyodide/project'
 const PYODIDE_VERSION = '314.0.8'
 const CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`
 const MICROPIP = 'micropip-0.11.1-py3-none-any.whl'
 
-let post = m => self.postMessage(m)
+let post = (m, transfer) => (transfer ? self.postMessage(m, transfer) : self.postMessage(m))
 let py = null
 let loading = null
 let shared = null      // { interrupt, ctl, buf, dctl, dbuf, ectl, ebuf } 共有メモリ (input・停止・デバッガー・turtle の操作)
@@ -80,7 +80,7 @@ async function ensure() {
       if (shared) p.setInterruptBuffer(shared.interrupt)
       p.FS.mkdirTree(PROJECT)
       // ふつうの Python との違いを埋める道具 (_forgecode・turtle・multiprocessing・webbrowser)
-      for (const [rel, src] of Object.entries(runtimeFiles(TURTLE))) {
+      for (const [rel, src] of Object.entries(libFiles())) {
         const full = FC_LIB + '/' + rel
         p.FS.mkdirTree(full.slice(0, full.lastIndexOf('/')))
         p.FS.writeFile(full, src)
@@ -369,6 +369,82 @@ self.__fc_ev_poll = () => {
   post({ type: 'evTaken' })
   return text
 }
+// 図・ゲームの画面 (1 枚の画像)。画面が描き終わるのを少し待つので、描く速さが画面に合う (コマ落ちしない)
+let frameSeq = 0
+function frameWait() {
+  if (!shared || !shared.fack) return
+  const t0 = performance.now()
+  for (;;) {
+    const acked = Atomics.load(shared.fack, 0)
+    if (frameSeq - acked <= 2 || shared.interrupt[0] !== 0 || performance.now() - t0 > 150) return
+    Atomics.wait(shared.fack, 0, acked, 20)
+  }
+}
+self.__fc_frame = (key, w, h, buf, scale, title) => {
+  flush(true)
+  let data
+  const pb = buf.getBuffer('u8')
+  try { data = new Uint8ClampedArray(pb.data) } finally { pb.release() }
+  frameSeq++
+  post({ type: 'frame', key: String(key), w, h, data, scale: Number(scale) || 1, title: String(title || ''), seq: frameSeq }, [data.buffer])
+  frameWait()
+}
+// pygame: ワーカーの中のキャンバス (OffscreenCanvas) をそのまま画像にして送る
+const presenters = new Map()
+self.__fc_present = (key, canvas, title) => {
+  flush(true)
+  const w = canvas.width, h = canvas.height
+  let p = presenters.get(key)
+  if (!p || p.width !== w || p.height !== h) { p = new OffscreenCanvas(w, h); presenters.set(key, p) }
+  const ctx = p.getContext('2d')
+  ctx.drawImage(canvas, 0, 0)
+  const bitmap = p.transferToImageBitmap()
+  frameSeq++
+  post({ type: 'frame', key: String(key), w, h, bitmap, scale: 1, title: String(title || ''), seq: frameSeq, kind: 'pg' }, [bitmap])
+  frameWait()
+}
+self.__fc_surface = json => { flush(true); post({ type: 'surface', ...JSON.parse(json) }) }
+self.__fc_tk = json => { flush(true); post({ type: 'tk', ops: json }) }
+self.__fc_sound = (json, data) => {
+  const m = JSON.parse(json)
+  let bytes = null
+  if (data) { bytes = data instanceof Uint8Array ? data.slice() : null }
+  post({ type: 'sound', ...m, data: bytes }, bytes ? [bytes.buffer] : undefined)
+}
+// 画面に頼んで結果を待つ (画像の読み込み・ダイアログ)。結果が大きいときは、入れ物を大きくしてもう一度
+let rpcCtl = null, rpcBuf = null
+self.__fc_rpc = (op, argsJson, data) => {
+  flush(true)
+  if (!shared) throw new Error('この機能を使うには、ページを再読み込みしてください (はじめて開いたときは再読み込みが必要です)')
+  if (!rpcCtl) rpcCtl = new Int32Array(new SharedArrayBuffer(16))
+  let need = 1 << 20
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!rpcBuf || rpcBuf.length < need) rpcBuf = new Uint8Array(new SharedArrayBuffer(need))
+    Atomics.store(rpcCtl, 0, 0)
+    const payload = data ? (data.slice ? data.slice() : data) : null
+    post({ type: 'rpc', op: String(op), args: JSON.parse(argsJson || '{}'), data: payload, ctl: rpcCtl.buffer, buf: rpcBuf.buffer })
+    for (;;) {
+      Atomics.wait(rpcCtl, 0, 0, 250)
+      if (Atomics.load(rpcCtl, 0) !== 0) break
+      if (shared.interrupt[0] === 2) return null
+    }
+    const st = Atomics.load(rpcCtl, 0)
+    const len = Atomics.load(rpcCtl, 1)
+    if (st === 3) { need = len; continue }
+    const bytes = rpcBuf.slice(0, len)
+    if (st === 2) throw new Error(new TextDecoder().decode(bytes) || op + ' に失敗しました')
+    return { w: Atomics.load(rpcCtl, 2), h: Atomics.load(rpcCtl, 3), bytes, text: () => new TextDecoder().decode(bytes) }
+  }
+  throw new Error(op + ' の結果が大きすぎます')
+}
+// 画像 (png / jpg / gif / webp など) → ワーカーのキャンバス
+self.__fc_image_canvas = (data) => {
+  const r = self.__fc_rpc('decode', '{}', data)
+  if (!r) return null
+  const c = new OffscreenCanvas(Math.max(1, r.w), Math.max(1, r.h))
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(r.bytes.buffer, 0, r.w * r.h * 4), r.w, r.h), 0, 0)
+  return c
+}
 self.__fc_ev_wait = ms => {
   flush(true)
   if (!shared || !shared.ectl) return false
@@ -376,6 +452,8 @@ self.__fc_ev_wait = ms => {
   Atomics.wait(shared.ectl, 0, 0, Math.max(1, ms))
   return true
 }
+
+installPgCanvas(self)
 
 // ---- デバッガーと画面のやりとり (止まっている間は共有メモリで指示を待つ) ----
 const DEBUGGER = `import bdb, reprlib, inspect, types, sys, json, js, re as _re
@@ -767,7 +845,14 @@ async function run(m) {
   } catch (e) {
     ok = false
     reason = 'error'
-    error = { type: 'Error', message: String(e && e.message || e), text: String(e && e.message || e), frames: [] }
+    const msg = String(e && e.message || e)
+    // Pyodide そのものが壊れた (メモリ不足など): 画面側でワーカーを作り直してもらう
+    if (/fatal error|Aborted\(|out of memory|memory access out of bounds/i.test(msg)) {
+      flush(true)
+      post({ type: 'done', id, ok: false, reason: 'error', fatal: true, error: { type: 'MemoryError', message: 'Python が止まりました (メモリが足りなくなった可能性があります)。Python を立ち上げ直します', text: msg, frames: [] }, files: {}, ms: Math.round(performance.now() - t0) })
+      return
+    }
+    error = { type: 'Error', message: msg, text: msg, frames: [] }
   }
   flush(true)
   let files = {}
@@ -781,7 +866,7 @@ async function ensureImports(pyFiles, requirements) {
   let imp = { req: [], opt: [] }
   try { imp = JSON.parse(py.globals.get('__fc_imports')(JSON.stringify(pyFiles))) } catch {}
   for (const n of imp.req) if (NO_PIP[n]) outMsg('warn', NO_PIP[n])
-  const want = imp.req.filter(n => !NO_PIP[n])
+  const want = imp.req.filter(n => !NO_PIP[n] && !SHIMS.has(n))
   if (want.includes('zoneinfo')) want.push('tzdata')   // タイムゾーンの情報
   // 1) Pyodide に用意されているもの (numpy / pandas / matplotlib / requests など)
   try {
@@ -917,6 +1002,7 @@ self.onmessage = e => {
     if (m.interrupt && m.ctl && m.buf && m.dctl && m.dbuf) {
       shared = { interrupt: new Int32Array(m.interrupt), ctl: new Int32Array(m.ctl), buf: new Uint8Array(m.buf), dctl: new Int32Array(m.dctl), dbuf: new Uint8Array(m.dbuf) }
       if (m.ectl && m.ebuf) { shared.ectl = new Int32Array(m.ectl); shared.ebuf = new Uint8Array(m.ebuf) }
+      if (m.fack) shared.fack = new Int32Array(m.fack)
     }
     ensure().catch(err => post({ type: 'status', state: 'error', text: 'Python を読み込めませんでした: ' + (err && err.message || err) }))
   } else if (m.type === 'run') run(m)

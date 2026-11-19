@@ -667,7 +667,8 @@ print(df.sort_values("score", ascending=False).head(3))` },
 - 標準ライブラリ (math・random・datetime・json・csv・re・collections など) はすぐ使えます
 - **numpy・pandas・matplotlib・scipy・scikit-learn・sympy・pillow・requests** なども \`import\` するだけで使えます (初回だけインターネットから読み込み、あとは端末に保存)
 - それ以外のライブラリも、\`import\` すると **PyPI から自動で入ります** (pure Python のもの)。\`requirements.txt\` があれば実行の前に入れます。コンソールで \`pip install 名前\`・\`pip list\` も使えます
-- tkinter などウィンドウを出す GUI・pygame の画面・subprocess は使えません。絵やゲームは **turtle** で作れます`,
+- 画面のあるアプリは **tkinter**、ゲームは **pygame** や **turtle** で作れます (どれも出力に表示され、タップ・キーで操作できます)
+- subprocess・本当に同時に動くスレッド・ソケット通信・パソコンの操作 (pyautogui など) は使えません`,
     c: `import sympy
 
 x = sympy.symbols("x")
@@ -741,6 +742,44 @@ print(average)` },
 while count < 5:
     count += 1  # これを忘れると無限ループ
 print(count)` },
+  { id: 'tkinter', t: 'tkinter (ボタン・入力欄のある画面)', k: 'tkinter tk gui ウィンドウ 画面 ボタン 入力欄 entry label button canvas mainloop pack grid messagebox アプリ ttk',
+    b: `\`tkinter\` はウィンドウにボタンや入力欄を並べてアプリを作るライブラリです。ForgeCode では出力の中にウィンドウとして表示され、タップ・入力・キー操作がそのまま使えます。
+- \`root = tk.Tk()\` でウィンドウ、\`tk.Label\`・\`tk.Button(command=関数)\`・\`tk.Entry\`・\`tk.Text\`・\`tk.Listbox\`・\`tk.Canvas\`・\`ttk.Combobox\` などを作り、\`pack()\` / \`grid(row, column)\` / \`place(x, y)\` で並べます
+- 値は \`tk.StringVar\`・\`tk.IntVar\` を \`textvariable=\` / \`variable=\` に渡すと、画面と自動でつながります
+- 時間で動かすには \`root.after(ミリ秒, 関数)\`、キー・クリックは \`root.bind("<Left>", 関数)\`。最後に \`root.mainloop()\`
+- \`messagebox.showinfo\`・\`simpledialog.askstring\`・\`filedialog.askopenfilename\` のダイアログも出せます`,
+    c: `import tkinter as tk
+
+root = tk.Tk()
+root.title("カウンター")
+count = tk.IntVar(value=0)
+tk.Label(root, textvariable=count, font=("Arial", 32)).pack(padx=20, pady=10)
+tk.Button(root, text="+1", command=lambda: count.set(count.get() + 1)).pack(pady=10)
+root.mainloop()` },
+  { id: 'pygame', t: 'pygame (ゲーム)', k: 'pygame ゲーム game スプライト sprite キー 矢印 当たり判定 collide rect display flip clock tick event 画面 fps',
+    b: `\`pygame\` はゲームを作るライブラリです。ForgeCode では出力にゲームの画面が出て、キーボード・タップ (スマホは画面の下のキーのボタン) で操作できます。
+- \`screen = pygame.display.set_mode((幅, 高さ))\`、毎フレーム「操作 → 動き → 描く → \`pygame.display.flip()\` → \`clock.tick(60)\`」をくり返します
+- 操作は \`pygame.event.get()\` (QUIT・KEYDOWN・MOUSEBUTTONDOWN) と \`pygame.key.get_pressed()[pygame.K_LEFT]\`
+- \`pygame.Rect\` の \`colliderect\` で当たり判定、\`pygame.draw.rect / circle / line\`、\`font.render\` で文字、\`pygame.image.load\` で画像、\`pygame.sprite.Group\` でまとめて動かせます
+- 画面の右上の × で QUIT が届きます。■ でいつでも止められます`,
+    c: `import pygame
+
+pygame.init()
+screen = pygame.display.set_mode((400, 300))
+clock = pygame.time.Clock()
+x = 200
+running = True
+while running:
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            running = False
+    keys = pygame.key.get_pressed()
+    x += (keys[pygame.K_RIGHT] - keys[pygame.K_LEFT]) * 5
+    screen.fill((20, 20, 40))
+    pygame.draw.circle(screen, (255, 200, 0), (x, 150), 20)
+    pygame.display.flip()
+    clock.tick(60)
+pygame.quit()` },
   { id: 'turtle', t: 'turtle (タートルグラフィックス・絵とゲーム)', k: 'turtle タートル 亀 絵 描く 図形 星 円 線 色 forward left right ゲーム onkey キー操作 クリック ontimer',
     b: `\`turtle\` はペンを持った亀を動かして絵を描くライブラリです。ForgeCode では出力にキャンバスで表示されます。
 - \`forward(長さ)\` で進む、\`left(角度)\`・\`right(角度)\` で向きを変える、\`penup()\`・\`pendown()\` で線を引く/引かない

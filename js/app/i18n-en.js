@@ -13,6 +13,11 @@ export const EN = {
   '未保存': 'Unsaved', '保存中…': 'Saving…', '保存済み': 'Saved', '実行中': 'Running', 'デバッグ中': 'Debugging', '操作待ち': 'Waiting for input',
   'たった今': 'just now', '行頭へ': 'Line start', '行末へ': 'Line end', 'プレビュー': 'Preview', '出力パネル': 'Output panel',
   '保存の状態': 'Save status', 'ドラッグで幅を変更': 'Drag to resize', 'ドラッグで高さを変更': 'Drag to resize',
+  // ---- 実行画面 (v13) ----
+  '戻る': 'Back', 'もう一度': 'Run again', 'もう一度実行': 'Run again', '入力待ち': 'Waiting for input', '画面を開く': 'Open', '大きく表示': 'Enlarge', '元の大きさに戻す': 'Restore size',
+  '画像として保存': 'Save as image', 'ゲームを閉じる (QUIT)': 'Close game (QUIT)', '直して実行': 'Fix and run', '直すだけ': 'Fix only', 'AI の直し方にする': 'Apply AI fix',
+  'AI が直し方を考えています…': 'AI is working on a fix…', 'AI の直し方は見つかりませんでした': 'AI found no fix', '実行結果の表示': 'Show run results', '下のパネル': 'Bottom panel',
+  '全画面の実行画面 (おすすめ)': 'Full-screen run view (recommended)', 'ウィンドウを閉じる': 'Close window', 'ゲーム (pygame)': 'Game (pygame)', '画面のあるアプリ (tkinter)': 'App with a window (tkinter)',
   // ---- ファイル・プロジェクト ----
   '新しいファイル': 'New file', '新しいフォルダ': 'New folder', 'ファイルを開く': 'Open file', 'すべて保存': 'Save all', 'すべて保存しました': 'Saved all files',
   '名前を変更': 'Rename', '名前を変更 / 移動': 'Rename / move', 'パスをコピー': 'Copy path', '内容をコピー': 'Copy contents', 'ファイル一覧で表示': 'Reveal in files',

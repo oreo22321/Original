@@ -12,6 +12,7 @@ import { errorLens, runErrorMarks } from './errorlens.js'
 import { breakpointGutter, debugHover } from './breakpoints.js'
 import { pythonLanguage, pythonCompletionSource, pythonLinter, pythonHover, pythonSignatureHelp, pythonInputFixer, pythonAutoCorrect } from './python.js'
 import { stickyScroll } from './sticky.js'
+import { pySemantic } from './semantic.js'
 import { aiGhost } from './ghost.js'
 
 export function langOf(path) {
@@ -73,10 +74,11 @@ function completeExt(s, lang, ctx) {
 function extrasExt(s, lang, ctx) {
   const out = []
   if (s.indentGuides) out.push(indentGuides)
-  if (s.rainbowBrackets) out.push(rainbowBrackets)
+  if (s.rainbowBrackets) out.push(Prec.highest(rainbowBrackets))
   // 同じ単語をハイライト (カーソルのある単語も)
   out.push(highlightSelectionMatches({ minSelectionLength: 2, highlightWordAroundCursor: !!s.highlightSymbols }))
   if (lang === 'python') {
+    out.push(pySemantic)
     if (s.stickyScroll) out.push(stickyScroll())
     if (s.hover) out.push(pythonHover(() => ctx.path))
     if (s.signatureHelp) out.push(pythonSignatureHelp(() => ctx.path, () => true))
@@ -145,7 +147,7 @@ export function buildExtensions(ctx) {
     comps.complete.of(completeExt(s, lang, ctx)),
     py ? pythonInputFixer(() => st().fixInput, ctx.onFix) : [],
     py ? pythonAutoCorrect(() => st().autoCorrect, ctx.onFix) : [],
-    py ? pythonLinter(() => { const c = st(); return { enabled: c.lint, unused: c.lintUnused, undefined: c.lintUndefined, path: ctx.path } }) : [],
+    py ? pythonLinter(() => { const c = st(); return { enabled: c.lint, unused: c.lintUnused, undefined: c.lintUndefined, path: ctx.path, ai: ctx.aiLint || null } }) : [],
     py && ctx.aiProvider ? aiGhost(() => { const c = st(); return { enabled: c.aiInline, delay: c.aiDelay, provider: ctx.aiProvider } }) : [],
     comps.extras.of(extrasExt(s, lang, ctx)),
     py ? runErrorMarks : [],
