@@ -351,6 +351,8 @@ def begin(argv=None):
     _figs["keys"].clear()
     _figs["sites"].clear()
     _figs["anims"].clear()
+    _figs["count"].clear()
+    _figs["scale"].clear()
     if argv is not None:
         sys.argv = list(argv)
         # プロジェクトのモジュールは読み直す (書き換えたものが使われるように) / turtle は新しい画面から
@@ -449,7 +451,7 @@ def _png(data, key=None):
 
 # ---- matplotlib の図: 1 つの画面で描き直す (plt.pause・アニメーション・ion・ループの中の plt.show) ----
 # 図は PNG にせず、Agg の画素 (RGBA) をそのまま画面のキャンバスへ送るので、速くなめらかに動きます
-_figs = {"gen": 0, "seq": 0, "keys": {}, "sites": {}, "scale": {}, "anims": [], "closed": set()}
+_figs = {"gen": 0, "seq": 0, "keys": {}, "sites": {}, "scale": {}, "count": {}, "anims": [], "closed": set()}
 
 
 def _site():
@@ -473,7 +475,20 @@ def _agg_canvas(fig):
 def present(fig, key, title=None):
     """図を描いて、画面の key の場所へ送る (同じ key なら同じ場所で描き直す)"""
     canvas = _agg_canvas(fig)
-    sc = _figs["scale"].get(key, 2.0)
+    # はじめの 1 枚はくっきり (2 倍)。動き始めたら軽く (1.25 倍まで) して、メモリと時間を節約する
+    n = _figs["count"].get(key, 0)
+    _figs["count"][key] = n + 1
+    sc = _figs["scale"].get(key, 2.0 if n == 0 else 1.25)
+    if n > 0:
+        sc = min(sc, 1.25)
+    # 画素数の上限 (大きな図でもメモリを使いすぎないように)
+    try:
+        wi, hi = fig.get_size_inches()
+        px = wi * hi * (fig.dpi * sc) ** 2
+        if px > 2_400_000:
+            sc = max(0.5, sc * (2_400_000 / px) ** 0.5)
+    except Exception:
+        pass
     dpi0 = fig.dpi
     t0 = _time.monotonic()
     try:

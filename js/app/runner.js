@@ -9,7 +9,8 @@ import { highlightPython } from '../editor/themes.js'
 import { explainError } from './explain.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
 import { TurtleView } from './turtle-view.js'
-import { SurfaceView, SoundPlayer, handleRpc } from './surface.js'
+import { SurfaceView, SoundPlayer, handleRpc, clearTkImages } from './surface.js'
+import { busy, safeMode } from './crash-guard.js'
 
 const MAX_DOM_LINES = 3000
 // 'File "main.py", line 3' / 'main.py:3' をタップで開けるリンクにする
@@ -62,8 +63,8 @@ export class Runner {
     on('docchange', () => this.scheduleProblems())
     on('active', () => this.scheduleProblems(120))
     on('diagnostics', doc => { if (doc && doc.path === app.editors.active) this.scheduleProblems(60) })
-    // ▶ を押してすぐ実行できるよう、手が空いたら Python を準備しておく
-    setTimeout(() => this.ensureWorker(), 300)
+    // ▶ を押してすぐ実行できるよう、手が空いたら Python を準備しておく (安全モードでは、実行したときに準備する)
+    if (!safeMode()) setTimeout(() => this.ensureWorker(), 300)
   }
 
   build() {
@@ -382,7 +383,8 @@ export class Runner {
     this.endSurfaces()
     this.surfaces = new Map()
     this.tk = null
-    this.sound.stopAll()
+    clearTkImages()
+    this.sound.reset()
     this.runPath = path
     this.runSelection = !!selection
     this.lastReason = null
@@ -515,6 +517,7 @@ export class Runner {
 
   setRunning(info) {
     this.running = info
+    busy('run', !!info)
     if (!info) clearInterval(this.watchdog)
     emit('running', info)
     this.updateRunHead()

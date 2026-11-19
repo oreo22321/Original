@@ -321,6 +321,13 @@ export function showHelp(section) {
 export function showWhatsNew() {
   const body = h('div', { class: 'help whats-new' })
   body.innerHTML = `
+  <p>ForgeCode 13.0.1 — <b>落ちにくく</b>しました。</p>
+  <ul>
+    <li>iPhone・iPad では、端末内 AI モデルを起動のたびに自動で読み込まないようにしました (Python と合わせるとメモリが足りず、アプリが落ちることがありました)。AI パネルで頼んだとき・設定の「いま読み込む」で読み込みます。</li>
+    <li>アプリが止まったときは次の起動で理由の見当を知らせ、起動してすぐ止まるのが続いたときは「安全モード」(先読みをしない) で起動します。AI モデルを使っている間に止まったときは、自動での読み込みをやめます。</li>
+    <li>メモリの節約: pygame のキャンバスの使い回し、グラフのアニメーションを軽く、とても大きな画像は縮めて読み込む、実行ごとに画像・音・ゲーム画面の入れ物を手放す。</li>
+    <li>tkinter の細かい <code>after</code>・<code>update()</code> のループで、画面への命令があふれないようにしました。</li>
+  </ul>
   <p>ForgeCode 13 — <b>大型アップデート</b></p>
   <ul>
     <li><b>全画面の実行画面</b> — ▶ で画面いっぱいに結果を表示。左上の「‹ 戻る」(スマホは左端からスワイプ) でコードに戻れます。</li>

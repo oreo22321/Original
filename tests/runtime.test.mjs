@@ -25,7 +25,7 @@ class FakeCtx {
   measureText(t) { return { width: String(t).length * 8, fontBoundingBoxAscent: 11, fontBoundingBoxDescent: 3 } }
   getImageData(x, y, w, h) { return { data: new Uint8ClampedArray(w * h * 4) } }
 }
-for (const m of ['fillRect', 'clearRect', 'strokeRect', 'drawImage', 'beginPath', 'arc', 'ellipse', 'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'rect', 'roundRect', 'save', 'restore', 'translate', 'rotate', 'scale', 'fillText', 'putImageData', 'setLineDash', 'quadraticCurveTo', 'clip']) {
+for (const m of ['setTransform', 'fillRect', 'clearRect', 'strokeRect', 'drawImage', 'beginPath', 'arc', 'ellipse', 'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'rect', 'roundRect', 'save', 'restore', 'translate', 'rotate', 'scale', 'fillText', 'putImageData', 'setLineDash', 'quadraticCurveTo', 'clip']) {
   FakeCtx.prototype[m] = function (...a) { canvasCalls.push([m, a.length]) }
 }
 globalThis.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; this.ctx = new FakeCtx(this) } getContext() { return this.ctx } transferToImageBitmap() { return { close() {} } } }
@@ -230,7 +230,7 @@ for i in range(2):
 `, FAKE_MPL)
 let frames = r.msgs.filter(m => m.type === 'frame')
 const keys = frames.map(f => f.key)
-ok('matplotlib frames are RGBA (no PNG)', r.done.ok && frames.length >= 9 && frames.every(f => f.data && f.data.length === f.w * f.h * 4 && f.scale === 2), r.out + errText(r) + JSON.stringify(frames.map(f => [f.key, f.w, f.h])))
+ok('matplotlib frames are RGBA (no PNG)', r.done.ok && frames.length >= 9 && frames.every(f => f.data && f.data.length === f.w * f.h * 4) && frames[0].scale === 2 && frames[2].scale === 1.25, r.out + errText(r) + JSON.stringify(frames.map(f => [f.key, f.w, f.h])))
 ok('plt.pause redraws in the same place', new Set(keys.slice(1, 5)).size === 1 && keys[1] !== keys[0], keys.join(','))
 ok('plt.show in a loop with sleep updates one place, without sleep adds new ones', new Set(keys.slice(5, 8)).size === 1 && keys[8] !== keys[9], keys.join(','))
 r = await run(`import matplotlib.pyplot as plt

@@ -77,6 +77,29 @@ const output = page => page.evaluate(() => (document.querySelector('.output') ||
   await ctx.close()
 }
 
+// ---- 1b. 落ちたあとの起動 (安全モード・AI の自動読み込みの停止) ----
+{
+  const ctx = await browser.newContext({ ...devices['iPhone 13'] })
+  await ctx.addInitScript(() => {
+    if (sessionStorage.getItem('seeded')) return
+    sessionStorage.setItem('seeded', '1')
+    localStorage.setItem('forgecode.settings.v1', JSON.stringify({ onboarded: true, design: 3, python: 1 }))
+    localStorage.setItem('forgecode.session-health.v1', JSON.stringify({ t: Date.now() - 5000, clean: false, stable: false, streak: 1, llm: true }))
+  })
+  const page = await ctx.newPage()
+  await step(page, 'crash loop: starts in safe mode and stops AI auto-load', async () => {
+    await page.goto(APP)
+    await page.waitForSelector('.cm-editor', { timeout: 30000 })
+    await page.waitForFunction(() => /自動では読み込まない/.test([...document.querySelectorAll('.toast')].map(t => t.innerText).join(' ')), null, { timeout: 10000 })
+    const st = await page.evaluate(() => ({ h: JSON.parse(localStorage.getItem('forgecode.session-health.v1')), noauto: localStorage.getItem('forgecode.llm.noauto') }))
+    if (!st.h.safe || st.noauto !== '1') throw new Error(JSON.stringify(st))
+    // 安全モードでも実行はできる
+    await page.locator('.run-btn').first().click()
+    await page.waitForFunction(() => /こんにちは、Python!/.test(document.querySelector('.output')?.innerText || ''), null, { timeout: 90000 })
+  })
+  await ctx.close()
+}
+
 // ---- 2. ソースのまま (?src): 中の機能 ----
 {
   const { ctx, page, errors } = await open(APP + '?src', { github: true })

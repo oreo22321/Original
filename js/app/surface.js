@@ -52,6 +52,8 @@ export class SurfaceView {
   // ---- 1 枚の画像を受け取る (描くのは次の画面更新のとき) ----
   frame(m) {
     if (this.pending && this.pending.bitmap) { try { this.pending.bitmap.close() } catch {} }
+    // 画像にした (古い) 図には描かない。届いたことだけ知らせる
+    if (this.frozen) { if (m.bitmap) { try { m.bitmap.close() } catch {} } this.ack(m.seq); return }
     this.pending = m
     if (m.title) this.title = m.title
     if (typeof document !== 'undefined' && document.hidden) { this.paint(); return }
@@ -64,9 +66,12 @@ export class SurfaceView {
     this.pending = null
     try {
       if (m.w !== this.w || m.h !== this.h || m.scale !== this.scale) this.resize(m.w, m.h, m.scale)
-      if (m.bitmap) { this.ctx.drawImage(m.bitmap, 0, 0); m.bitmap.close() }
+      if (m.bitmap) this.ctx.drawImage(m.bitmap, 0, 0)
       else if (m.data) this.ctx.putImageData(new ImageData(m.data instanceof Uint8ClampedArray ? m.data : new Uint8ClampedArray(m.data), m.w, m.h), 0, 0)
-    } catch {}
+    } catch {} finally {
+      // 画像 (ImageBitmap) はすぐ手放す (GPU のメモリを使い続けないように)
+      if (m.bitmap) { try { m.bitmap.close() } catch {} }
+    }
     this.frames++
     if (this.title && this.titleEl.textContent !== this.title) this.titleEl.textContent = this.title
     if (this.frames === 2) this.el.classList.add('sf-animating')
@@ -216,8 +221,12 @@ export class SurfaceView {
   }
 }
 
-// tkinter の PhotoImage (id → { src: ImageBitmap か canvas, w, h })
+// tkinter の PhotoImage (id → { src: ImageBitmap か canvas, w, h })。実行ごとに空にする
 export const tkImages = new Map()
+export function clearTkImages() {
+  for (const img of tkImages.values()) { if (img.src && img.src.close) { try { img.src.close() } catch {} } }
+  tkImages.clear()
+}
 
 // ============================================================
 // 画面への頼みごと (ワーカーは共有メモリで結果を待っている)
@@ -238,17 +247,21 @@ export async function handleRpc(m) {
   try {
     if (m.op === 'decode') {
       const bmp = await createImageBitmap(new Blob([m.data]), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
-      const w = bmp.width, h2 = bmp.height
-      if (w * h2 > 4096 * 4096) { bmp.close(); throw new Error(`画像が大きすぎます (${w}×${h2})`) }
+      // とても大きな画像は縮める (画素をそのまま扱うとメモリが足りず、スマホでは落ちることがある)
+      const MAXPX = 4_200_000
+      const k = Math.min(1, Math.sqrt(MAXPX / Math.max(1, bmp.width * bmp.height)))
+      const w = Math.max(1, Math.round(bmp.width * k)), h2 = Math.max(1, Math.round(bmp.height * k))
       const c = document.createElement('canvas')
       c.width = w; c.height = h2
       const ctx = c.getContext('2d', { willReadFrequently: true })
-      ctx.drawImage(bmp, 0, 0)
+      ctx.drawImage(bmp, 0, 0, w, h2)
       bmp.close()
       const id = ctx.getImageData(0, 0, w, h2)
       reply(1, new Uint8Array(id.data.buffer), w, h2)
     } else if (m.op === 'imgreg') {
       const id = String((m.args || {}).id || '')
+      const old = tkImages.get(id)
+      if (old && old.src && old.src.close) { try { old.src.close() } catch {} }
       if (m.data) {
         const bmp = await createImageBitmap(new Blob([m.data]))
         tkImages.set(id, { src: bmp, w: bmp.width, h: bmp.height })
@@ -380,4 +393,6 @@ export class SoundPlayer {
   }
   stop(ch) { const p = this.playing.get(ch); if (p) { try { p.src.stop() } catch {} this.playing.delete(ch) } }
   stopAll() { for (const ch of [...this.playing.keys()]) this.stop(ch); if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume().catch(() => {}) }
+  // 実行ごとに、読み込んだ音を手放す (メモリを使い続けないように)
+  reset() { this.stopAll(); this.buffers.clear() }
 }
