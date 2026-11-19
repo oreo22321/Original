@@ -208,7 +208,7 @@ export function showHelp(section) {
   <ol>
     <li>左上の <b>☰</b> (iPad / PC では左端のアイコン) でファイル一覧を開き、<code>main.py</code> などのファイルをタップして開きます。</li>
     <li>コードを書くと自動で保存されます。保存の状態は画面下のバーに表示されます。</li>
-    <li><b>▶</b> を押すと実行します。<code>print</code> の結果やエラーは下の「出力」に表示されます。</li>
+    <li><b>▶</b> を押すと実行します。画面全体が実行画面になり、<code>print</code> の結果・エラー・グラフ・ゲームの画面が表示されます。左上の <b>‹ 戻る</b> (スマホは左端から右へスワイプ、PC は Esc) でコードに戻れます。</li>
   </ol>
   <h3>実行 (Python 3.14)</h3>
   <ul>
@@ -217,7 +217,8 @@ export function showHelp(section) {
     <li><b>■</b> でいつでも止められます (<code>KeyboardInterrupt</code> になります)。無限ループも止まります。設定 → 実行 → 最大実行時間 で、自動で止める時間も決められます。</li>
     <li><b>いくつものファイル</b>: 同じプロジェクトの <code>.py</code> は <code>import</code> できます (フォルダは <code>__init__.py</code> を置くとパッケージに)。</li>
     <li><b>ファイルの読み書き</b>: <code>open("data.csv")</code> でプロジェクトのファイルを読めます。プログラムが書いたファイルは、終わったあとファイル一覧に入ります。</li>
-    <li><b>グラフ</b>: matplotlib の <code>plt.show()</code> で、出力に図が表示されます (タップで拡大)。</li>
+    <li><b>グラフ・アニメーション</b>: matplotlib の <code>plt.show()</code> で図が出ます。<code>plt.pause()</code>・<code>FuncAnimation</code>・<code>plt.ion()</code>・ループの中の <code>plt.show()</code> は、同じ 1 枚の図がなめらかに動きます (動いている図は画面の上に留まります)。</li>
+    <li><b>実行画面</b>: 実行中は上に「停止」、終わると「もう一度」。設定 → 実行 → 実行結果の表示 で、全画面ではなく下のパネルに出すこともできます。実行中にコードへ戻ったときは、右下のボタンで実行画面に戻れます。</li>
     <li>ファイルを長押し → <b>▶ で常にこのファイルを実行</b> を選ぶと、別のファイルを編集中でもそのファイルを実行します。範囲を選んで「選択範囲を実行」もできます。</li>
   </ul>
   <h3 id="help-packages">使えるライブラリ</h3>
@@ -229,7 +230,10 @@ export function showHelp(section) {
     <li><b>asyncio・スレッド</b>: <code>asyncio.run()</code> が使えます。<code>threading</code>・<code>concurrent.futures</code>・<code>multiprocessing</code> は同時には動かず、順番に実行されます (結果は同じになります)。</li>
     <li><b>インターネット</b>: <code>urllib.request</code>・<code>requests</code> で読み込めます (相手のサーバーがブラウザからの読み込みを許可している (CORS) とき)。<code>webbrowser.open()</code> は出力にリンクを出します。</li>
     <li><b>表示</b>: <code>display(df)</code> で pandas の表を見やすく、PIL の画像は <code>img.show()</code> で表示します。<code>plt.pause()</code> で動くグラフも描けます。</li>
-    <li>使えないもの: <code>tkinter</code> などウィンドウを出す GUI、<code>pygame</code> の画面、<code>subprocess</code>、<code>socket</code> での直接の通信。</li>
+    <li><b>tkinter</b>: ボタン・入力欄・リスト・キャンバスなどのウィンドウが出力の中に表示され、タップ・入力・キー操作が使えます (<code>pack</code>・<code>grid</code>・<code>place</code>・<code>after</code>・<code>bind</code>・<code>ttk</code>・<code>messagebox</code>・<code>simpledialog</code>・<code>filedialog</code> など)。</li>
+    <li><b>pygame</b>: ゲームの画面が出力に出て、キーボード・タップで遊べます (スマホでは、プログラムが使うキーのボタンが出ます)。図形・文字・画像 (<code>pygame.image.load</code>)・スプライト・当たり判定・音 (<code>pygame.mixer</code>) に対応。</li>
+    <li><b>音</b>: <code>pygame.mixer</code>・<code>winsound.Beep</code>・<code>playsound</code> で音が鳴ります。</li>
+    <li>使えないもの: <code>subprocess</code>、本当に同時に動くスレッド、<code>socket</code> での直接の通信、パソコンの操作 (<code>pyautogui</code> など)、PyQt などほかの GUI。</li>
   </ul>
   <h3>コンソール</h3>
   <ul>
@@ -317,6 +321,15 @@ export function showHelp(section) {
 export function showWhatsNew() {
   const body = h('div', { class: 'help whats-new' })
   body.innerHTML = `
+  <p>ForgeCode 13 — <b>大型アップデート</b></p>
+  <ul>
+    <li><b>全画面の実行画面</b> — ▶ で画面いっぱいに結果を表示。左上の「‹ 戻る」(スマホは左端からスワイプ) でコードに戻れます。</li>
+    <li><b>グラフ・絵が 1 枚でなめらかに動く</b> — <code>plt.pause()</code>・<code>FuncAnimation</code>・ループの中の <code>plt.show()</code> も、画像を何枚も並べず同じ場所で描き直します (画面の速さに合わせて最大 60 fps)。</li>
+    <li><b>pygame と tkinter</b> — ゲームの画面やボタンのあるウィンドウが出力に表示され、キー・タップで操作できます。<code>messagebox</code> などのダイアログ、<code>pygame.mixer</code> の音も。テンプレートにも追加しました。</li>
+    <li><b>VS Code と同じ色</b> — Dark Modern / Light Modern の配色で、変数・関数・クラス・モジュール・定数を色分けします (括弧の色分けも同じ)。AI の答えやコンソールのコードも同じ色です。</li>
+    <li><b>AI に任せる</b> — 端末内の AI モデルをダウンロードすると、書くのが止まったときに AI がバグを探して知らせ、実行エラーには確かめた直し方 (「直して実行」) を出し、続きも AI が書きます。作ったコードは構文チェックと試し実行で確かめてから出します。最高性能 (7B) のモデルも選べます。</li>
+    <li><b>速く・安定して</b> — 図が多いときのメモリの節約、大きなファイルでも軽い色分け、Python が止まったときの自動の立ち直り。</li>
+  </ul>
   <p>ForgeCode 12.1 — <b>Python がもっとそのまま動く</b>ようになりました。</p>
   <ul>
     <li><b>turtle</b> — タートルグラフィックスが出力に描かれます。キー操作・タップ・タイマーでゲームも作れます。</li>

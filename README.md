@@ -4,9 +4,10 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 本物の Python (CPython 3.14 を WebAssembly にした [Pyodide](https://pyodide.org/)) が端末の中で動くので、書いたコードをその場で実行できます。コードはサーバーに送りません。
 
 - **書く**: 補完 (jedi。numpy・pandas などライブラリの中身も)・自動で import・引数のヒント・説明・エラーチェック (pyflakes + 実行前のチェック)・ワンタップの修正・整形 (autopep8)・打ち間違いの自動修正
-- **動かす**: `print` / `input()` / ■ で停止 / いくつものファイルの `import` / ファイルの読み書き / matplotlib のグラフ / turtle / asyncio / PyPI のライブラリ (自動でインストール)
+- **動かす**: 全画面の実行画面で `print` / `input()` / ■ で停止 / いくつものファイルの `import` / ファイルの読み書き / matplotlib のグラフとアニメーション (1 枚でなめらかに) / pygame のゲーム / tkinter のウィンドウ / turtle / asyncio / PyPI のライブラリ (自動でインストール)
 - **調べる**: ブレークポイント・ステップ実行・変数とウォッチ・コンソール
-- **頼む**: 内蔵の AI (Forge AI) が、直す・説明する・コメントや型ヒントを付ける・コードを作る・質問に答える
+- **頼む**: 内蔵の AI (Forge AI) が、直す・説明する・コメントや型ヒントを付ける・コードを作る・質問に答える。端末内の AI モデルをダウンロードすると、エラー検知・実行エラーの修正・続きの提案も AI が行います
+- **見やすい**: VS Code と同じ配色 (Dark Modern / Light Modern) で、変数・関数・クラス・モジュール・定数を色分け
 
 ## できること
 
@@ -22,15 +23,16 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 - **自動修正**: 全角の `（）：＝”` や全角スペース、iPhone が変える `“ ”`、`pirnt` → `print` のような打ち間違いを、入力した時点で直します (文字列とコメントの中はそのまま。設定でオフにできます)。
 - **整形**: PEP 8 に合わせて空白・字下げ・空行をそろえます (Shift + Alt + F、保存時に整形も可)。
 - **定義へ移動・参照を検索・名前の変更**: ほかのファイルもまとめて扱います (F12 / Shift + F12 / F2)。
+- **色分け**: VS Code の Dark Modern / Light Modern (と Dark+ / Light+) と同じ色。Python 拡張 (Pylance) と同じように、変数・関数・クラス・モジュール・定数・属性・組み込みを見分けて色を付け、括弧も深さで色分けします。AI の答えやコンソールのコードも同じ色です。
 - **その他**: アウトライン、スティッキースクロール、同じ単語の強調、マルチカーソル、全ファイル検索・置換、ファイルの履歴、ZIP の読み込み・保存、GitHub と同期。
 
 ### 実行
 
-- ▶ で実行します。結果は下の「出力」に表示されます。エラーには日本語の原因と直し方が付き、`ファイル名:行` をタップするとその行へ移動します。
+- ▶ で実行すると、画面全体が実行画面になります (左上の「‹ 戻る」、スマホは左端からスワイプ、PC は Esc でコードへ。設定で下のパネルに出すこともできます)。エラーには日本語の原因と直し方が付き、`ファイル名:行` をタップするとその行へ移動します。
 - **input()**: 入力を待つと、出力の下に入力欄が出ます。
 - **停止**: ■ でいつでも止められます (`KeyboardInterrupt`)。設定 → 実行 で最大実行時間も決められます。
 - **いくつものファイル**: 同じプロジェクトの `.py` は `import` できます。`open("data.csv")` でプロジェクトのファイルを読め、プログラムが書いたファイルはファイル一覧に入ります。
-- **ライブラリ**: 標準ライブラリはほぼすべて (オフラインでも)。numpy・pandas・matplotlib・scipy・sympy・scikit-learn・pillow・beautifulsoup4・requests など Pyodide が用意しているものは `import` するだけで使えます (はじめて使うときだけインターネットから読み込み、あとは端末に保存)。`plt.show()` の図は出力に表示され、`plt.pause()` で動くグラフも描けます。
+- **ライブラリ**: 標準ライブラリはほぼすべて (オフラインでも)。numpy・pandas・matplotlib・scipy・sympy・scikit-learn・pillow・beautifulsoup4・requests など Pyodide が用意しているものは `import` するだけで使えます (はじめて使うときだけインターネットから読み込み、あとは端末に保存)。`plt.show()` の図は出力に表示されます。`plt.pause()`・`FuncAnimation`・`plt.ion()`・ループの中の `plt.show()` は、画像を何枚も並べず 1 枚の図を同じ場所で描き直します (Agg の画素をそのまま送るので速く、画面の速さに合わせて動きます)。
 - **PyPI のライブラリ**: Pyodide にないものも、`import` すると PyPI から自動で入ります (micropip。pure Python のもの)。`requirements.txt` があれば実行の前にまとめて入れます。コンソールでは `pip install 名前`・`pip list`・`pip show`・`pip uninstall` が使えます。
 - **turtle**: タートルグラフィックスを出力のキャンバスに描きます (本物と同じ速さのアニメーション・塗りつぶし・文字・スタンプ・形)。`onkey` / `onkeypress` / `onclick` / `ontimer` / `mainloop` でゲームも作れ、スマホでは使うキーのボタンが出ます。描いた絵は画像で保存できます。
 - **asyncio**: `asyncio.run()`・`gather`・`get_event_loop().run_until_complete()` が動きます (ブラウザの特別な仕組みがなくても)。コンソールでは `await` をそのまま書けます。
@@ -39,7 +41,10 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 - **インターネット**: `urllib.request`・`requests` で読み込めます (相手が CORS を許可しているとき)。`webbrowser.open()` は出力にリンクを出します。
 - **表示**: `display(df)` で pandas の表を表として、PIL の `img.show()` で画像を表示します。`getpass.getpass()` は伏せ字の入力欄になります。
 - **コンソール**: 出力の一番下の欄で、式やコードをその場で試せます。実行が終わった後の変数も使えます。pandas の表は表で表示します。
-- 使えないもの: `tkinter` などウィンドウを出す GUI、`pygame` の画面、`subprocess`、`socket` での直接の通信。
+- **pygame**: ゲームの画面を出力に表示します (互換版。`display`・`draw`・`event`・`key`・`mouse`・`time`・`font`・`image`・`transform`・`mixer`・`math`・`sprite`・`mask`・`Rect`・`Color`)。描画はワーカーの中のキャンバス (OffscreenCanvas) で行い、1 枚の画像にして送るので 60 fps で動きます。キーボード・タップで操作でき、スマホではプログラムが使うキーのボタンが出ます。
+- **tkinter**: ウィンドウを出力の中に表示します (互換版。`Label`・`Button`・`Entry`・`Text`・`Checkbutton`・`Radiobutton`・`Scale`・`Listbox`・`Spinbox`・`Canvas`・`Menu`・`ttk` (`Combobox`・`Notebook`・`Treeview`・`Progressbar` など)・`pack` / `grid` / `place`・`StringVar` など・`after`・`bind`・`messagebox`・`simpledialog`・`filedialog`・`colorchooser`・`PhotoImage`)。
+- **音**: `pygame.mixer`・`winsound`・`playsound` は Web Audio で鳴らします。
+- 使えないもの: `subprocess`、本当に同時に動くスレッド、`socket` での直接の通信、パソコンの操作、PyQt などほかの GUI。
 
 ### デバッガー
 
@@ -61,7 +66,8 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 - **作る**: 「数当てゲームを作って」「CSV を読んでグラフにして」「1 から 100 まで足すプログラム」など。「10 回にして」のような手直しもできます。
 - **答える**: 「リストと辞書の違いは?」「for 文の使い方」「enumerate とは」「TypeError って何?」に、例のコード付きで答えます。
 - **続きの提案**: 入力が止まると、プロジェクトと内蔵サンプルから学んだ続きを薄い文字で出します (Tab で確定)。`# 1 から 10 まで表示する` のようなコメントの次の行で AI キー (Alt + \\) を押すと、コードを組み立てます。
-- **高性能モード (任意)**: 設定 → AI で端末内の言語モデル (Qwen2.5-Coder、WebGPU) を使うと、決まった型に当てはまらない依頼にも答えます。答えのコードは Forge AI が構文と打ち間違いを確かめてから表示します。
+- **高性能モード (任意)**: 設定 → AI で端末内の言語モデル (Qwen2.5-Coder 0.5B / 1.5B / 3B / 7B、WebGPU) を使うと、決まった型に当てはまらない依頼にも答えます。作ったコードは構文・未定義の名前を確かめて AI 自身に直させ、動かせるものは試しに実行してから表示します。
+- **AI に任せる (高性能モードのとき)**: 書くのが止まると AI がファイルを読んでバグを探し、波線 (AI) で知らせます (直し方は構文と名前を確かめてから)。実行エラーには、エラーの行のまわりを AI が直した案 (差分・説明・「直して実行」) を出します。続きの提案も、前後のコードを見て AI が書きます (FIM)。モデルは順番待ちで動き、チャット > 実行エラー > 続き > 裏のチェック の順に優先します。
 - AI が変えたファイルは「差分」で確認でき、「すべて元に戻す」で取り消せます。
 
 しくみ: ことばの理解 (日本語の正規化・意図・概念) → 処理の選択 → Python の解析 (pytools ワーカーの ast / pyflakes / jedi / autopep8) で直し方を決め、結果を必ず構文チェックしてから書き込みます。
@@ -154,9 +160,14 @@ css/, js/                    アプリ本体のソース (ES モジュール)
     breakpoints.js           ブレークポイントと停止行の表示
     ghost.js / ai.js         インライン候補 (ゴーストテキスト) と AI による続きの提案
     errorlens.js             行の右に出るエラー表示
+    themes.js                テーマ (VS Code の Dark Modern / Light Modern と同じ色)・エディタの外のコードの色付け
+    semantic.js              意味による色分け (変数・関数・クラス・モジュール・定数。Pylance と同じ考え方)
   js/app/                    画面 (ファイル一覧・タブ・実行パネル・デバッグ・設定・初回案内など)
     runner.js                実行 (Python ワーカーとの受け渡し・input()・停止・図・表・リンク・コンソール)
     turtle-view.js           turtle の画面 (キャンバスに描く・アニメーション・キー操作とタップを Python へ)
+    surface.js               図・ゲームの画面 (1 枚のキャンバスで描き直す)・画像の読み込み・プログラムのダイアログ・音
+    tk-view.js               tkinter のウィンドウ (ウィジェット・pack / grid / place・キャンバス・操作を Python へ)
+    ai-assist.js             端末内 AI に任せる仕事 (エラー検知の波線・実行エラーの直し方・続きの提案・起動後の読み込み)
     debug-panel.js           デバッガーの画面 (変数・ウォッチ・呼び出し履歴・ブレークポイント)
     code-nav.js              定義へ移動・参照・名前の変更
     explain.js               実行エラーの日本語の説明
@@ -175,11 +186,15 @@ css/, js/                    アプリ本体のソース (ES モジュール)
     generate.js              コード生成 (レシピ)
     complete.js              続きの提案 (n-gram)・コメントからコード
     engine.js                依頼の振り分けと返事の組み立て
-    llm.js                   高性能モード (端末内 LLM・WebLLM)
+    llm.js                   高性能モード (端末内 LLM・WebLLM)・優先度つきの順番待ち・FIM の続き
+    assist.js                AI のエラー検知・実行エラーの修正・続きの提案・作ったコードの見直し (答えは必ず確かめる)
   js/workers/                Web Worker
     python-worker.js         実行用の Python (Pyodide)・デバッガー (bdb + sys.monitoring)・PyPI からのインストール (micropip)
     py-runtime.js            ふつうの Python との違いを埋める道具 (time.sleep・スレッド・asyncio・urllib・display・multiprocessing・webbrowser)
     py-turtle.js             ブラウザ用の turtle (描く命令を画面へ送る・キー操作やタイマーを受け取る)
+    py-pygame.js / pg-canvas.js  pygame の互換版 (Python 側) と、ワーカーの中のキャンバスで描く部分
+    py-tkinter.js            tkinter の互換版 (ウィジェットの木・命令を画面へ送る・操作を受け取る)
+    py-lib.js                Python に置く道具のまとめ (実行用と補完用で同じもの)
     py-packages.js           import 名と PyPI の名前の対応・ブラウザでは使えないもの
     pytools-worker.js        エディタ用の Python (jedi・pyflakes・autopep8)。ライブラリの .py / .pyi を取り出して補完に使う・import の候補
     py-check.js              実行前のチェック (モジュールにない名前・引数の数・input() と数・ないメソッド など)
