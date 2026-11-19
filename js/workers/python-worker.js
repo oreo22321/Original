@@ -818,6 +818,7 @@ async function run(m) {
     return
   }
   if (shared) shared.interrupt[0] = 0
+  presenters.clear()   // 前の実行のゲーム画面の入れ物を手放す
   writeProject(m.files || {})
   const src = m.files[m.entry] ?? ''
   // import しているライブラリを先に読み込む (numpy / pandas / matplotlib など。Pyodide にないものは PyPI から)

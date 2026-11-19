@@ -13,7 +13,8 @@ import { showWhatsNew } from './views.js'
 import './palette.js'
 import './ai-actions.js'
 import { refreshCorpus, loadEngine } from './ai-host.js'
-import { startAssist } from './ai-assist.js'
+import { startAssist, noteLlmCrash } from './ai-assist.js'
+import { bootHealth } from './crash-guard.js'
 import { warmComplete } from '../ai/complete.js'
 import './code-nav.js'
 import './github-sync.js'
@@ -94,6 +95,7 @@ function registerServiceWorker() {
 
 async function boot() {
   const s = getSettings()
+  const health = bootHealth()
   startI18n()
   applyTheme(s)
   setupErrorHandling()
@@ -111,7 +113,8 @@ async function boot() {
   })
   on('files', pythonFilesChanged)
   on('saved', pythonFilesChanged)
-  setTimeout(() => { if (typeof requestIdleCallback === 'function') requestIdleCallback(() => warmPython(), { timeout: 4000 }); else warmPython() }, 1200)
+  // 安全モード (起動してすぐ落ちるのが続いた) では、Python の先読みをしない (実行したときに読み込む)
+  if (!health.safe) setTimeout(() => { if (typeof requestIdleCallback === 'function') requestIdleCallback(() => warmPython(), { timeout: 4000 }); else warmPython() }, 1200)
 
   const projects = await vfs.listProjects()
   if (!s.onboarded && !projects.length) {
@@ -182,8 +185,18 @@ async function boot() {
 
   document.getElementById('boot') && document.getElementById('boot').remove()
 
+  // 前回アプリが落ちていたら、理由の見当と対策を知らせる
+  if (health.duringLlm) noteLlmCrash()
+  if (health.crashed) {
+    const msg = health.duringLlm ? '前回、AI モデルを使っている間にアプリが止まりました。メモリが足りなかった可能性があるため、AI モデルは自動では読み込まないようにしました (小さいモデルがおすすめです)'
+      : health.duringRun ? '前回、プログラムの実行中にアプリが止まりました。大きなデータ・画像・たくさんの図を使うと、メモリが足りなくなることがあります'
+        : health.safe ? 'アプリが続けて止まったため、安全モードで起動しました (Python や AI の先読みをしません)。編集内容は保存されています'
+          : null
+    if (msg) setTimeout(() => toast(msg, { icon: 'alert', duration: 9000 }), 1500)
+  }
+
   // 手が空いたら AI の本体を読み込んでおく (起動を軽くするため後回しにしている。はじめて使うときに待たないように)
-  setTimeout(() => {
+  if (!health.safe) setTimeout(() => {
     const go = () => { loadEngine().catch(() => {}); warmComplete() }
     if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 10000 })
     else go()

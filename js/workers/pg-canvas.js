@@ -8,9 +8,34 @@ export function installPgCanvas(scope) {
   let nextId = 1
   const OC = typeof OffscreenCanvas === 'function' ? OffscreenCanvas : null
 
+  // 使い終わったキャンバスは捨てずに取っておき、同じ大きさのものに使い回す
+  // (ゲームは毎フレーム文字や回転した絵を作るので、作っては捨てるとメモリが一時的にふくらみ、スマホでは落ちることがある)
+  const pool = new Map()     // "w x h" → [canvas]
+  let pooled = 0, pooledPx = 0
+  const POOL_MAX = 96, POOL_PX = 6_000_000
   const make = (w, h) => {
     if (!OC) throw new Error('この端末のブラウザでは pygame の画面を作れません (OffscreenCanvas に対応していません)')
-    return new OC(Math.max(1, w | 0), Math.max(1, h | 0))
+    w = Math.max(1, w | 0); h = Math.max(1, h | 0)
+    const list = pool.get(w + 'x' + h)
+    if (list && list.length) {
+      const c = list.pop()
+      pooled--; pooledPx -= w * h
+      const x = c.getContext('2d')
+      x.setTransform(1, 0, 0, 1, 0, 0)
+      x.globalAlpha = 1
+      x.globalCompositeOperation = 'source-over'
+      x.clearRect(0, 0, w, h)
+      return c
+    }
+    return new OC(w, h)
+  }
+  const recycle = c => {
+    const px = c.width * c.height
+    if (pooled >= POOL_MAX || pooledPx + px > POOL_PX) return
+    const k = c.width + 'x' + c.height
+    if (!pool.has(k)) pool.set(k, [])
+    pool.get(k).push(c)
+    pooled++; pooledPx += px
   }
   const add = (c, w, h) => {
     const x = c.getContext('2d', { willReadFrequently: false })
@@ -28,7 +53,7 @@ export function installPgCanvas(scope) {
   scope.__fc_pg_adopt = c => add(c, c.width, c.height)
   scope.__fc_pg_size = id => { const s = surf.get(id); return s ? [s.w, s.h] : [0, 0] }
   scope.__fc_pg_count = () => surf.size
-  scope.__fc_pg_reset = () => { surf.clear(); ckCache.clear() }
+  scope.__fc_pg_reset = () => { surf.clear(); ckCache.clear(); pool.clear(); pooled = 0; pooledPx = 0 }
 
   const withClip = (s, fn) => {
     if (!s.clip) { fn(); return }
@@ -45,6 +70,7 @@ export function installPgCanvas(scope) {
     const k = key.join(',')
     const hit = ckCache.get(id)
     if (hit && hit.v === s.v && hit.key === k) return hit.c
+    if (hit) recycle(hit.c)
     const c = make(s.c.width, s.c.height)
     const x = c.getContext('2d')
     const img = s.x.getImageData(0, 0, s.c.width, s.c.height)
@@ -198,6 +224,7 @@ export function installPgCanvas(scope) {
       case 'scroll': { // id, dx, dy
         const tmp = make(s.w, s.h); tmp.getContext('2d').drawImage(s.c, 0, 0)
         x.drawImage(tmp, op[2], op[3])
+        recycle(tmp)
         break
       }
       case 'gray': { // dst, src
@@ -207,7 +234,7 @@ export function installPgCanvas(scope) {
         x.putImageData(img, 0, 0)
         break
       }
-      case 'free': surf.delete(op[1]); ckCache.delete(op[1]); return
+      case 'free': { surf.delete(op[1]); const ck = ckCache.get(op[1]); if (ck) recycle(ck.c); ckCache.delete(op[1]); recycle(s.c); return }
     }
     s.v++
   }

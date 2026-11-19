@@ -980,7 +980,7 @@ body[data-layout=desktop].touch.kb-open.ed-focus .keybar { display: block; }
 .panel.run-full.run-full-in { opacity: 1; transform: none; }
 body.kb-open .panel.run-full { display: flex !important; }
 .panel.run-full .panel-head { display: none; }
-.panel.run-full .run-head { display: flex; align-items: center; gap: 6px; height: 44px; flex: none; padding: 0 8px 0 4px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.panel.run-full .run-head { display: flex; align-items: center; gap: 6px; height: 44px; flex: none; padding: 0 8px 0 4px; border-bottom: 1px solid var(--border); background: var(--bg); }
 .rh-back { display: inline-flex; align-items: center; gap: 1px; height: 30px; padding: 0 10px 0 4px; border-radius: var(--r); color: var(--muted); font-size: 13px; font-weight: 500; flex: none; transition: background var(--t-fast), color var(--t-fast); }
 .rh-back:hover, .rh-back:active { background: var(--hover); color: var(--fg); }
 .rh-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; overflow: hidden; }

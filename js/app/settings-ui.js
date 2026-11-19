@@ -1,12 +1,13 @@
 // 設定画面
 import { getSettings, setSettings, resetSettings, DEFAULTS, on } from './store.js'
+import { autoLoadAllowed } from './ai-assist.js'
 import { THEMES } from '../editor/themes.js'
 import * as llm from '../ai/llm.js'
 import { h, icon, toast, modal, confirmDialog, download } from './ui.js'
 import * as vfs from './vfs.js'
 import { app, command, runCommand } from './app.js'
 
-export const APP_VERSION = '13.0.0'
+export const APP_VERSION = '13.0.1'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -270,7 +271,7 @@ function llmRow() {
     if (cur.state === 'loading') info.textContent = cur.progress.text || '読み込み中…'
     else if (cur.state === 'ready' && cur.model === key) info.textContent = '使えます (メモリに読み込み済み)'
     else if (cur.state === 'error') info.textContent = cur.error
-    else info.textContent = getSettings().aiAssist ? '保存済みなら起動後に読み込みます。まだなら「いま読み込む」でダウンロードします' : 'AI パネルで必要になったときに読み込みます (初回はダウンロード)'
+    else info.textContent = getSettings().aiAssist && autoLoadAllowed() ? '保存済みなら起動後に読み込みます。まだなら「いま読み込む」でダウンロードします' : 'AI パネルで頼んだとき、または「いま読み込む」で読み込みます (iPhone・iPad では、メモリを節約するため自動では読み込みません)'
     if (cur.state !== 'loading') {
       if (!(cur.state === 'ready' && cur.model === key)) acts.append(h('button', { class: 'btn small primary', onclick: async () => {
         try { await llm.load(key); toast('端末内の AI モデルを読み込みました', { icon: 'sparkle' }) } catch (e) { toast(e.message, { kind: 'error', duration: 6000 }) }

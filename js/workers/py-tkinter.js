@@ -117,8 +117,13 @@ def _emit(op):
         _flush()
 
 
-def _flush():
+def _flush(force=True):
+    # 画面へ送るのは、画面の更新 (1 秒に 60 回) より多くしない (細かい after・update のループで画面があふれないように)
     if _S["ops"]:
+        now = _time.monotonic()
+        if not force and now - _S.get("lf", 0.0) < 0.016:
+            return
+        _S["lf"] = now
         s = _json.dumps(_S["ops"], separators=(",", ":"), default=str)
         _S["ops"].clear()
         _js.__fc_tk(s)
@@ -572,7 +577,7 @@ def _wait(until_fn):
     if not _fc.events_ok():
         while not until_fn():
             _process()
-            _flush()
+            _flush(False)
             if not _S["timers"]:
                 _fc.note("tk-ev", "tkinter: ボタンやキーの操作を受け取るには、ページを再読み込みしてください (はじめて開いたときは再読み込みが必要です)")
                 return
@@ -580,12 +585,14 @@ def _wait(until_fn):
         return
     while not until_fn():
         _process()
-        _flush()
+        _flush(False)
         if until_fn():
             break
         wait = 0.05
         if _S["timers"]:
             wait = max(0.0, min(wait, _S["timers"][0][0] - _time.monotonic()))
+        if wait >= 0.016:
+            _flush()
         if wait > 0:
             _fc.wait_events(int(wait * 1000) or 1)
 
@@ -801,9 +808,7 @@ class Misc:
 
     def update(self):
         _process()
-        _flush()
-        if _fc.events_ok():
-            _fc.sleep(0)
+        _flush(False)
 
     def update_idletasks(self):
         _flush()

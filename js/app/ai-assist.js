@@ -3,7 +3,8 @@
 // ・実行エラー: エラーの行のまわりを AI に直してもらい、確かめた直し方を出力に出す (適用はボタンで)
 // ・続きの提案: AI が前後のコードを見て続きを書く (だめなら内蔵の統計モデル)
 import * as llm from '../ai/llm.js'
-import { getSettings, onSettings } from './store.js'
+import { getSettings, onSettings, isIOS, isTouch } from './store.js'
+import { busy, safeMode } from './crash-guard.js'
 import { pyTools } from '../editor/python.js'
 import { forceLinting } from '../../vendor/codemirror.js'
 
@@ -115,15 +116,33 @@ export async function suggestFix({ code, path, error, signal }) {
 
 // ============================================================
 // 準備: 端末に保存済みのモデルを、手が空いたときに読み込む
+// ・iPhone / iPad / メモリの少ない端末では自動で読み込まない (Python と合わせるとメモリが足りず、ページが落ちることがある)
+//   → AI パネルで頼んだとき・設定の「いま読み込む」で読み込む
+// ・前回、モデルを使っている間にアプリが落ちていたら、自動では読み込まない
 // ============================================================
+const NOAUTO = 'forgecode.llm.noauto'
+export function autoLoadAllowed() {
+  try { if (localStorage.getItem(NOAUTO)) return false } catch {}
+  if (isIOS || isTouch) return false
+  const mem = typeof navigator !== 'undefined' && navigator.deviceMemory
+  return !mem || mem >= 8
+}
+export function noteLlmCrash() {
+  try { localStorage.setItem(NOAUTO, '1') } catch {}
+}
+
 export function startAssist() {
   const go = () => {
     const s = getSettings()
-    if (!s.aiAssist || !s.aiLlm) return
+    if (!s.aiAssist || !s.aiLlm || !autoLoadAllowed() || safeMode()) return
     const idle = window.requestIdleCallback || (f => setTimeout(f, 1500))
     idle(() => llm.preload(s.aiLlm).then(ok => { if (ok && lastView) forceLinting(lastView) }), { timeout: 8000 })
   }
-  setTimeout(go, 4000)
+  setTimeout(go, 6000)
   onSettings((s, prev) => { if (s && prev && (s.aiAssist !== prev.aiAssist || s.aiLlm !== prev.aiLlm)) go() })
-  llm.onLlmChange(st => { if (st.state === 'ready' && lastView) forceLinting(lastView) })
+  llm.onLlmChange(st => {
+    // 落ちたときに AI が動いていたか、記録しておく
+    busy('llm', st.state === 'loading' || st.state === 'ready')
+    if (st.state === 'ready' && lastView) forceLinting(lastView)
+  })
 }

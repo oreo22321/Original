@@ -341,6 +341,8 @@ def begin(argv=None):
     _figs["keys"].clear()
     _figs["sites"].clear()
     _figs["anims"].clear()
+    _figs["count"].clear()
+    _figs["scale"].clear()
     if argv is not None:
         sys.argv = list(argv)
         # プロジェクトのモジュールは読み直す (書き換えたものが使われるように) / turtle は新しい画面から
@@ -439,7 +441,7 @@ def _png(data, key=None):
 
 # ---- matplotlib の図: 1 つの画面で描き直す (plt.pause・アニメーション・ion・ループの中の plt.show) ----
 # 図は PNG にせず、Agg の画素 (RGBA) をそのまま画面のキャンバスへ送るので、速くなめらかに動きます
-_figs = {"gen": 0, "seq": 0, "keys": {}, "sites": {}, "scale": {}, "anims": [], "closed": set()}
+_figs = {"gen": 0, "seq": 0, "keys": {}, "sites": {}, "scale": {}, "count": {}, "anims": [], "closed": set()}
 
 
 def _site():
@@ -463,7 +465,20 @@ def _agg_canvas(fig):
 def present(fig, key, title=None):
     """図を描いて、画面の key の場所へ送る (同じ key なら同じ場所で描き直す)"""
     canvas = _agg_canvas(fig)
-    sc = _figs["scale"].get(key, 2.0)
+    # はじめの 1 枚はくっきり (2 倍)。動き始めたら軽く (1.25 倍まで) して、メモリと時間を節約する
+    n = _figs["count"].get(key, 0)
+    _figs["count"][key] = n + 1
+    sc = _figs["scale"].get(key, 2.0 if n == 0 else 1.25)
+    if n > 0:
+        sc = min(sc, 1.25)
+    # 画素数の上限 (大きな図でもメモリを使いすぎないように)
+    try:
+        wi, hi = fig.get_size_inches()
+        px = wi * hi * (fig.dpi * sc) ** 2
+        if px > 2_400_000:
+            sc = max(0.5, sc * (2_400_000 / px) ** 0.5)
+    except Exception:
+        pass
     dpi0 = fig.dpi
     t0 = _time.monotonic()
     try:
@@ -3505,7 +3520,7 @@ def css(c, alpha=True):
     if not alpha or a >= 255:
         return "rgb(%d,%d,%d)" % (r, g, b)
     return "rgba(%d,%d,%d,%.4f)" % (r, g, b, a / 255.0)
-`,v=String.raw`"""pygame.Surface (絵を描く板)"""
+`,x=String.raw`"""pygame.Surface (絵を描く板)"""
 import math as _m
 import pygame._base as _b
 from pygame._base import _q, _flush, _cv, error
@@ -3773,7 +3788,7 @@ def _adopt(canvas, alpha=True):
     s._clip = None
     s._display = False
     return s
-`,x=String.raw`"""pygame.display (ゲームの画面)"""
+`,v=String.raw`"""pygame.display (ゲームの画面)"""
 import os as _os
 import re as _re
 import sys as _sys
@@ -5165,7 +5180,7 @@ def average_color(surface, rect=None, consider_alpha=False):
 
 def threshold(*a, **k):
     return 0
-`,L=String.raw`"""pygame.mixer (音): 画面側の Web Audio で鳴らします"""
+`,F=String.raw`"""pygame.mixer (音): 画面側の Web Audio で鳴らします"""
 import os as _os
 import json as _json
 import js as _js
@@ -5409,7 +5424,7 @@ class _Music:
 
 
 music = _Music()
-`,F=String.raw`"""pygame.math (ベクトル)"""
+`,L=String.raw`"""pygame.math (ベクトル)"""
 import math as _m
 
 
@@ -6694,7 +6709,7 @@ class Font:
 
 
 SysFont = lambda name, size, bold=False, italic=False: Font(None, size)
-`};function t(){return{"pygame/__init__.py":p,"pygame/_base.py":m,"pygame/constants.py":g,"pygame/locals.py":y,"pygame/rect.py":h,"pygame/color.py":w,"pygame/surface.py":v,"pygame/display.py":x,"pygame/draw.py":k,"pygame/gfxdraw.py":b,"pygame/event.py":N,"pygame/_keys.py":E,"pygame/key.py":S,"pygame/mouse.py":T,"pygame/time.py":O,"pygame/font.py":K,"pygame/image.py":R,"pygame/transform.py":A,"pygame/mixer.py":L,"pygame/math.py":F,"pygame/sprite.py":I,"pygame/mask.py":P,"pygame/surfarray.py":C,...z}}var D=String.raw`"""tkinter の定数"""
+`};function t(){return{"pygame/__init__.py":p,"pygame/_base.py":m,"pygame/constants.py":g,"pygame/locals.py":y,"pygame/rect.py":h,"pygame/color.py":w,"pygame/surface.py":x,"pygame/display.py":v,"pygame/draw.py":k,"pygame/gfxdraw.py":b,"pygame/event.py":N,"pygame/_keys.py":E,"pygame/key.py":S,"pygame/mouse.py":T,"pygame/time.py":O,"pygame/font.py":K,"pygame/image.py":R,"pygame/transform.py":A,"pygame/mixer.py":F,"pygame/math.py":L,"pygame/sprite.py":I,"pygame/mask.py":P,"pygame/surfarray.py":C,...z}}var D=String.raw`"""tkinter の定数"""
 NO = FALSE = OFF = 0
 YES = TRUE = ON = 1
 N = "n"
@@ -6807,8 +6822,13 @@ def _emit(op):
         _flush()
 
 
-def _flush():
+def _flush(force=True):
+    # 画面へ送るのは、画面の更新 (1 秒に 60 回) より多くしない (細かい after・update のループで画面があふれないように)
     if _S["ops"]:
+        now = _time.monotonic()
+        if not force and now - _S.get("lf", 0.0) < 0.016:
+            return
+        _S["lf"] = now
         s = _json.dumps(_S["ops"], separators=(",", ":"), default=str)
         _S["ops"].clear()
         _js.__fc_tk(s)
@@ -7262,7 +7282,7 @@ def _wait(until_fn):
     if not _fc.events_ok():
         while not until_fn():
             _process()
-            _flush()
+            _flush(False)
             if not _S["timers"]:
                 _fc.note("tk-ev", "tkinter: ボタンやキーの操作を受け取るには、ページを再読み込みしてください (はじめて開いたときは再読み込みが必要です)")
                 return
@@ -7270,12 +7290,14 @@ def _wait(until_fn):
         return
     while not until_fn():
         _process()
-        _flush()
+        _flush(False)
         if until_fn():
             break
         wait = 0.05
         if _S["timers"]:
             wait = max(0.0, min(wait, _S["timers"][0][0] - _time.monotonic()))
+        if wait >= 0.016:
+            _flush()
         if wait > 0:
             _fc.wait_events(int(wait * 1000) or 1)
 
@@ -7491,9 +7513,7 @@ class Misc:
 
     def update(self):
         _process()
-        _flush()
-        if _fc.events_ok():
-            _fc.sleep(0)
+        _flush(False)
 
     def update_idletasks(self):
         _flush()
