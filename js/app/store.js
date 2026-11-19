@@ -8,7 +8,7 @@ export const isIOS = typeof navigator !== 'undefined' && (/iP(hone|ad|od)/.test(
 
 export const DEFAULTS = {
   // 見た目
-  theme: 'forge-dark',
+  theme: 'vscode-dark',
   language: 'ja',      // 表示の言語: ja / en / auto (端末に合わせる)
   fontSize: smallScreen ? 13 : 15,
   fontFamily: 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace',
@@ -58,7 +58,7 @@ export const DEFAULTS = {
   haptics: true,
   // その他
   onboarded: false,
-  design: 2,           // デザインの版 (新しいデザインへの移行用)
+  design: 3,           // デザインの版 (新しいデザインへの移行用)
   python: 1,           // Python 版への移行済み
   confirmDelete: true,
 }
@@ -75,6 +75,13 @@ try {
       if (saved.theme === 'dark-plus' || !saved.theme) saved.theme = 'forge-dark'
       else if (saved.theme === 'light-plus') saved.theme = 'forge-light'
       saved.design = 2
+      dropped = true
+    }
+    // v13: 色を VS Code と同じに。以前の標準テーマのままの人は、VS Code の標準 (Dark Modern / Light Modern) に
+    if ((saved.design || 0) < 3) {
+      if (!saved.theme || saved.theme === 'forge-dark') saved.theme = 'vscode-dark'
+      else if (saved.theme === 'forge-light') saved.theme = 'vscode-light'
+      saved.design = 3
       dropped = true
     }
     // v12: Python になったので、字下げはスペース 4 つ (タブとスペースが混ざると Python ではエラー)、キーボードバーは Python の記号

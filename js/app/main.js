@@ -27,7 +27,7 @@ function applyTheme(s) {
     else root.style.setProperty(k, v)
   }
   root.style.setProperty('--editor-font', s.fontFamily)
-  const th = THEMES[s.theme] || THEMES['forge-dark']
+  const th = THEMES[s.theme] || THEMES['vscode-dark']
   const meta = document.querySelector('meta[name="theme-color"]')
   if (meta) meta.content = th.c.bg
   document.body.dataset.theme = th.dark ? 'dark' : 'light'

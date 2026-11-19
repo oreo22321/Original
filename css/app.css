@@ -228,8 +228,7 @@ li.cm-deprecated .cm-completionLabel { text-decoration: line-through; opacity: .
 .cm-sig-help .doc { font-family: var(--ui-font); margin-top: 4px; color: var(--muted); }
 .cm-color-swatch { display: inline-block; width: .95em; height: .95em; margin-right: 3px; border-radius: 3px; vertical-align: -.12em; border: 1px solid rgba(128,128,128,.6); position: relative; overflow: hidden; cursor: pointer; }
 .cm-color-swatch input { position: absolute; inset: -4px; width: 200%; height: 200%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
-.cm-rb0 { color: #d9c287 !important; } .cm-rb1 { color: #b9a0e6 !important; } .cm-rb2 { color: #8fb3e0 !important; }
-body[data-theme=light] .cm-rb0 { color: #8a6a12 !important; } body[data-theme=light] .cm-rb1 { color: #7b4ab8 !important; } body[data-theme=light] .cm-rb2 { color: #2f5f9a !important; }
+.cm-rb0 { color: var(--rb0) !important; } .cm-rb1 { color: var(--rb1) !important; } .cm-rb2 { color: var(--rb2) !important; }
 .cm-unused { opacity: .55; }
 .cm-lintRange-hint { background-image: none !important; }
 .cm-diagnostic { padding: 5px 9px !important; }
@@ -1125,3 +1124,10 @@ body.kb-open .run-pill { display: none; }
 .pd-file { display: flex; align-items: center; gap: 8px; padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
 .pd-file:last-child { border-bottom: 0; }
 .pd-file:hover, .pd-file:active { background: var(--hover); }
+
+/* エディタの外のコード (AI の答え・コンソール) も、エディタと同じ色 */
+.hx { color: var(--hx-fg, inherit); }
+.hx .hx-kw { color: var(--hx-kw); } .hx .hx-ctl { color: var(--hx-ctl); } .hx .hx-str { color: var(--hx-str); } .hx .hx-esc { color: var(--hx-esc); }
+.hx .hx-num { color: var(--hx-num); } .hx .hx-com { color: var(--hx-com); } .hx .hx-fn { color: var(--hx-fn); } .hx .hx-cls { color: var(--hx-cls); }
+.hx .hx-var { color: var(--hx-var); } .hx .hx-op { color: var(--hx-op); }
+.ai-code pre { background: var(--hx-bg, var(--panel2)); }

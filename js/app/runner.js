@@ -5,6 +5,7 @@ import { getSettings, setSettings, on, emit, isTouch } from './store.js'
 import { h, icon, toast, copyText, haptic, menu, modal } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { langOf } from '../editor/setup.js'
+import { highlightPython } from '../editor/themes.js'
 import { explainError } from './explain.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
 import { TurtleView } from './turtle-view.js'
@@ -196,7 +197,8 @@ export class Runner {
       body.append(text.slice(0, LONG))
       const more = h('button', { class: 'btn small ghost out-more', onclick: () => { more.remove(); body.append(text.slice(LONG)) } }, `… 続きを表示 (${(text.length - LONG).toLocaleString()} 文字)`)
       body.append(more)
-    } else this.linkify(body, text)
+    } else if (kind === 'input' && text.length < 4000) { body.classList.add('hx'); body.append(highlightPython(text)) }
+    else this.linkify(body, text)
     el.append(body)
     if (this.query && !text.toLowerCase().includes(this.query)) el.classList.add('q-hide')
     return el
