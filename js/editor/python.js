@@ -333,6 +333,13 @@ export function pythonLinter(getOpts) {
     let diags = toDiagnostics(view.state, list)
     if (opts.unused === false) diags = diags.filter(d => d.severity !== 'hint')
     if (opts.undefined === false) diags = diags.filter(d => !/定義されていません/.test(d.message))
+    // 端末内 AI が見つけたバグ (AI に任せる設定のとき)
+    if (opts.ai) {
+      try {
+        diags = diags.concat(opts.ai.diagnostics(view.state, opts.path || 'main.py'))
+        opts.ai.schedule(view, opts.path || 'main.py', diags)
+      } catch {}
+    }
     return diags
   }, { delay: 500 })
 }

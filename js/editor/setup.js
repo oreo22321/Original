@@ -147,7 +147,7 @@ export function buildExtensions(ctx) {
     comps.complete.of(completeExt(s, lang, ctx)),
     py ? pythonInputFixer(() => st().fixInput, ctx.onFix) : [],
     py ? pythonAutoCorrect(() => st().autoCorrect, ctx.onFix) : [],
-    py ? pythonLinter(() => { const c = st(); return { enabled: c.lint, unused: c.lintUnused, undefined: c.lintUndefined, path: ctx.path } }) : [],
+    py ? pythonLinter(() => { const c = st(); return { enabled: c.lint, unused: c.lintUnused, undefined: c.lintUndefined, path: ctx.path, ai: ctx.aiLint || null } }) : [],
     py && ctx.aiProvider ? aiGhost(() => { const c = st(); return { enabled: c.aiInline, delay: c.aiDelay, provider: ctx.aiProvider } }) : [],
     comps.extras.of(extrasExt(s, lang, ctx)),
     py ? runErrorMarks : [],

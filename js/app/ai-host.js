@@ -62,6 +62,8 @@ export function makeHost(session) {
       return [...document.querySelectorAll('.out-error')].slice(-3).map(e => ({ text: e.dataset.text || e.textContent || '' })).filter(e => e.text)
     },
     run: app.runner ? async ({ seconds = 3, signal } = {}) => { const r = await app.runner.runAndCollect({ seconds, signal }); session.ran = true; return r } : null,
+    // AI が作ったコードを試しに実行 (プロジェクトのファイルは変えない)
+    runCode: app.runner ? async (code, { seconds = 4, signal } = {}) => app.runner.runAndCollect({ source: code, seconds, signal }) : null,
     undoLast: async () => {
       const last = session.lastChanges && session.lastChanges()
       if (!last || !last.changes.length) return null
@@ -78,6 +80,7 @@ export function makeHost(session) {
 function llmBridge(session) {
   return {
     ready: () => !!getSettings().aiLlm && (llm.llmReady() || llm.status().state !== 'error'),
+    loaded: () => llm.llmReady() && llm.status().model === getSettings().aiLlm,
     async generate(messages, opts = {}) {
       const key = getSettings().aiLlm
       if (!llm.llmReady() || llm.status().model !== key) {

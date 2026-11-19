@@ -23,7 +23,7 @@ export function cleanSuggestion(text, before, after) {
 }
 
 // エディタ用: インライン候補プロバイダ ((state, pos, { manual }) → 挿入する文字列)
-export function makeAiProvider(getFile) {
+export function makeAiProvider(getFile, { llm = null } = {}) {
   return async (state, pos, { manual = false } = {}) => {
     const file = getFile()
     if (file.lang && file.lang !== 'python') return ''
@@ -32,6 +32,11 @@ export function makeAiProvider(getFile) {
     // 行の途中 (カーソルの後ろに文字がある) は提案しない
     const restOfLine = after.split('\n')[0]
     if (restOfLine.trim() && !/^[)\]}"']*\s*$/.test(restOfLine)) return ''
+    // 端末内 AI (LLM) が使えるときは、前後のコードを見て続きを書いてもらう
+    if (llm) {
+      const t = await llm(state.doc.sliceString(Math.max(0, pos - 3000), pos), state.doc.sliceString(pos, Math.min(state.doc.length, pos + 800))).catch(() => '')
+      if (t && t.trim()) return t
+    }
     if (manual) {
       const gen = await codeFromComment(before)
       if (gen) return gen.code

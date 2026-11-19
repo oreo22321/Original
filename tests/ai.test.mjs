@@ -200,5 +200,27 @@ ok('complete line', c && /mes/.test(c), JSON.stringify(c))
 const cc = await codeFromComment('# 1 から 10 まで表示する\n')
 ok('code from comment', cc && /range\(1, 11\)/.test(cc.code), JSON.stringify(cc))
 
+// ---- 端末内 AI に任せる仕事 (偽のモデルで、答えの検証を確かめる) ----
+const { aiCheck, aiFixError, aiComplete, refineCode, fixWindow } = await import('../js/ai/assist.js')
+const fakeGen = answers => async (messages, opts) => { fakeGen.last = { messages, opts }; return typeof answers === 'function' ? answers(messages, opts) : answers.shift() }
+let found = await aiCheck(py, 'age = input("年齢: ")\nif age >= 20:\n    print("大人")\nprint(totl)\n', { gen: fakeGen(['L2: input() は文字列なので数と比べられません => if int(age) >= 20:\nL3: print が変です => print(undefined_name)\nL9: 存在しない行 => x']) })
+ok('aiCheck keeps a verified fix', found.length === 1 && found[0].line === 2 && found[0].fix && found[0].fix.text === 'if int(age) >= 20:', JSON.stringify(found))
+ok('aiCheck asks with numbered lines and the check priority', /1\| age = input/.test(fakeGen.last.messages[1].content) && fakeGen.last.opts.kind === 'check', JSON.stringify(fakeGen.last.opts))
+found = await aiCheck(py, 'x = 1\nprint(x)\n', { gen: fakeGen(['NONE']) })
+ok('aiCheck NONE', found.length === 0)
+found = await aiCheck(py, 'def f(\n', { gen: fakeGen(['L1: x => y']) })
+ok('aiCheck skips code with syntax errors', found.length === 0)
+const prog2 = 'def total(items):\n    s = 0\n    for i in range(len(items) + 1):\n        s += items[i]\n    return s\n\nprint(total([1, 2, 3]))\n'
+eq('fixWindow covers the function', fixWindow(prog2.split('\n'), 4), { start: 1, end: 5 })
+let fx = await aiFixError(py, { code: prog2, path: 'main.py', error: { type: 'IndexError', message: 'list index out of range', text: 'Traceback...\nIndexError: list index out of range', line: 4 }, gen: fakeGen(['```python\ndef total(items):\n    s = 0\n    for i in range(len(items)):\n        s += items[i]\n    return s\n```\nrange の終わりを 1 つ減らしました。']) })
+ok('aiFixError returns a checked patch', fx && fx.start === 1 && fx.end === 5 && /range\(len\(items\)\):/.test(fx.after) && /print\(total/.test(fx.code) && /range/.test(fx.why), JSON.stringify(fx))
+fx = await aiFixError(py, { code: prog2, path: 'main.py', error: { type: 'IndexError', message: 'x', text: 'IndexError', line: 4 }, gen: fakeGen(['```python\ndef total(items:\n```', '```python\ndef total(items):\n    return sum(itemz)\n```']) })
+ok('aiFixError rejects broken or undefined answers', fx === null)
+const badCode = 'nums = [1, 2]\nprint(sum(numz))\n'
+const rf = await refineCode(py, badCode, { gen: fakeGen(['```python\nnums = [1, 2]\nprint(sum(nums))\n```']), run: async () => ({ started: true, errors: [] }) })
+ok('refineCode fixes undefined names and runs', rf.code === 'nums = [1, 2]\nprint(sum(nums))' && rf.notes.some(n => /実行/.test(n)), JSON.stringify(rf))
+const { generate: realGen, complete: realComplete } = await import('../js/ai/llm.js')
+ok('llm functions refuse without a model', await realGen([]).then(() => false, e => /読み込まれていません/.test(e.message)) && await realComplete('a', 'b').then(() => false, () => true))
+
 console.log(`${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

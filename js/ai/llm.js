@@ -23,6 +23,11 @@ export const LLM_MODELS = [
     f16: { id: 'Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC', lib: 'Qwen2.5-3B-Instruct-q4f16_1_cs1k-webgpu.wasm', sri: 'sha256-b4dOQN1nkEY5u+wCiq5qBreOkzVfCImvJiT18GfIEb8=' },
     f32: { id: 'Qwen2.5-Coder-3B-Instruct-q4f32_1-MLC', lib: 'Qwen2.5-3B-Instruct-q4f32_1_cs1k-webgpu.wasm', sri: 'sha256-nDD2yRVeVchmHCNY9ANE019Yytb+ncB8A/Ayl8307Dk=' },
   },
+  {
+    key: 'xlarge', label: '最高性能 (7B)', desc: 'GPU のメモリが多い PC 向け。ダウンロード約 4.3 GB・メモリ約 5.1 GB', vram: 5100,
+    f16: { id: 'Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC', lib: 'Qwen2-7B-Instruct-q4f16_1_cs1k-webgpu.wasm', sri: 'sha256-4l7lD8+O7u3i9kXKIkz5DO8LiZYQKzSzjX0Eyxp3pWo=' },
+    f32: { id: 'Qwen2.5-Coder-7B-Instruct-q4f32_1-MLC', lib: 'Qwen2-7B-Instruct-q4f32_1_cs1k-webgpu.wasm', sri: 'sha256-xN/nC7M2yNV4nbcHK082Gk6yxhoLwIojtcviXl7PLSM=' },
+  },
 ]
 const modelOf = key => LLM_MODELS.find(m => m.key === key) || LLM_MODELS[0]
 
@@ -159,24 +164,87 @@ export async function removeDownloaded(key) {
   } catch { return false }
 }
 
-// 文章を作る (少しずつ onText に渡す)
-export async function generate(messages, { onText, signal, maxTokens = 800, temperature = 0.2 } = {}) {
-  if (!engine) throw new Error('モデルが読み込まれていません')
-  let text = ''
-  const abort = () => { try { engine.interruptGenerate() } catch {} }
-  if (signal) { if (signal.aborted) throw new DOMException('Aborted', 'AbortError'); signal.addEventListener('abort', abort, { once: true }) }
+// ============================================================
+// 順番待ち: モデルは 1 度に 1 つしか考えられないので、大事なものから順に
+//   chat (チャットで頼まれた) > fix (実行エラーの修正) > complete (続きの提案) > check (裏でのエラー探し)
+//   大事な頼みが来たら、裏でのエラー探しは途中でやめて、あとでやり直す
+// ============================================================
+const PRI = { chat: 4, fix: 3, complete: 2, check: 1 }
+let busy = null
+const waiting = []
+export class Preempted extends Error { constructor() { super('preempted'); this.name = 'Preempted' } }
+const abortError = () => new DOMException('Aborted', 'AbortError')
+function schedule(kind, run, signal) {
+  return new Promise((resolve, reject) => {
+    const job = { pri: PRI[kind] || 1, kind, run, resolve, reject, signal, preempted: false }
+    // 続きの提案は、新しいものだけが意味を持つ
+    if (kind === 'complete') for (let i = waiting.length - 1; i >= 0; i--) if (waiting[i].kind === 'complete') waiting.splice(i, 1)[0].reject(abortError())
+    waiting.push(job)
+    waiting.sort((a, b) => b.pri - a.pri)
+    if (busy && busy.pri < job.pri && (busy.kind === 'check' || busy.kind === 'complete')) { busy.preempted = true; try { engine && engine.interruptGenerate() } catch {} }
+    if (signal) signal.addEventListener('abort', () => { const i = waiting.indexOf(job); if (i >= 0) { waiting.splice(i, 1); reject(abortError()) } }, { once: true })
+    pump()
+  })
+}
+async function pump() {
+  if (busy || !waiting.length) return
+  const job = waiting.shift()
+  if (job.signal && job.signal.aborted) { job.reject(abortError()); pump(); return }
+  busy = job
   try {
-    const chunks = await engine.chat.completions.create({ messages, stream: true, temperature, top_p: 0.9, max_tokens: maxTokens, frequency_penalty: 0.2 })
-    for await (const c of chunks) {
-      const d = c && c.choices && c.choices[0] && c.choices[0].delta ? c.choices[0].delta.content : ''
-      if (d) { text += d; if (onText) onText(text) }
-      if (signal && signal.aborted) break
+    const r = await job.run(job)
+    if (job.preempted) job.reject(new Preempted()); else job.resolve(r)
+  } catch (e) { job.reject(job.preempted ? new Preempted() : e) } finally { busy = null; setTimeout(pump, 0) }
+}
+export const llmBusy = () => !!busy || waiting.length > 0
+
+// 文章を作る (少しずつ onText に渡す)
+export function generate(messages, { onText, signal, maxTokens = 800, temperature = 0.2, kind = 'chat', stop } = {}) {
+  if (!engine) return Promise.reject(new Error('モデルが読み込まれていません'))
+  return schedule(kind, async job => {
+    let text = ''
+    const abort = () => { try { engine.interruptGenerate() } catch {} }
+    if (signal) { if (signal.aborted) throw abortError(); signal.addEventListener('abort', abort, { once: true }) }
+    try {
+      const chunks = await engine.chat.completions.create({ messages, stream: true, temperature, top_p: 0.9, max_tokens: maxTokens, frequency_penalty: 0.2, ...(stop ? { stop } : {}) })
+      for await (const c of chunks) {
+        const d = c && c.choices && c.choices[0] && c.choices[0].delta ? c.choices[0].delta.content : ''
+        if (d) { text += d; if (onText) onText(text) }
+        if ((signal && signal.aborted) || job.preempted) break
+      }
+    } finally {
+      if (signal) signal.removeEventListener('abort', abort)
     }
-  } finally {
-    if (signal) signal.removeEventListener('abort', abort)
-  }
-  if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError')
-  return text
+    if (signal && signal.aborted) throw abortError()
+    return text
+  }, signal)
+}
+
+// 続きを書く (チャットではなく、文章の続き。Qwen2.5-Coder の FIM: 前と後ろを見て、間を埋める)
+export function complete(prefix, suffix, { signal, maxTokens = 64, kind = 'complete' } = {}) {
+  if (!engine) return Promise.reject(new Error('モデルが読み込まれていません'))
+  return schedule(kind, async job => {
+    if (signal && signal.aborted) throw abortError()
+    const prompt = `<|fim_prefix|>${prefix}<|fim_suffix|>${suffix}<|fim_middle|>`
+    const abort = () => { try { engine.interruptGenerate() } catch {} }
+    if (signal) signal.addEventListener('abort', abort, { once: true })
+    try {
+      const r = await engine.completions.create({ prompt, max_tokens: maxTokens, temperature: 0.1, top_p: 0.95, stop: ['<|endoftext|>', '<|fim_pad|>', '<|file_sep|>', '<|im_end|>', '\n\n\n'] })
+      if ((signal && signal.aborted) || job.preempted) throw abortError()
+      return (r && r.choices && r.choices[0] && r.choices[0].text) || ''
+    } finally { if (signal) signal.removeEventListener('abort', abort) }
+  }, signal)
+}
+
+// 端末に保存済みなら、手が空いたときに読み込んでおく (AI のエラー検知・続きの提案をすぐ使えるように)
+export async function preload(key) {
+  if (!key || state === 'ready' || state === 'loading') return false
+  try {
+    const s = await checkSupport()
+    if (!s.ok || !(await isDownloaded(key))) return false
+    await load(key)
+    return true
+  } catch { return false }
 }
 
 function jpProgress(t) {

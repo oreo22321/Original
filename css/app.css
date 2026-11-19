@@ -1131,3 +1131,17 @@ body.kb-open .run-pill { display: none; }
 .hx .hx-num { color: var(--hx-num); } .hx .hx-com { color: var(--hx-com); } .hx .hx-fn { color: var(--hx-fn); } .hx .hx-cls { color: var(--hx-cls); }
 .hx .hx-var { color: var(--hx-var); } .hx .hx-op { color: var(--hx-op); }
 .ai-code pre { background: var(--hx-bg, var(--panel2)); }
+
+/* 実行エラーの AI の直し方 */
+.oe-ai { margin: 10px 0 2px; padding: 9px 10px; border-radius: var(--r); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 7%, var(--bg)); display: flex; flex-direction: column; gap: 7px; animation: fade-up var(--t-slow) var(--ease); }
+.oe-ai-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.oe-ai-head .spinner { width: 11px; height: 11px; }
+.oe-ai.none-found .oe-ai-head { color: var(--muted); font-weight: 500; }
+.oe-ai-diff { font-family: var(--editor-font); font-size: 12px; line-height: 1.55; border-radius: var(--r-sm); overflow-x: auto; background: var(--hx-bg, var(--panel2)); padding: 4px 0; }
+.oe-ai-diff > div { white-space: pre; padding: 0 10px 0 6px; display: flex; gap: 8px; }
+.oe-ai-diff .del { background: rgba(248, 81, 73, .14); }
+.oe-ai-diff .add { background: rgba(46, 160, 67, .16); }
+.oe-ai-diff .mk { color: var(--muted); user-select: none; flex: none; width: 1ch; }
+.oe-ai-why { font-size: 12.5px; color: var(--fg); line-height: 1.55; }
+.oe-ai-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.cm-ai-diag { text-decoration: underline dotted color-mix(in srgb, var(--accent) 80%, transparent) !important; text-underline-offset: 3px; }

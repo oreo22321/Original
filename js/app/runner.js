@@ -305,11 +305,16 @@ export class Runner {
     return files
   }
 
-  async run({ selection = false, path: forcePath = null, agent = false, debug = false } = {}) {
+  async run({ selection = false, path: forcePath = null, agent = false, debug = false, source: forceSource = null } = {}) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
     let path = null, source = null
-    if (selection) {
+    this.scratchId = 0
+    if (forceSource !== null) {
+      // AI が作ったコードを試す (プロジェクトのファイルは変えない)
+      path = '_forge_ai_check.py'
+      source = forceSource
+    } else if (selection) {
       const v = app.editors.activeView()
       if (!v || !doc || doc.lang !== 'python' || v.state.selection.main.empty) { toast('実行したい部分を選択してください'); return }
       path = doc.path
@@ -364,6 +369,7 @@ export class Runner {
     if (this.shared) Atomics.store(new Int32Array(this.shared.ectl), 0, 0)
     const id = ++this.seq
     this.runId = id
+    if (forceSource !== null) this.scratchId = id
     // ブレークポイントがあれば、そこで止まる (なくても ⏸ や breakpoint() で途中から止められる)
     const bps = agent ? {} : bpStore.forRun()
     const hasBps = Object.keys(bps).length > 0
@@ -563,7 +569,7 @@ export class Runner {
         break
       case 'done':
         if (m.id !== this.runId) break
-        this.applyFiles(m.files)
+        if (m.id !== this.scratchId) this.applyFiles(m.files)
         if (m.error) this.showError(m.error)
         else if (m.reason === 'load') this.line('error', m.error || 'Python を読み込めませんでした')
         if (this.running) this.finished(m.reason === 'exit' ? 'done' : m.reason, m.ms)
@@ -841,12 +847,60 @@ export class Runner {
     this.lineCount++
     this.last = null
     if (at) app.editors.markRunError(at.file, at.line, title)
+    if (at) this.aiFixFor(err, el, at)
     if (this.tab !== 'output') this.show('output')
     if (!this.holdScroll) { this.holdScroll = true; requestAnimationFrame(() => { out.scrollTop = Math.max(0, el.offsetTop - out.offsetTop - 6) }) }
   }
 
+  // 端末内 AI に任せる設定なら、エラーの直し方を AI に考えてもらい、確かめた直し方だけ出す
+  async aiFixFor(err, el, at) {
+    let mod
+    try { mod = await import('./ai-assist.js') } catch { return }
+    if (!mod.assistOn()) return
+    const doc = app.editors.docs.get(at.file)
+    const code = doc ? doc.state.doc.toString() : app.contents.get(at.file)
+    if (!code) return
+    const label = h('span', null, 'AI が直し方を考えています…')
+    const box = h('div', { class: 'oe-ai' }, h('div', { class: 'oe-ai-head' }, icon('sparkle', 14), label, h('span', { class: 'spinner' })))
+    const acts = el.querySelector('.oe-actions')
+    el.insertBefore(box, acts)
+    let r = null
+    try { r = await mod.suggestFix({ code, path: at.file, error: { ...err, line: at.line } }) } catch {}
+    if (!r) { label.textContent = 'AI の直し方は見つかりませんでした'; box.querySelector('.spinner')?.remove(); box.classList.add('none-found'); setTimeout(() => box.remove(), 4000); return }
+    box.replaceChildren(h('div', { class: 'oe-ai-head' }, icon('sparkle', 14), h('span', null, `AI の直し方 (${r.start === r.end ? r.start + ' 行目' : r.start + '〜' + r.end + ' 行目'})`)))
+    // 変わった行だけを見せる
+    const a = r.before.split('\n'), b = r.after.split('\n')
+    let p = 0
+    while (p < a.length && p < b.length && a[p] === b[p]) p++
+    let q = 0
+    while (q < a.length - p && q < b.length - p && a[a.length - 1 - q] === b[b.length - 1 - q]) q++
+    const diff = h('div', { class: 'oe-ai-diff hx' })
+    for (const l of a.slice(p, a.length - q)) diff.append(h('div', { class: 'del' }, h('span', { class: 'mk' }, '−'), highlightPython(l)))
+    for (const l of b.slice(p, b.length - q)) diff.append(h('div', { class: 'add' }, h('span', { class: 'mk' }, '+'), highlightPython(l)))
+    box.append(diff)
+    if (r.why) box.append(h('div', { class: 'oe-ai-why' }, r.why))
+    const apply = async andRun => {
+      this.exitFull()
+      await app.editors.open(at.file, { line: r.start })
+      const v = app.editors.activeView()
+      if (!v) return
+      const st = v.state
+      if (r.end > st.doc.lines) return
+      const from = st.doc.line(r.start).from, to = st.doc.line(r.end).to
+      if (st.doc.sliceString(from, to) !== r.before) { toast('コードが変わったので、この直し方は使えません', { icon: 'alert' }); return }
+      v.dispatch({ changes: { from, to, insert: r.after }, userEvent: 'input.ai', scrollIntoView: true })
+      box.remove()
+      toast('AI の直し方を適用しました', { icon: 'sparkle' })
+      if (andRun) setTimeout(() => this.run(), 150)
+    }
+    box.append(h('div', { class: 'oe-ai-acts' },
+      h('button', { class: 'btn small primary', onclick: () => apply(true) }, icon('play', 13), '直して実行'),
+      h('button', { class: 'btn small', onclick: () => apply(false) }, '直すだけ'),
+      h('button', { class: 'btn small ghost', onclick: () => box.remove() }, '閉じる')))
+  }
+
   // 実行して、出力・エラーをまとめて返す (AI エージェント用)
-  async runAndCollect({ path, seconds = 6, signal } = {}) {
+  async runAndCollect({ path, seconds = 6, signal, source = null } = {}) {
     const rec = { output: [], errors: [], done: null }
     const tap = m => {
       if (m.type === 'output') { for (const it of m.items) if (rec.output.length < 400) rec.output.push(it) }
@@ -854,7 +908,7 @@ export class Runner {
     }
     this.taps.add(tap)
     try {
-      await this.run({ path, agent: true })
+      await this.run({ path, agent: true, source })
       if (!this.running) return { ...rec, started: false }
       const until = performance.now() + Math.max(0.5, Math.min(30, seconds)) * 1000
       await new Promise(resolve => {

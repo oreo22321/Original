@@ -13,6 +13,7 @@ import { showWhatsNew } from './views.js'
 import './palette.js'
 import './ai-actions.js'
 import { refreshCorpus, loadEngine } from './ai-host.js'
+import { startAssist } from './ai-assist.js'
 import { warmComplete } from '../ai/complete.js'
 import './code-nav.js'
 import './github-sync.js'
@@ -187,6 +188,8 @@ async function boot() {
     if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 10000 })
     else go()
   }, 3500)
+  // 端末内 AI をダウンロード済みなら、手が空いたときに読み込む (エラー検知・続きの提案を AI に任せる)
+  startAssist()
 
   // バージョンアップ後に 1 度だけ変更点を表示
   try {

@@ -1,5 +1,6 @@
 // 開いているファイル (タブ) とエディタ画面の管理
 import { EditorView, EditorSelection, forEachDiagnostic, forceLinting, undo } from '../../vendor/codemirror.js'
+import { aiLint, aiCompletion } from './ai-assist.js'
 import { createState, reconfigureEffects, langOf, LANG_LABELS } from '../editor/setup.js'
 import { makeAiProvider } from '../editor/ai.js'
 import { formatPython } from '../editor/python.js'
@@ -83,7 +84,8 @@ export class EditorManager {
         command: (id, ...a) => runCommand(id, ...a),
       },
       onUpdate: u => this.onUpdate(doc, u),
-      aiProvider: this.aiProvider || (this.aiProvider = makeAiProvider(() => ({ lang: this.activeDoc() ? this.activeDoc().lang : 'text', name: this.active || '', mode: 'python' }))),
+      aiProvider: this.aiProvider || (this.aiProvider = makeAiProvider(() => ({ lang: this.activeDoc() ? this.activeDoc().lang : 'text', name: this.active || '', mode: 'python' }), { llm: aiCompletion })),
+      aiLint,
       aiReady: () => true,
       onAiError: e => { if (!this.aiErrShown) { this.aiErrShown = true; toast('AI の候補: ' + e.message, { kind: 'error', duration: 5000 }); setTimeout(() => { this.aiErrShown = false }, 30000) } },
       onScale: size => {

@@ -126,6 +126,27 @@ async function doFix(host, step, opts = {}) {
   }
   // 3) 直前の実行のエラー
   const errs = opts.runtime !== false ? (host.lastErrors() || []).slice(-2) : []
+  // 4) 端末内 AI (ダウンロード済みのとき): 実行エラー・残った問題を AI に直してもらう (確かめた直し方だけ使う)
+  if (host.llm && host.llm.loaded && host.llm.loaded() && !tg.sel) {
+    try {
+      const { aiFixError, refineCode } = await import('./assist.js')
+      const gen = (m, o) => host.llm.generate(m, o)
+      for (const e of errs) {
+        let line = 0
+        for (const m of String(e.text).matchAll(/File "([^"]+)", line (\d+)/g)) if (m[1].replace(/^.*\/project\//, '') === tg.path || m[1].endsWith('/' + tg.path)) line = Number(m[2])
+        if (!line) continue
+        step('sparkle', '実行エラーを端末内の AI が直しています')
+        const fx = await aiFixError(host.py, { code: text, path: tg.path, error: { text: e.text, line }, gen }).catch(err => { if (err && err.name === 'AbortError') throw err; return null })
+        if (fx) { text = fx.code; fixes.push({ line: fx.start, why: `AI: ${fx.why || '実行エラーの原因を直しました'}` }) }
+      }
+      const left = (await lint(host.py, text)).filter(d => d.severity === 'error' || /Undefined/.test(d.kind || ''))
+      if (left.length) {
+        step('sparkle', '残った問題を端末内の AI が直しています')
+        const r2 = await refineCode(host.py, text, { gen, onStep: step })
+        if (r2.code !== text && !(await syntaxError(host.py, r2.code))) { text = r2.code; for (const n of r2.notes) fixes.push({ line: 0, why: 'AI: ' + n }) }
+      }
+    } catch (e) { if (e && e.name === 'AbortError') throw e }
+  }
   const parts = []
   if (text !== before) {
     await host.write(tg.path, text, { focus: true })
@@ -380,8 +401,13 @@ function helpText() {
 // ============================================================
 // LLM (端末内の言語モデル) を使う
 // ============================================================
-const LLM_RULES = `You are Forge AI, the assistant inside ForgeCode, a Python code editor used on phones (Python 3.14 running in the browser via Pyodide). Reply in Japanese, short and practical, for beginners.
-Rules for code: Python 3 only, in one \`\`\`python block, PEP 8 style, 4-space indents. Use input()/print() for I/O. Do not use tkinter, turtle, pip install or network requests. numpy, pandas, matplotlib (plt.show() shows the figure) are available. Do not invent APIs.`
+const LLM_RULES = `You are Forge AI, an expert Python programmer and a kind teacher inside ForgeCode, a Python editor for phones and tablets (Python 3.14 runs in the browser).
+Reply in Japanese. Be concise and practical. Explain simply when the user is a beginner.
+When you write code:
+- Write a complete, runnable Python 3 program in ONE \`\`\`python block. PEP 8, 4-space indents, short Japanese comments.
+- You can use the standard library, input()/print(), time.sleep, turtle, tkinter (windows appear in the output), pygame (games appear in the output; call clock.tick), matplotlib / numpy / pandas (plt.show() and FuncAnimation work), asyncio, urllib.request, and pure-Python packages from PyPI (installed automatically on import).
+- You cannot use subprocess, parallel threads, raw sockets or desktop automation.
+- Never invent functions, methods or modules. Prefer simple, readable code that a beginner can follow.`
 function llmContext(host, text) {
   const ctx = []
   for (const h of searchKnowledge(text, 2).filter(h => h.score > 2)) ctx.push(`Reference (${h.ref.t}):\n${h.ref.b.slice(0, 600)}${h.ref.c ? '\n' + h.ref.c.slice(0, 600) : ''}`)
@@ -411,11 +437,29 @@ async function askLlm(host, step, text, history, { onText, signal, purpose = 'ch
   if (!llm || !llm.ready()) return null
   step('sparkle', purpose === 'generate' ? '端末内の AI モデルがコードを書いています' : '端末内の AI モデルが考えています')
   const messages = [{ role: 'system', content: LLM_RULES }]
-  for (const h of (history || []).slice(-4)) messages.push({ role: h.role, content: String(h.content).slice(0, 1200) })
-  messages.push({ role: 'user', content: `${llmContext(host, text)}\n\nRequest: ${text}` })
-  const raw = await llm.generate(messages, { onText, signal, maxTokens: purpose === 'generate' ? 1200 : 700 })
+  for (const h of (history || []).slice(-6)) messages.push({ role: h.role, content: String(h.content).slice(0, 1500) })
+  const errs = /エラー|error|動かない|おかしい|直/i.test(text) && host.lastErrors ? host.lastErrors().slice(-1) : []
+  const errCtx = errs.length ? `\n\nLast error when running the program:\n${String(errs[0].text).split('\n').slice(-10).join('\n')}` : ''
+  messages.push({ role: 'user', content: `${llmContext(host, text)}${errCtx}\n\nRequest: ${text}` })
+  const raw = await llm.generate(messages, { onText, signal, maxTokens: purpose === 'generate' ? 1500 : 800 })
   const v = await verifyLlmCode(host.py, raw)
-  return v.text + (v.notes.length ? `\n\n_(Forge AI のチェック: ${v.notes.join('・')})_` : '')
+  let out = v.text
+  const notes = [...v.notes]
+  // 作ったコードを確かめる: 構文・未定義の名前 → AI に直してもらう。動かせるものは試しに実行
+  const blocks = [...out.matchAll(/```python\n([\s\S]*?)```/g)]
+  if (blocks.length === 1 && (purpose === 'generate' || blocks[0][1].split('\n').length >= 4)) {
+    try {
+      const { refineCode } = await import('./assist.js')
+      const r = await refineCode(host.py, blocks[0][1].replace(/\n$/, ''), {
+        signal, onStep: step, gen: (m, o) => llm.generate(m, o),
+        run: purpose === 'generate' && host.runCode ? code => host.runCode(code, { seconds: 4, signal }) : null,
+      })
+      out = out.replace(blocks[0][0], '```python\n' + r.code + '\n```')
+      notes.push(...r.notes)
+    } catch (e) { if (e && e.name === 'AbortError') throw e }
+  }
+  const uniq = [...new Set(notes)]
+  return out + (uniq.length ? `\n\n_(Forge AI のチェック: ${uniq.join('・')})_` : '')
 }
 
 // ============================================================

@@ -51,6 +51,7 @@ export const DEFAULTS = {
   // AI
   aiInline: true,      // 入力が止まったら AI (Forge AI) が続きを提案
   aiDelay: 700,
+  aiAssist: true,      // 端末内 AI をダウンロードしたら、エラー検知・実行エラーの修正・続きの提案を AI に任せる
   aiLlm: '',           // 高性能モード (端末内 LLM): '' (使わない) / small / medium / large
   // モバイル
   keybar: true,
