@@ -192,6 +192,62 @@ turtle.done()
     const ink = await page.evaluate(() => { const c = document.querySelector('.out-turtle canvas.tt-base'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] < 128) n++; return n })
     if (ink < 50) throw new Error('nothing drawn: ' + ink)
   })
+  await step(page, 'src: full-screen run view with a back button', async () => {
+    await setDoc('print("full screen")\n')
+    await run()
+    await waitOut('full screen')
+    if (!(await page.evaluate(() => !!document.querySelector('.panel.run-full')))) throw new Error('not full screen')
+    await page.waitForFunction(() => /完了/.test(document.querySelector('.run-head')?.innerText || ''), null, { timeout: 20000 })
+    await page.click('.rh-back')
+    await page.waitForFunction(() => !document.querySelector('.panel.run-full'), null, { timeout: 5000 })
+  })
+  await step(page, 'src: pygame draws frames and takes keys', async () => {
+    await setDoc(`import pygame
+pygame.init()
+screen = pygame.display.set_mode((200, 150))
+clock = pygame.time.Clock()
+x = 0
+for frame in range(1200):
+    for e in pygame.event.get():
+        if e.type == pygame.KEYDOWN and e.key == pygame.K_RIGHT:
+            print("right pressed", frame > 3)
+            raise SystemExit
+    screen.fill((0, 0, 80))
+    pygame.draw.rect(screen, (255, 0, 0), (x, 50, 20, 20))
+    x = (x + 2) % 200
+    pygame.display.flip()
+    clock.tick(60)
+`)
+    await run()
+    await page.waitForSelector('.out-surface[data-kind=pg] canvas', { timeout: 60000 })
+    await page.waitForTimeout(400)
+    const px = await page.evaluate(() => { const c = document.querySelector('.out-surface[data-kind=pg] canvas'); return [...c.getContext('2d').getImageData(2, 2, 1, 1).data] })
+    if (px[2] < 60 || px[0] > 20) throw new Error('frame not drawn: ' + px)
+    await page.keyboard.press('ArrowRight')
+    await waitOut('right pressed True', 20000)
+    await page.click('.rh-back')
+  })
+  await step(page, 'src: tkinter window with a working button', async () => {
+    await setDoc(`import tkinter as tk
+root = tk.Tk()
+v = tk.StringVar(value="0")
+def inc():
+    v.set(str(int(v.get()) + 1))
+    if v.get() == "2":
+        print("clicked twice")
+        root.destroy()
+tk.Label(root, textvariable=v).pack()
+tk.Button(root, text="押す", command=inc).pack()
+root.mainloop()
+`)
+    await run()
+    await page.waitForSelector('.tk-win .tk-button', { timeout: 60000 })
+    await page.click('.tk-win .tk-button')
+    await page.waitForFunction(() => /^1$/.test(document.querySelector('.tk-win .tk-label')?.innerText || ''), null, { timeout: 10000 })
+    await page.click('.tk-win .tk-button')
+    await waitOut('clicked twice', 15000)
+    await page.click('.rh-back')
+  })
   await step(page, 'src: asyncio, threads and display()', async () => {
     await setDoc('import asyncio, threading\nasync def main():\n    await asyncio.sleep(0.05)\n    return "async ok"\nprint(asyncio.run(main()))\nt = threading.Thread(target=lambda: print("thread ok"))\nt.start(); t.join()\nclass T:\n    def _repr_html_(self):\n        return "<table><tr><td>cell</td></tr></table>"\ndisplay(T())\n')
     await run()

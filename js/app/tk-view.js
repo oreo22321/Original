@@ -45,8 +45,8 @@ export class TkView {
     switch (k) {
       case 'win': this.makeWin(id, op[2], op[3] || {}); break
       case 'title': if (w && w.titleEl) w.titleEl.textContent = op[2]; break
-      case 'geom': if (w && w.win) { w.body.style.width = `min(100%, ${op[2]}px)`; w.body.style.height = op[3] + 'px'; w.sized = true } break
-      case 'minsize': if (w && w.win) { w.body.style.minWidth = `min(100%, ${op[2]}px)`; w.body.style.minHeight = op[3] + 'px' } break
+      case 'geom': if (w && w.win) { w.el.style.width = `min(100%, ${op[2]}px)`; w.body.style.height = op[3] + 'px'; w.sized = true } break
+      case 'minsize': if (w && w.win) { w.el.style.minWidth = `min(100%, ${op[2]}px)`; w.body.style.minHeight = op[3] + 'px' } break
       case 'show': if (w && w.win) w.el.classList.toggle('hidden', !op[2]); break
       case 'full': break
       case 'new': this.make(id, op[2], op[3], op[4] || {}); break

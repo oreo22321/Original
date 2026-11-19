@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = 'ec1a7a8ae6'
+const VERSION = '2af51fb534'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -10,29 +10,29 @@ const PRECACHE = [
   "boot.js",
   "css/app.css",
   "dist/app/main.js",
-  "dist/chunks/ai-assist-CNTQF65E.js",
+  "dist/chunks/ai-assist-NO4VSLKH.js",
   "dist/chunks/app-OBCTKPFF.js",
-  "dist/chunks/assist-WE3FKFVR.js",
+  "dist/chunks/assist-Z6AZCOYT.js",
   "dist/chunks/chunk-4MYTFDFL.js",
   "dist/chunks/chunk-5WTD5ZAM.js",
   "dist/chunks/chunk-5YFU3I5N.js",
   "dist/chunks/chunk-6YYWDLBJ.js",
-  "dist/chunks/chunk-BQ23ITVI.js",
   "dist/chunks/chunk-CANPDHTU.js",
-  "dist/chunks/chunk-EIES7OK3.js",
   "dist/chunks/chunk-GS7GOFRA.js",
   "dist/chunks/chunk-IPI5JKKD.js",
   "dist/chunks/chunk-L366G3HW.js",
+  "dist/chunks/chunk-LS3KEXXM.js",
   "dist/chunks/chunk-OGXIANOP.js",
   "dist/chunks/chunk-PNEWCHF3.js",
   "dist/chunks/chunk-Q6LWNVQE.js",
-  "dist/chunks/chunk-RUWENCJJ.js",
-  "dist/chunks/engine-5MW4ICBB.js",
+  "dist/chunks/chunk-QJPW3PIS.js",
+  "dist/chunks/chunk-ZY27F7O7.js",
+  "dist/chunks/engine-HAZCPCZP.js",
   "dist/chunks/fflate-ECKODDUP.js",
   "dist/chunks/generate-GFHSBG4N.js",
-  "dist/chunks/knowledge-ERSTBRLI.js",
+  "dist/chunks/knowledge-3US6XSXY.js",
   "dist/chunks/text-GPDYCE7D.js",
-  "dist/chunks/tk-view-UHQ5TMAR.js",
+  "dist/chunks/tk-view-RSO2V3C4.js",
   "dist/chunks/ui-BY42G7NV.js",
   "dist/workers/python-worker.js",
   "dist/workers/pytools-worker.js",

@@ -1145,3 +1145,18 @@ body.kb-open .run-pill { display: none; }
 .oe-ai-why { font-size: 12.5px; color: var(--fg); line-height: 1.55; }
 .oe-ai-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .cm-ai-diag { text-decoration: underline dotted color-mix(in srgb, var(--accent) 80%, transparent) !important; text-underline-offset: 3px; }
+
+/* ---- 動き: 実行中の走る線・完了の小さな演出・パネルの出入り ---- */
+.panel.run-full .run-head { position: relative; }
+.panel.run-full.is-running .run-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: linear-gradient(90deg, transparent, var(--primary), transparent) no-repeat; background-size: 35% 100%; animation: run-scan 1.25s ease-in-out infinite; }
+@keyframes run-scan { from { background-position: -40% 0; } to { background-position: 140% 0; } }
+.rh-state.ok, .rh-state.err, .rh-state.stop { animation: state-pop .34s var(--ease); }
+@keyframes state-pop { from { opacity: 0; transform: scale(.9); } }
+.panel:not(.run-full):not(.hidden) { animation: panel-in var(--t-slow) var(--ease); }
+@keyframes panel-in { from { opacity: .3; transform: translateY(10px); } }
+.run-btn { position: relative; overflow: hidden; }
+.run-btn::after { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at center, rgba(255,255,255,.35), transparent 60%); opacity: 0; transform: scale(.2); transition: opacity .35s, transform .35s; pointer-events: none; }
+.run-btn:active::after { opacity: 1; transform: scale(1.4); transition: 0s; }
+.sf-sticky { transition: box-shadow var(--t) var(--ease); }
+.oe-ai-acts .btn.primary .ico { margin-right: -2px; }
+@media (prefers-reduced-motion: reduce) { .panel.run-full.is-running .run-head::after { animation: none; opacity: .6; } }

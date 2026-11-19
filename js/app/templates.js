@@ -248,6 +248,120 @@ turtle.done()  # ■ で終わります
 `,
     },
   },
+  pygame: {
+    name: 'ゲーム (pygame)',
+    desc: '矢印キー (スマホはボタン) で動かす、玉よけゲーム',
+    icon: 'gamepad',
+    main: 'main.py',
+    files: {
+      'main.py': `# 玉よけゲーム (pygame)
+# ▶ で実行すると、画面が出ます。矢印キー (スマホは画面の下のボタン) で動かして、落ちてくる玉をよけよう
+import random
+import pygame
+
+pygame.init()
+screen = pygame.display.set_mode((480, 360))
+pygame.display.set_caption("玉よけ")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont(None, 30)
+
+player = pygame.Rect(215, 320, 50, 16)
+balls = []
+score = 0
+running = True
+
+while running:
+    # 1. 操作 (× で閉じる・キー)
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+    keys = pygame.key.get_pressed()
+    if keys[pygame.K_LEFT]:
+        player.x -= 6
+    if keys[pygame.K_RIGHT]:
+        player.x += 6
+    player.clamp_ip(screen.get_rect())
+
+    # 2. 動き: 玉を増やして落とす
+    if random.random() < 0.05:
+        balls.append(pygame.Rect(random.randint(0, 464), -16, 16, 16))
+    for ball in balls:
+        ball.y += 4
+    balls = [b for b in balls if b.y < 360]
+    if player.collidelist(balls) != -1:
+        running = False
+    score += 1
+
+    # 3. 描く
+    screen.fill((18, 22, 38))
+    for ball in balls:
+        pygame.draw.circle(screen, (255, 190, 60), ball.center, 8)
+    pygame.draw.rect(screen, (90, 200, 255), player, border_radius=6)
+    screen.blit(font.render(f"スコア {score}", True, (255, 255, 255)), (10, 10))
+    pygame.display.flip()
+    clock.tick(60)
+
+print("ゲームオーバー! スコア:", score)
+pygame.quit()
+`,
+    },
+  },
+  gui: {
+    name: '画面のあるアプリ (tkinter)',
+    desc: 'ボタン・入力欄・リストで作る ToDo アプリ',
+    icon: 'window',
+    main: 'main.py',
+    files: {
+      'main.py': `# ToDo アプリ (tkinter)
+# ▶ で実行すると、出力にウィンドウが出ます。入力して「追加」、選んで「完了」
+import tkinter as tk
+from tkinter import messagebox
+
+root = tk.Tk()
+root.title("ToDo")
+root.geometry("320x360")
+
+entry = tk.Entry(root, font=("Arial", 14))
+entry.pack(fill="x", padx=10, pady=(10, 4))
+
+todos = tk.Listbox(root, font=("Arial", 13), height=10)
+todos.pack(fill="both", expand=True, padx=10, pady=4)
+
+count = tk.StringVar(value="0 件")
+tk.Label(root, textvariable=count).pack()
+
+
+def update_count():
+    count.set(f"{todos.size()} 件")
+
+
+def add(event=None):
+    text = entry.get().strip()
+    if not text:
+        messagebox.showwarning("ToDo", "やることを入れてください")
+        return
+    todos.insert(tk.END, text)
+    entry.delete(0, tk.END)
+    update_count()
+
+
+def done():
+    sel = todos.curselection()
+    if sel:
+        todos.delete(sel[0])
+        update_count()
+
+
+buttons = tk.Frame(root)
+buttons.pack(pady=8)
+tk.Button(buttons, text="追加", width=8, command=add).pack(side="left", padx=4)
+tk.Button(buttons, text="完了", width=8, command=done).pack(side="left", padx=4)
+entry.bind("<Return>", add)
+
+root.mainloop()
+`,
+    },
+  },
   empty: {
     name: '空のプロジェクト',
     desc: 'main.py だけ',

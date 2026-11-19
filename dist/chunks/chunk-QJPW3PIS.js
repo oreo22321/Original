@@ -412,7 +412,7 @@ df = pd.DataFrame({
 })
 print(df.describe())
 print(df.groupby("class")["score"].mean())
-print(df.sort_values("score", ascending=False).head(3))`},{id:"packages",t:"使えるライブラリ",k:"ライブラリ パッケージ pip install 使える numpy pandas matplotlib scipy requests インストール モジュールがない",b:"ForgeCode の Python はブラウザの中で動く **Pyodide (Python 3.14)** です。\n- 標準ライブラリ (math・random・datetime・json・csv・re・collections など) はすぐ使えます\n- **numpy・pandas・matplotlib・scipy・scikit-learn・sympy・pillow・requests** なども `import` するだけで使えます (初回だけインターネットから読み込み、あとは端末に保存)\n- それ以外のライブラリも、`import` すると **PyPI から自動で入ります** (pure Python のもの)。`requirements.txt` があれば実行の前に入れます。コンソールで `pip install 名前`・`pip list` も使えます\n- tkinter などウィンドウを出す GUI・pygame の画面・subprocess は使えません。絵やゲームは **turtle** で作れます",c:`import sympy
+print(df.sort_values("score", ascending=False).head(3))`},{id:"packages",t:"使えるライブラリ",k:"ライブラリ パッケージ pip install 使える numpy pandas matplotlib scipy requests インストール モジュールがない",b:"ForgeCode の Python はブラウザの中で動く **Pyodide (Python 3.14)** です。\n- 標準ライブラリ (math・random・datetime・json・csv・re・collections など) はすぐ使えます\n- **numpy・pandas・matplotlib・scipy・scikit-learn・sympy・pillow・requests** なども `import` するだけで使えます (初回だけインターネットから読み込み、あとは端末に保存)\n- それ以外のライブラリも、`import` すると **PyPI から自動で入ります** (pure Python のもの)。`requirements.txt` があれば実行の前に入れます。コンソールで `pip install 名前`・`pip list` も使えます\n- 画面のあるアプリは **tkinter**、ゲームは **pygame** や **turtle** で作れます (どれも出力に表示され、タップ・キーで操作できます)\n- subprocess・本当に同時に動くスレッド・ソケット通信・パソコンの操作 (pyautogui など) は使えません",c:`import sympy
 
 x = sympy.symbols("x")
 print(sympy.solve(x ** 2 - 4, x))`},{id:"err-syntax",t:"SyntaxError (書き方の間違い)",k:"SyntaxError invalid syntax 構文エラー 書き方 間違い コロン 括弧 閉じ",b:"書き方 (文法) が正しくないときのエラーです。よくある原因:\n- if / for / def / class の行の最後の `:` を忘れた\n- 括弧 `( [ {` や引用符 `\" '` を閉じ忘れた (エラーの行より **前の行** が原因のことも)\n- 全角の記号 (（ ） ： ＝ など) が混ざった\n- 比較に `=` を使った (`==` が正しい)",c:`# 間違い: if x = 1
@@ -439,7 +439,31 @@ average = sum(nums) / len(nums) if nums else 0
 print(average)`},{id:"err-module",t:"ModuleNotFoundError (モジュールが見つからない)",k:"ModuleNotFoundError No module named ImportError import できない ライブラリがない",b:"import しようとしたモジュールが見つからないときのエラーです。名前のスペル、自分のファイルならプロジェクトにあるか、フォルダなら `__init__.py` があるかを確認します。ForgeCode で使えるライブラリは「使えるライブラリ」を見てください。",c:"import json  # 標準ライブラリはいつでも使えます"},{id:"err-recursion",t:"RecursionError と無限ループ",k:"RecursionError maximum recursion depth 無限ループ 終わらない 止まらない フリーズ",b:"- `RecursionError`: 関数が自分を呼び続けて止まらない → 終了条件を書きます\n- 無限ループ: 実行が終わらないときは ■ (停止) で止められます。while の条件がいつか偽になるか、break があるか確認します。設定の「最大実行時間」で自動で止めることもできます",c:`count = 0
 while count < 5:
     count += 1  # これを忘れると無限ループ
-print(count)`},{id:"turtle",t:"turtle (タートルグラフィックス・絵とゲーム)",k:"turtle タートル 亀 絵 描く 図形 星 円 線 色 forward left right ゲーム onkey キー操作 クリック ontimer",b:'`turtle` はペンを持った亀を動かして絵を描くライブラリです。ForgeCode では出力にキャンバスで表示されます。\n- `forward(長さ)` で進む、`left(角度)`・`right(角度)` で向きを変える、`penup()`・`pendown()` で線を引く/引かない\n- `color("red", "yellow")` + `begin_fill()` 〜 `end_fill()` で塗りつぶし、`circle(半径)`・`dot(大きさ)`・`write("文字")`\n- `speed(0)` でいちばん速く。`screen.tracer(0)` + `screen.update()` で描く様子を見せずに速く描けます\n- ゲーム: `screen.onkeypress(関数, "Up")`・`screen.onclick(関数)`・`screen.ontimer(関数, ミリ秒)` と `turtle.done()`。スマホでは使うキーのボタンが出ます',c:`import turtle
+print(count)`},{id:"tkinter",t:"tkinter (ボタン・入力欄のある画面)",k:"tkinter tk gui ウィンドウ 画面 ボタン 入力欄 entry label button canvas mainloop pack grid messagebox アプリ ttk",b:'`tkinter` はウィンドウにボタンや入力欄を並べてアプリを作るライブラリです。ForgeCode では出力の中にウィンドウとして表示され、タップ・入力・キー操作がそのまま使えます。\n- `root = tk.Tk()` でウィンドウ、`tk.Label`・`tk.Button(command=関数)`・`tk.Entry`・`tk.Text`・`tk.Listbox`・`tk.Canvas`・`ttk.Combobox` などを作り、`pack()` / `grid(row, column)` / `place(x, y)` で並べます\n- 値は `tk.StringVar`・`tk.IntVar` を `textvariable=` / `variable=` に渡すと、画面と自動でつながります\n- 時間で動かすには `root.after(ミリ秒, 関数)`、キー・クリックは `root.bind("<Left>", 関数)`。最後に `root.mainloop()`\n- `messagebox.showinfo`・`simpledialog.askstring`・`filedialog.askopenfilename` のダイアログも出せます',c:`import tkinter as tk
+
+root = tk.Tk()
+root.title("カウンター")
+count = tk.IntVar(value=0)
+tk.Label(root, textvariable=count, font=("Arial", 32)).pack(padx=20, pady=10)
+tk.Button(root, text="+1", command=lambda: count.set(count.get() + 1)).pack(pady=10)
+root.mainloop()`},{id:"pygame",t:"pygame (ゲーム)",k:"pygame ゲーム game スプライト sprite キー 矢印 当たり判定 collide rect display flip clock tick event 画面 fps",b:"`pygame` はゲームを作るライブラリです。ForgeCode では出力にゲームの画面が出て、キーボード・タップ (スマホは画面の下のキーのボタン) で操作できます。\n- `screen = pygame.display.set_mode((幅, 高さ))`、毎フレーム「操作 → 動き → 描く → `pygame.display.flip()` → `clock.tick(60)`」をくり返します\n- 操作は `pygame.event.get()` (QUIT・KEYDOWN・MOUSEBUTTONDOWN) と `pygame.key.get_pressed()[pygame.K_LEFT]`\n- `pygame.Rect` の `colliderect` で当たり判定、`pygame.draw.rect / circle / line`、`font.render` で文字、`pygame.image.load` で画像、`pygame.sprite.Group` でまとめて動かせます\n- 画面の右上の × で QUIT が届きます。■ でいつでも止められます",c:`import pygame
+
+pygame.init()
+screen = pygame.display.set_mode((400, 300))
+clock = pygame.time.Clock()
+x = 200
+running = True
+while running:
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            running = False
+    keys = pygame.key.get_pressed()
+    x += (keys[pygame.K_RIGHT] - keys[pygame.K_LEFT]) * 5
+    screen.fill((20, 20, 40))
+    pygame.draw.circle(screen, (255, 200, 0), (x, 150), 20)
+    pygame.display.flip()
+    clock.tick(60)
+pygame.quit()`},{id:"turtle",t:"turtle (タートルグラフィックス・絵とゲーム)",k:"turtle タートル 亀 絵 描く 図形 星 円 線 色 forward left right ゲーム onkey キー操作 クリック ontimer",b:'`turtle` はペンを持った亀を動かして絵を描くライブラリです。ForgeCode では出力にキャンバスで表示されます。\n- `forward(長さ)` で進む、`left(角度)`・`right(角度)` で向きを変える、`penup()`・`pendown()` で線を引く/引かない\n- `color("red", "yellow")` + `begin_fill()` 〜 `end_fill()` で塗りつぶし、`circle(半径)`・`dot(大きさ)`・`write("文字")`\n- `speed(0)` でいちばん速く。`screen.tracer(0)` + `screen.update()` で描く様子を見せずに速く描けます\n- ゲーム: `screen.onkeypress(関数, "Up")`・`screen.onclick(関数)`・`screen.ontimer(関数, ミリ秒)` と `turtle.done()`。スマホでは使うキーのボタンが出ます',c:`import turtle
 
 t = turtle.Turtle()
 t.color("red", "yellow")

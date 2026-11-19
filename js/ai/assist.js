@@ -191,7 +191,8 @@ export async function refineCode(py, code, { signal, run, onStep = () => {}, gen
   const final = await lint(py, cur)
   if (final.some(d => d.severity === 'error')) notes.push('まだ構文エラーが残っています')
   // 入力や画面を使わないプログラムは、実際に動かして確かめる
-  if (run && !final.some(d => d.severity === 'error') && !/\binput\s*\(|tkinter|turtle|pygame|while\s+True/.test(cur)) {
+  // (通信・ファイルの削除・画面の操作をするコードは、自動では動かさない)
+  if (run && !final.some(d => d.severity === 'error') && !/\binput\s*\(|tkinter|turtle|pygame|while\s+True|urllib|requests|http|socket|webbrowser|pyodide|\bjs\b|shutil|os\.remove|os\.unlink|rmdir|getpass/.test(cur)) {
     onStep('play', '作ったコードを試しに実行しています')
     let r = null
     try { r = await run(cur) } catch {}

@@ -141,10 +141,10 @@ export const pySemantic = Prec.highest(ViewPlugin.fromClass(class {
     if (treeChanged) {
       this.tree = tree
       // 大きなファイルは、名前の一覧の作り直しを少し待つ
-      if (u.state.doc.length < 120000) this.table = collect(u.state, tree)
+      if (u.state.doc.length < 20000) this.table = collect(u.state, tree)
       else {
         clearTimeout(this.timer)
-        this.timer = setTimeout(() => { this.table = collect(u.view.state, syntaxTree(u.view.state)); this.decorations = build(u.view, this.table); u.view.dispatch({}) }, 400)
+        this.timer = setTimeout(() => { if (!u.view.dom.isConnected) return; this.table = collect(u.view.state, syntaxTree(u.view.state)); this.decorations = build(u.view, this.table); u.view.dispatch({}) }, 350)
       }
     }
     if (treeChanged || u.docChanged || u.viewportChanged) this.decorations = build(u.view, this.table)

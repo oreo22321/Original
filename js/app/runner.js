@@ -90,7 +90,28 @@ export class Runner {
     // 実行中に実行画面を閉じたとき、戻るためのボタン
     this.pill = h('button', { class: 'run-pill hidden', onclick: () => this.enterFull() }, h('span', { class: 'spinner' }), h('span', { class: 'rp-text' }, '実行中'), h('span', { class: 'rp-open' }, '画面を開く'))
     document.body.append(this.pill)
+    // スマホ: 実行画面の左端から右へスワイプで戻る
+    let sx = null, sy = 0
+    this.root.addEventListener('touchstart', e => { const t = e.touches[0]; sx = this.full && e.touches.length === 1 && t.clientX < 26 ? t.clientX : null; sy = t.clientY }, { passive: true })
+    this.root.addEventListener('touchmove', e => {
+      if (sx === null) return
+      const t = e.touches[0]
+      if (Math.abs(t.clientY - sy) > 70) { sx = null; this.root.style.transform = ''; return }
+      const dx = Math.max(0, t.clientX - sx)
+      this.root.style.transition = 'none'
+      this.root.style.transform = `translateX(${dx}px)`
+    }, { passive: true })
+    this.root.addEventListener('touchend', e => {
+      if (sx === null) return
+      const dx = e.changedTouches[0].clientX - sx
+      sx = null
+      this.root.style.transition = ''
+      this.root.style.transform = ''
+      if (dx > 90) this.exitFull()
+    })
     document.addEventListener('keydown', e => {
+      // 実行画面で ⌘/Ctrl + Enter: もう一度実行
+      if (this.full && (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !this.running) { e.preventDefault(); this.rerun(); return }
       if (!this.full || e.key !== 'Escape' || e.defaultPrevented) return
       if (document.querySelector('.modal-overlay, .menu-overlay, .sf-max')) return
       const t = e.target
@@ -573,6 +594,7 @@ export class Runner {
         if (m.error) this.showError(m.error)
         else if (m.reason === 'load') this.line('error', m.error || 'Python を読み込めませんでした')
         if (this.running) this.finished(m.reason === 'exit' ? 'done' : m.reason, m.ms)
+        if (m.fatal) { this.pyReady = false; this.resetWorker() }
         break
     }
   }
@@ -686,6 +708,9 @@ export class Runner {
       sv.live = !!this.running
       this.surfaces.set(m.key, sv)
       this.appendBlock(sv.el)
+      // 図がたくさんあるときは、古いものから画像にしてメモリを空ける
+      const all = [...this.surfaces.values()].filter(x => !x.frozen && x !== sv)
+      if (all.length > 16) for (const old of all.slice(0, all.length - 16)) { old.live = false; old.freeze() }
       if (sv.kind === 'pg' && this.running) this.pin(sv.el)
       if (sv.kind === 'pg' && this.pgKeys) sv.setKeys(this.pgKeys)
     } else if (sv.frames === 1 && this.running) this.pin(sv.el) // 2 枚目が来た = 動いている図
@@ -766,6 +791,7 @@ export class Runner {
   updateRunHead() {
     if (!this.runHead) return
     const running = this.running
+    this.root.classList.toggle('is-running', !!running)
     this.pill.classList.toggle('hidden', !running || this.full || (getSettings().runView || 'full') !== 'full')
     const pt = this.pill.querySelector('.rp-text')
     if (pt) pt.textContent = this.inputPending ? '入力待ち' : '実行中'

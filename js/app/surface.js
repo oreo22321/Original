@@ -42,7 +42,8 @@ export class SurfaceView {
     this.maxBtn = btn('expand', '大きく表示', () => this.toggleMax())
     this.el = h('div', { class: 'out-surface', 'data-kind': this.kind },
       h('div', { class: 'sf-bar' }, icon(this.kind === 'pg' ? 'gamepad' : 'chart', 14), this.titleEl, this.fpsEl, h('span', { class: 'sf-spacer' }),
-        this.maxBtn, btn('download', '画像として保存', () => this.save())),
+        this.maxBtn, btn('download', '画像として保存', () => this.save()),
+        this.kind === 'pg' ? btn('close', 'ゲームを閉じる (QUIT)', () => { if (this.live) this.onEvent({ s: 'pg', t: 'quit' }) }) : null),
       this.stage, this.keypad)
     if (this.kind === 'pg') this.bindInput()
     this.stage.addEventListener('dblclick', () => { if (this.kind === 'fig') this.toggleMax() })
@@ -102,6 +103,26 @@ export class SurfaceView {
     this.keypad.classList.add('hidden')
     this.unbindKeys()
     if (this.pending) this.paint()
+  }
+
+  // 古い図は画像にしてキャンバスを手放す (図がたくさんあってもメモリを使いすぎないように)
+  freeze() {
+    if (this.frozen || this.live || !this.w) return
+    if (this.pending) this.paint()
+    this.frozen = true
+    const img = h('img', { class: 'sf-canvas', alt: this.titleEl.textContent || '図' })
+    try {
+      const max = 900
+      const sc = Math.min(1, max / Math.max(this.w, this.h))
+      const c = document.createElement('canvas')
+      c.width = Math.max(1, Math.round(this.w * sc)); c.height = Math.max(1, Math.round(this.h * sc))
+      c.getContext('2d').drawImage(this.canvas, 0, 0, c.width, c.height)
+      img.src = c.toDataURL('image/png')
+    } catch { return }
+    this.canvas.replaceWith(img)
+    this.canvas.width = this.canvas.height = 0
+    this.canvas = img
+    this.save = () => { const a = h('a', { href: img.src, download: 'figure.png' }); a.click() }
   }
 
   toggleMax(force) {

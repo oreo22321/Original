@@ -845,7 +845,14 @@ async function run(m) {
   } catch (e) {
     ok = false
     reason = 'error'
-    error = { type: 'Error', message: String(e && e.message || e), text: String(e && e.message || e), frames: [] }
+    const msg = String(e && e.message || e)
+    // Pyodide そのものが壊れた (メモリ不足など): 画面側でワーカーを作り直してもらう
+    if (/fatal error|Aborted\(|out of memory|memory access out of bounds/i.test(msg)) {
+      flush(true)
+      post({ type: 'done', id, ok: false, reason: 'error', fatal: true, error: { type: 'MemoryError', message: 'Python が止まりました (メモリが足りなくなった可能性があります)。Python を立ち上げ直します', text: msg, frames: [] }, files: {}, ms: Math.round(performance.now() - t0) })
+      return
+    }
+    error = { type: 'Error', message: msg, text: msg, frames: [] }
   }
   flush(true)
   let files = {}
