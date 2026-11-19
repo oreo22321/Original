@@ -204,6 +204,9 @@ export const EN = {
   'オフ (内蔵 AI だけで動きます)': 'Off (built-in AI only)', '読み込み中…': 'Loading…', '使えます (メモリに読み込み済み)': 'Ready (loaded in memory)', '端末内の AI モデルを読み込みました': 'Loaded the on-device AI model',
   'いま読み込む': 'Load now', 'メモリから外す': 'Unload', 'モデルを削除': 'Delete model', '削除しました': 'Deleted', '削除できませんでした': 'Could not delete', 'オンにする': 'Turn on',
   'AI パネルで必要になったときに読み込みます (初回はダウンロード)': 'Loads when the AI panel needs it (downloads the first time)',
+  // v12.1: 実行環境・turtle・チェック
+  'すぐに描き終える': 'Finish drawing now', '画像として保存': 'Save as image', 'タートルの画面 (キー操作・タップを受け付けます)': 'Turtle screen (accepts keys and taps)',
+  'パスワードの入力': 'Password input', 'タートルで絵とゲーム': 'Turtle drawing and games', 'turtle で図形を描き、矢印キーで動かす': 'Draw shapes with turtle and move with the arrow keys', 'チェック': 'Check', 'int(input(…)) にする (数に変換)': 'Use int(input(…)) (convert to a number)',
 }
 
 // 変わる部分のある文言 (数・名前などを含む)
@@ -242,4 +245,21 @@ export const EN_PATTERNS = [
   [/^Python (\d+\.\d+\.\d+)$/, m => `Python ${m[1]}`],
   [/^「(.+)」のサンプルを作成します$/, m => `Creates the "${m[1]}" sample`],
   [/^トレースバック \((\d+)\)$/, m => `Traceback (${m[1]})`],
+  // v12.1: 実行する前のチェック (py-check.js)
+  [/^… 続きを表示 \(([\d,]+) 文字\)$/, m => `… Show the rest (${m[1]} characters)`],
+  [/^'(.+)' に直す$/, m => `Change to '${m[1]}'`],
+  [/^結果を (\w+) に代入する$/, m => `Assign the result to ${m[1]}`],
+  [/^モジュール '(.+)' に '(.+)' はありません(?: \(もしかして '(.+)'\?\))?$/, m => `Module '${m[1]}' has no '${m[2]}'${m[3] ? ` (did you mean '${m[3]}'?)` : ''}`],
+  [/^(\S+) に '(.+)' はありません(?: \(もしかして '(.+)'\?\))?$/, m => `${m[1]} has no '${m[2]}'${m[3] ? ` (did you mean '${m[3]}'?)` : ''}`],
+  [/^(文字列|リスト|辞書|集合|整数|小数|タプル) \((\w+)\) に '(.+)' はありません(?: \(もしかして '(.+)'\?\))?$/, m => `${m[2]} has no '${m[3]}'${m[4] ? ` (did you mean '${m[4]}'?)` : ''}`],
+  [/^'(.+)' というモジュールはありません \(もしかして '(.+)'\?\)$/, m => `There is no module '${m[1]}' (did you mean '${m[2]}'?)`],
+  [/^'(\w+)' は input\(\) の結果なので文字列 \(str\) です。数として計算するなら int\((\w+)\) で変換します$/, m => `'${m[1]}' comes from input(), so it is a str. Convert it with int(${m[2]}) to calculate with it`],
+  [/^'(\w+)' は input\(\) の結果なので文字列 \(str\) です。数と大きさを比べるなら int\((\w+)\) で変換します$/, m => `'${m[1]}' comes from input(), so it is a str. Convert it with int(${m[2]}) to compare it with a number`],
+  [/^文字列 \(str\) と数は (足し算|計算) できません \(str\(…\) か int\(…\) で型をそろえます\)$/, () => 'A str and a number cannot be combined (convert one with str(…) or int(…))'],
+  [/^(.+)\(\) に渡す引数 '(\w+)' が足りません$/, m => `${m[1]}() is missing the argument '${m[2]}'`],
+  [/^(.+)\(\) に渡す引数が多すぎます \(受け取れるのは (\d+) 個、渡しているのは (\d+) 個\)$/, m => `Too many arguments for ${m[1]}() (takes ${m[2]}, given ${m[3]})`],
+  [/^(.+)\(\) に '(\w+)' という名前の引数はありません(?: \(もしかして '(.+)'\?\))?$/, m => `${m[1]}() has no argument named '${m[2]}'${m[3] ? ` (did you mean '${m[3]}'?)` : ''}`],
+  [/^(.+)\(\) の引数 '(\w+)' を 2 回渡しています$/, m => `${m[1]}() got the argument '${m[2]}' twice`],
+  [/^(\w+)\(\) はリストなどを直接変えて None を返すので、結果を代入すると None になります/, m => `${m[1]}() changes the object in place and returns None, so the assigned value is None${m[1] === 'sort' ? ' (use sorted(…) for a new list)' : ''}`],
+  [/^文字列は変わらないので、(\w+)\(\) の結果を使っていません \((\w+) = .+\)$/, m => `Strings don't change, so the result of ${m[1]}() is unused (assign it: ${m[2]} = ${m[2]}.${m[1]}(…))`],
 ]

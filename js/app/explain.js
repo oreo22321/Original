@@ -46,7 +46,18 @@ const RULES = {
     [/module '(\w+)' has no attribute '(\w+)'/, m => ({ why: `モジュール ${m[1]} に ${q(m[2])} はありません。`, fixes: ['名前のスペルを確認します', `自分のファイル名が ${m[1]}.py になっていると、本物の ${m[1]} の代わりに読み込まれます。ファイル名を変えます`] })],
   ],
   ZeroDivisionError: [[/./, () => ({ why: '0 で割り算をしました。', fixes: ['割る数が 0 のときの処理を if で分けます', 'リストの長さで割るときは、空でないか確認します'] })]],
-  ModuleNotFoundError: [[/No module named '([\w.]+)'/, m => ({ why: `${q(m[1])} というモジュール (ライブラリ) が見つかりません。`, fixes: ['名前のスペルを確認します', '自分のファイルなら、同じプロジェクトにあるか、フォルダに __init__.py があるか確認します', 'pip install はできません。使えるライブラリは「使い方 → 使えるライブラリ」で確認できます'] })]],
+  ModuleNotFoundError: [
+    [/No module named '(tkinter|_tkinter|curses|readline|pty|termios|tty|dbm)'/, m => ({ why: `${q(m[1])} はブラウザで動く Python では使えません。`, fixes: [/tk/.test(m[1]) ? '絵や簡単なゲームは turtle、グラフは matplotlib、表は pandas で作れます' : null, '入出力は print() と input() を使います'] })],
+    [/No module named '([\w.]+)'/, m => ({ why: `${q(m[1])} というモジュール (ライブラリ) が見つかりません。`, fixes: ['名前のスペルを確認します', '自分のファイルなら、同じプロジェクトにあるか、フォルダに __init__.py があるか確認します', 'PyPI のライブラリは import すると自動で入ります。入らないときは、ブラウザで動く形 (pure Python) がないライブラリです', 'import 名と PyPI の名前が違うときは、コンソールで pip install 名前 を試します'] })],
+  ],
+  OSError: [
+    [/emscripten does not support processes|not supported|Function not implemented/i, () => ({ why: 'ブラウザで動く Python では、別のプログラムを起動すること (subprocess・os.system など) はできません。', fixes: ['Python の中で同じ処理を書きます (ファイル操作は open()・os・shutil が使えます)'] })],
+  ],
+  ConnectionError: [[/./, () => ({ why: 'インターネットの相手につながりませんでした。', fixes: ['ネットワークにつながっているか確認します', 'ブラウザからは、読み込みを許可しているサーバー (CORS 対応) にしか接続できません'] })]],
+  URLError: [[/./, () => ({ why: 'インターネットの相手につながりませんでした。', fixes: ['URL のスペルを確認します', 'ブラウザからは、読み込みを許可しているサーバー (CORS 対応) にしか接続できません'] })]],
+  RuntimeError: [
+    [/can't start new thread/, () => ({ why: 'この環境ではスレッドを同時に動かせません。', fixes: ['threading.Thread は start() した時点で順番に実行されます'] })],
+  ],
   ImportError: [[/cannot import name '(\w+)' from '([\w.]+)'/, m => ({ why: `${m[2]} に ${q(m[1])} はありません。`, fixes: ['名前のスペルを確認します', 'ファイル同士がお互いを import している (循環 import) と起きることがあります'] })]],
   RecursionError: [[/./, () => ({ why: '関数が自分自身を呼び出し続けて、終わらなくなりました。', fixes: ['再帰を止める条件 (if で return) があるか確認します', 'くり返しは for / while でも書けます'] })]],
   IndentationError: [[/./, () => ({ why: '字下げ (行の先頭の空白) が正しくありません。Python は字下げでブロックを表します。', fixes: ['if / for / def などの次の行は、スペース 4 つ下げます', 'タブとスペースを混ぜないようにします (整形 ⇧⌥F で直せます)'] })]],

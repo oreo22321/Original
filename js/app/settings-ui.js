@@ -6,7 +6,7 @@ import { h, icon, toast, modal, confirmDialog, download } from './ui.js'
 import * as vfs from './vfs.js'
 import { app, command, runCommand } from './app.js'
 
-export const APP_VERSION = '12.0.0'
+export const APP_VERSION = '12.1.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],

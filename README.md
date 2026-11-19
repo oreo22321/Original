@@ -3,8 +3,8 @@
 ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタです。インストールは要りません。
 本物の Python (CPython 3.14 を WebAssembly にした [Pyodide](https://pyodide.org/)) が端末の中で動くので、書いたコードをその場で実行できます。コードはサーバーに送りません。
 
-- **書く**: 補完 (jedi)・引数のヒント・説明・エラーチェック (pyflakes)・ワンタップの修正・整形 (autopep8)・打ち間違いの自動修正
-- **動かす**: `print` / `input()` / ■ で停止 / いくつものファイルの `import` / ファイルの読み書き / matplotlib のグラフ
+- **書く**: 補完 (jedi。numpy・pandas などライブラリの中身も)・自動で import・引数のヒント・説明・エラーチェック (pyflakes + 実行前のチェック)・ワンタップの修正・整形 (autopep8)・打ち間違いの自動修正
+- **動かす**: `print` / `input()` / ■ で停止 / いくつものファイルの `import` / ファイルの読み書き / matplotlib のグラフ / turtle / asyncio / PyPI のライブラリ (自動でインストール)
 - **調べる**: ブレークポイント・ステップ実行・変数とウォッチ・コンソール
 - **頼む**: 内蔵の AI (Forge AI) が、直す・説明する・コメントや型ヒントを付ける・コードを作る・質問に答える
 
@@ -14,7 +14,10 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 
 - **補完**: 変数・関数・クラス・モジュールの中身 (`math.`・`"abc".`・自分のクラスのメソッド・ほかのファイルの関数) を、型を推論して候補に出します (jedi)。
 - **引数のヒント・説明**: `(` の中で引数を表示。名前を長押し (PC はマウスを乗せる) で docstring を表示します。
+- **ライブラリの補完**: `import` した numpy・pandas・PyPI のライブラリも、中身 (`np.arange`・`df.groupby` など) を候補に出します (ライブラリの .py / .pyi だけを取り出して使うので軽い)。
+- **自動で import**: まだ import していない `random` や `sqrt` も候補に出て、選ぶとファイルの先頭に `import random` / `from math import sqrt` を足します。
 - **エラーチェック**: 構文エラーと、定義されていない名前・使っていない import などを、書いている間に日本語で表示します (pyflakes)。「もしかして `print`?」のように近い名前も提案します。
+- **実行前のチェック**: 実行しなくても分かる間違いを教えます — `input()` の結果 (文字列) を数として使っている (`age + 1`・`age > 18`)、`math.squareroot` のようにモジュールにない名前、`import ramdom`、引数の数や名前の間違い (自分の関数・クラス・組み込み・標準ライブラリ)、`nums.push()` `name.uppercase()` のようなないメソッド、`x = nums.sort()` (None になる)、結果を使っていない `s.upper()`。多くはワンタップで直せます。
 - **ワンタップの修正**: `:` の付け忘れ・import 忘れ・字下げ・全角記号・打ち間違い・`is` と `==` など。行の右の説明をタップ (PC は ⌘/Ctrl + .) すると直し方を選べます。
 - **自動修正**: 全角の `（）：＝”` や全角スペース、iPhone が変える `“ ”`、`pirnt` → `print` のような打ち間違いを、入力した時点で直します (文字列とコメントの中はそのまま。設定でオフにできます)。
 - **整形**: PEP 8 に合わせて空白・字下げ・空行をそろえます (Shift + Alt + F、保存時に整形も可)。
@@ -27,9 +30,16 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 - **input()**: 入力を待つと、出力の下に入力欄が出ます。
 - **停止**: ■ でいつでも止められます (`KeyboardInterrupt`)。設定 → 実行 で最大実行時間も決められます。
 - **いくつものファイル**: 同じプロジェクトの `.py` は `import` できます。`open("data.csv")` でプロジェクトのファイルを読め、プログラムが書いたファイルはファイル一覧に入ります。
-- **ライブラリ**: 標準ライブラリはほぼすべて (オフラインでも)。numpy・pandas・matplotlib・scipy・sympy・scikit-learn・pillow・beautifulsoup4 など Pyodide が用意しているものは `import` するだけで使えます (はじめて使うときだけインターネットから読み込み、あとは端末に保存)。`plt.show()` の図は出力に表示されます。
-- **コンソール**: 出力の一番下の欄で、式やコードをその場で試せます。実行が終わった後の変数も使えます。
-- 使えないもの: `tkinter` / `turtle` (画面を開くもの)、`pip install`、`subprocess`、ふつうのネットワーク通信 (`socket` / `requests`)。
+- **ライブラリ**: 標準ライブラリはほぼすべて (オフラインでも)。numpy・pandas・matplotlib・scipy・sympy・scikit-learn・pillow・beautifulsoup4・requests など Pyodide が用意しているものは `import` するだけで使えます (はじめて使うときだけインターネットから読み込み、あとは端末に保存)。`plt.show()` の図は出力に表示され、`plt.pause()` で動くグラフも描けます。
+- **PyPI のライブラリ**: Pyodide にないものも、`import` すると PyPI から自動で入ります (micropip。pure Python のもの)。`requirements.txt` があれば実行の前にまとめて入れます。コンソールでは `pip install 名前`・`pip list`・`pip show`・`pip uninstall` が使えます。
+- **turtle**: タートルグラフィックスを出力のキャンバスに描きます (本物と同じ速さのアニメーション・塗りつぶし・文字・スタンプ・形)。`onkey` / `onkeypress` / `onclick` / `ontimer` / `mainloop` でゲームも作れ、スマホでは使うキーのボタンが出ます。描いた絵は画像で保存できます。
+- **asyncio**: `asyncio.run()`・`gather`・`get_event_loop().run_until_complete()` が動きます (ブラウザの特別な仕組みがなくても)。コンソールでは `await` をそのまま書けます。
+- **スレッド・プロセス**: `threading`・`concurrent.futures`・`multiprocessing` は、同時には動かせないため順番に実行します (結果は同じ)。
+- **time.sleep**: 待つ前に出力をすぐ表示し、待っている途中でも ■ で止まります。
+- **インターネット**: `urllib.request`・`requests` で読み込めます (相手が CORS を許可しているとき)。`webbrowser.open()` は出力にリンクを出します。
+- **表示**: `display(df)` で pandas の表を表として、PIL の `img.show()` で画像を表示します。`getpass.getpass()` は伏せ字の入力欄になります。
+- **コンソール**: 出力の一番下の欄で、式やコードをその場で試せます。実行が終わった後の変数も使えます。pandas の表は表で表示します。
+- 使えないもの: `tkinter` などウィンドウを出す GUI、`pygame` の画面、`subprocess`、`socket` での直接の通信。
 
 ### デバッガー
 
@@ -145,7 +155,8 @@ css/, js/                    アプリ本体のソース (ES モジュール)
     ghost.js / ai.js         インライン候補 (ゴーストテキスト) と AI による続きの提案
     errorlens.js             行の右に出るエラー表示
   js/app/                    画面 (ファイル一覧・タブ・実行パネル・デバッグ・設定・初回案内など)
-    runner.js                実行 (Python ワーカーとの受け渡し・input()・停止・図・コンソール)
+    runner.js                実行 (Python ワーカーとの受け渡し・input()・停止・図・表・リンク・コンソール)
+    turtle-view.js           turtle の画面 (キャンバスに描く・アニメーション・キー操作とタップを Python へ)
     debug-panel.js           デバッガーの画面 (変数・ウォッチ・呼び出し履歴・ブレークポイント)
     code-nav.js              定義へ移動・参照・名前の変更
     explain.js               実行エラーの日本語の説明
@@ -166,8 +177,12 @@ css/, js/                    アプリ本体のソース (ES モジュール)
     engine.js                依頼の振り分けと返事の組み立て
     llm.js                   高性能モード (端末内 LLM・WebLLM)
   js/workers/                Web Worker
-    python-worker.js         実行用の Python (Pyodide)・デバッガー (bdb + sys.monitoring)
-    pytools-worker.js        エディタ用の Python (jedi・pyflakes・autopep8)。実行中でも補完やチェックが止まりません
+    python-worker.js         実行用の Python (Pyodide)・デバッガー (bdb + sys.monitoring)・PyPI からのインストール (micropip)
+    py-runtime.js            ふつうの Python との違いを埋める道具 (time.sleep・スレッド・asyncio・urllib・display・multiprocessing・webbrowser)
+    py-turtle.js             ブラウザ用の turtle (描く命令を画面へ送る・キー操作やタイマーを受け取る)
+    py-packages.js           import 名と PyPI の名前の対応・ブラウザでは使えないもの
+    pytools-worker.js        エディタ用の Python (jedi・pyflakes・autopep8)。ライブラリの .py / .pyi を取り出して補完に使う・import の候補
+    py-check.js              実行前のチェック (モジュールにない名前・引数の数・input() と数・ないメソッド など)
     py-analysis.js           ast による解析 (説明・レビュー・型ヒント用。pytools ワーカーで動きます)
     llm-worker.js            端末内 LLM
 vendor/                      同梱ライブラリ (CodeMirror 6, fflate, WebLLM, Pyodide, jedi などの wheel)。ライセンスは vendor/LICENSES.txt
@@ -177,7 +192,7 @@ tools/                       ビルド・ローカルサーバー・ライブラ
 ```
 
 - テスト: `node tests/run-all.mjs` (すべてのユニットテスト。Python のワーカーも Node の中で動かします)
-  - `python` (実行) / `pydebug` (デバッガー) / `pytools` (補完・チェック・整形・参照・名前の変更) / `ai` (Forge AI) / `github` (GitHub 同期。偽の GitHub `tests/mock-github.mjs` を相手に)
+  - `python` (実行) / `runtime` (asyncio・スレッド・turtle・urllib など。`NET=1` で PyPI からのインストールも) / `pydebug` (デバッガー) / `pytools` (補完・チェック・整形・参照・名前の変更) / `ai` (Forge AI) / `github` (GitHub 同期。偽の GitHub `tests/mock-github.mjs` を相手に)
   - ブラウザでの通し確認: `node tests/e2e/run.mjs` (`cd tools && npm ci && npx playwright install chromium` が必要)
   - GitHub Actions (`.github/workflows/test.yml`) が、main へのプッシュとプルリクエストのたびに、ユニットテスト・配信用ファイルが最新か・ブラウザでの通し確認を行います
 - **ファイルを変更したら `node tools/build.mjs`** を実行してください (dist/ のまとめ直し・index.html の先読み・Service Worker のキャッシュ一覧を更新します。CI は dist/ が最新でないと失敗します)

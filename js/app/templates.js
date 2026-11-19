@@ -184,6 +184,70 @@ class TodoList:
 `,
     },
   },
+  turtle: {
+    name: 'タートルで絵とゲーム',
+    desc: 'turtle で図形を描き、矢印キーで動かす',
+    icon: 'brush',
+    main: 'main.py',
+    files: {
+      'main.py': `# タートルで絵とゲーム
+# ▶ で実行すると、出力に絵が描かれます。描き終わったら矢印キー (スマホは下のボタン) で動かせます
+import turtle
+
+screen = turtle.Screen()
+screen.title("タートル")
+screen.bgcolor("white")
+
+pen = turtle.Turtle()
+pen.speed(8)
+
+
+def star(size, color):
+    """星を描く"""
+    pen.color(color, color)
+    pen.begin_fill()
+    for _ in range(5):
+        pen.forward(size)
+        pen.right(144)
+    pen.end_fill()
+
+
+# 1. 星をいくつか描く
+for x, color in [(-200, "gold"), (-50, "tomato"), (100, "skyblue")]:
+    pen.penup()
+    pen.goto(x, 120)
+    pen.pendown()
+    star(80, color)
+
+# 2. 文字を書く
+pen.penup()
+pen.goto(0, -20)
+pen.color("black")
+pen.write("矢印キーで動かそう", align="center", font=("Arial", 16, "bold"))
+pen.hideturtle()
+
+# 3. 矢印キーで動くタートル
+player = turtle.Turtle()
+player.shape("turtle")
+player.color("seagreen")
+player.penup()
+player.goto(0, -120)
+
+
+def move(dx, dy, heading):
+    player.setheading(heading)
+    player.goto(player.xcor() + dx, player.ycor() + dy)
+
+
+screen.onkeypress(lambda: move(0, 20, 90), "Up")
+screen.onkeypress(lambda: move(0, -20, 270), "Down")
+screen.onkeypress(lambda: move(-20, 0, 180), "Left")
+screen.onkeypress(lambda: move(20, 0, 0), "Right")
+screen.listen()
+turtle.done()  # ■ で終わります
+`,
+    },
+  },
   empty: {
     name: '空のプロジェクト',
     desc: 'main.py だけ',

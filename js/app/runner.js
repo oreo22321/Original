@@ -7,11 +7,33 @@ import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { langOf } from '../editor/setup.js'
 import { explainError } from './explain.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
+import { TurtleView } from './turtle-view.js'
 
 const MAX_DOM_LINES = 3000
 // 'File "main.py", line 3' / 'main.py:3' をタップで開けるリンクにする
 const LINK_RE = /(File "[^"]+", line \d+|[\w./-]+\.py:\d+)/
 const LINK_PARTS = /^(?:File "([^"]+)", line (\d+)|([\w./-]+\.py):(\d+))$/
+const PROJECT_DIR = '/home/pyodide/project/'
+
+// プログラムが出した HTML (pandas の表など) を、安全な部分 (表と文字の飾り) だけにする
+const SAFE_TAGS = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD', 'CAPTION', 'COLGROUP', 'COL', 'DIV', 'SPAN', 'P', 'B', 'I', 'STRONG', 'EM', 'BR', 'SMALL', 'CODE', 'PRE', 'SUB', 'SUP', 'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'HR'])
+export function safeHtml(html) {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
+  const copy = (node, out) => {
+    for (const n of node.childNodes) {
+      if (n.nodeType === 3) out.append(n.textContent)
+      else if (n.nodeType === 1 && SAFE_TAGS.has(n.tagName)) {
+        const el = document.createElement(n.tagName.toLowerCase())
+        for (const a of ['colspan', 'rowspan']) if (n.hasAttribute(a)) el.setAttribute(a, String(Math.min(1000, parseInt(n.getAttribute(a), 10) || 1)))
+        copy(n, el)
+        out.append(el)
+      } else if (n.nodeType === 1 && !/^(SCRIPT|STYLE|TEMPLATE|IFRAME|OBJECT|EMBED|SVG|MATH|NOSCRIPT)$/.test(n.tagName)) copy(n, out)
+    }
+  }
+  const frag = document.createDocumentFragment()
+  copy(doc.body, frag)
+  return frag
+}
 
 export class Runner {
   constructor(root) {
@@ -34,7 +56,7 @@ export class Runner {
     on('active', () => this.scheduleProblems(120))
     on('diagnostics', doc => { if (doc && doc.path === app.editors.active) this.scheduleProblems(60) })
     // ▶ を押してすぐ実行できるよう、手が空いたら Python を準備しておく
-    setTimeout(() => this.ensureWorker(), 1500)
+    setTimeout(() => this.ensureWorker(), 300)
   }
 
   build() {
@@ -107,11 +129,13 @@ export class Runner {
     this.last = null
     this.holdScroll = false
     this.inputRow = null
+    if (this.turtle) { this.turtle.finish(); this.turtle = null }
+    this.imgKeys = new Map()
     this.placeholder()
   }
 
   outputText() {
-    return [...this.outEl.querySelectorAll('.out-line, .out-error')].map(el => el.dataset.text || el.innerText).join('\n')
+    return [...this.outEl.querySelectorAll('.out-line, .out-error, .out-html')].map(el => el.dataset.text || el.innerText).join('\n')
   }
 
   applyQuery() {
@@ -121,9 +145,13 @@ export class Runner {
 
   // ファイルの行をタップで開けるリンクにする
   linkify(el, text) {
-    for (const p of String(text).split(LINK_RE)) {
+    text = String(text)
+    // 長い行や、ファイルの場所がない行はそのまま (正規表現が遅くならないように)
+    if (text.length > 4000 || !(text.includes('.py') || text.includes('File "'))) { if (text) el.append(text); return }
+    for (const p of text.split(LINK_RE)) {
       const m = LINK_PARTS.exec(p)
-      const file = m && (m[1] || m[3])
+      let file = m && (m[1] || m[3])
+      if (file && file.startsWith(PROJECT_DIR)) file = file.slice(PROJECT_DIR.length)
       if (m && app.files.some(f => f.path === file)) {
         el.append(h('a', { class: 'out-link', href: '#', onclick: e => { e.preventDefault(); app.editors.open(file, { line: Number(m[2] || m[4]) }) } }, p))
       } else if (p) el.append(p)
@@ -134,7 +162,13 @@ export class Runner {
     const el = h('div', { class: 'out-line ' + kind })
     el.dataset.text = text
     const body = h('span', { class: 'out-text' })
-    this.linkify(body, text)
+    // とても長い行は先頭だけ表示して、タップで全部 (コピーでは全部)
+    const LONG = 20000
+    if (text.length > LONG) {
+      body.append(text.slice(0, LONG))
+      const more = h('button', { class: 'btn small ghost out-more', onclick: () => { more.remove(); body.append(text.slice(LONG)) } }, `… 続きを表示 (${(text.length - LONG).toLocaleString()} 文字)`)
+      body.append(more)
+    } else this.linkify(body, text)
     el.append(body)
     if (this.query && !text.toLowerCase().includes(this.query)) el.classList.add('q-hide')
     return el
@@ -198,7 +232,7 @@ export class Runner {
     }
     // 共有メモリ (input() と停止に使う)。使えない環境では、停止はワーカーごと止める
     if (self.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined') {
-      this.shared = { interrupt: new SharedArrayBuffer(4), ctl: new SharedArrayBuffer(8), buf: new SharedArrayBuffer(64 * 1024), dctl: new SharedArrayBuffer(8), dbuf: new SharedArrayBuffer(256 * 1024) }
+      this.shared = { interrupt: new SharedArrayBuffer(4), ctl: new SharedArrayBuffer(8), buf: new SharedArrayBuffer(64 * 1024), dctl: new SharedArrayBuffer(8), dbuf: new SharedArrayBuffer(256 * 1024), ectl: new SharedArrayBuffer(8), ebuf: new SharedArrayBuffer(64 * 1024) }
     } else this.shared = null
     w.onmessage = e => { if (this.worker === w) this.onMessage(e.data) }
     w.onerror = e => {
@@ -285,6 +319,11 @@ export class Runner {
     if (!w) return
     this.errors = 0
     this.holdScroll = false
+    if (this.turtle) this.turtle.flushAll()
+    this.turtle = null
+    this.imgKeys = new Map()
+    this.eq = []
+    if (this.shared) Atomics.store(new Int32Array(this.shared.ectl), 0, 0)
     const id = ++this.seq
     this.runId = id
     // ブレークポイントがあれば、そこで止まる (なくても ⏸ や breakpoint() で途中から止められる)
@@ -306,10 +345,10 @@ export class Runner {
   // ============================================================
   // 入力 (input()) — 出力の下に入力欄を出す
   // ============================================================
-  showInput() {
+  showInput(password = false) {
     this.removeInput()
     this.inputPending = true
-    const field = h('input', { class: 'input out-input-field', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': 'プログラムへの入力' })
+    const field = h('input', { class: 'input out-input-field', type: password ? 'password' : 'text', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': password ? 'パスワードの入力' : 'プログラムへの入力' })
     const send = (eof = false) => {
       if (!this.shared || !this.inputPending) return
       const ctl = new Int32Array(this.shared.ctl)
@@ -320,7 +359,7 @@ export class Runner {
       Atomics.store(ctl, 1, n)
       Atomics.store(ctl, 0, eof ? 2 : 1)
       Atomics.notify(ctl, 0)
-      if (!eof) this.append([{ kind: 'input-echo', text: field.value }])
+      if (!eof) this.append([{ kind: 'input-echo', text: password ? '•'.repeat(Math.min(12, field.value.length)) : field.value }])
       this.inputPending = false
       this.removeInput()
       this.renderTabs()
@@ -402,7 +441,7 @@ export class Runner {
       Atomics.store(ctl, 1, bytes.length)
       Atomics.store(ctl, 0, 1)
       Atomics.notify(ctl, 0)
-      if (!this.debug.paused) { const ib = new Int32Array(this.shared.interrupt); if (ib[0] === 0) ib[0] = 10 }
+      if (!this.debug.paused) { const ib = new Int32Array(this.shared.interrupt); if (ib[0] === 0) { ib[0] = 10; Atomics.notify(ib, 0) } }
     }
     if (this.dq.length) this.dqTimer = setTimeout(() => this.pumpDebug(), 30)
   }
@@ -433,6 +472,8 @@ export class Runner {
 
   finished(reason, ms) {
     this.debug.onFinished()
+    if (this.turtle) this.turtle.finish()
+    this.eq = []
     this.inputPending = false
     this.removeInput()
     const sec = ((ms !== undefined ? ms : performance.now() - this.t0) / 1000).toFixed(2)
@@ -458,11 +499,15 @@ export class Runner {
       case 'resumed': if (this.debug.paused) this.debug.onResumed(); break
       case 'expanded': this.debug.onExpanded(m); break
       case 'watchValues': this.debug.onWatchValues(m); break
-      case 'input': this.showInput(); break
+      case 'input': this.showInput(!!m.password); break
       case 'inputDone': if (this.inputPending) { this.inputPending = false; this.removeInput(); this.renderTabs() } break
-      case 'image': this.showImage(m.data); break
+      case 'image': this.showImage(m.data, m.key, m.mime); break
+      case 'html': this.showHtml(m.html, m.text); break
+      case 'link': this.showLink(m.url); break
+      case 'turtle': this.showTurtle(m.ops); break
+      case 'evTaken': this.pumpEvents(); break
       case 'evalResult':
-        if (m.ok) { if (m.value !== null && m.value !== undefined) this.append([{ kind: 'result', text: m.value }]) }
+        if (m.ok) { if (m.html) this.showHtml(m.html, m.value); else if (m.value !== null && m.value !== undefined) this.append([{ kind: 'result', text: m.value }]) }
         else this.append([{ kind: 'error', text: m.error }])
         break
       case 'done':
@@ -496,16 +541,86 @@ export class Runner {
     if (names.length) this.line('meta', `プログラムが書いたファイル: ${names.slice(0, 5).join(', ')}${names.length > 5 ? ` ほか ${names.length - 5} 個` : ''}`)
   }
 
-  showImage(b64) {
-    const src = 'data:image/png;base64,' + b64
-    const img = h('img', { class: 'out-image', src, alt: '図', onclick: () => modal({ title: '図', wide: true, body: h('img', { class: 'out-image-full', src, alt: '図' }), actions: [{ label: '保存', run: () => { const a = h('a', { href: src, download: 'figure.png' }); a.click(); return false } }, { label: '閉じる', primary: true, value: null }] }) })
+  // 出力に、行ではないもの (図・表・turtle の画面) を入れる
+  appendBlock(el) {
     if (!this.lineCount) this.outEl.textContent = ''
-    const wrap = h('div', { class: 'out-figure' }, img)
-    if (this.inputRow && this.inputRow.parentElement === this.outEl) this.outEl.insertBefore(wrap, this.inputRow)
-    else this.outEl.append(wrap)
+    const out = this.outEl
+    const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 80
+    if (this.inputRow && this.inputRow.parentElement === out) out.insertBefore(el, this.inputRow)
+    else out.append(el)
     this.lineCount++
     this.last = null
-    img.addEventListener('load', () => { this.outEl.scrollTop = this.outEl.scrollHeight })
+    if (atBottom && !this.holdScroll) out.scrollTop = out.scrollHeight
+  }
+
+  showImage(b64, key = null, mime = 'image/png') {
+    const src = `data:${mime || 'image/png'};base64,` + b64
+    // plt.pause() で描き直した図は、同じ場所で差し替える
+    const prev = key && this.imgKeys && this.imgKeys.get(key)
+    if (prev && prev.isConnected) { prev.src = src; return }
+    const img = h('img', { class: 'out-image', src, alt: '図', onclick: () => modal({ title: '図', wide: true, body: h('img', { class: 'out-image-full', src: img.src, alt: '図' }), actions: [{ label: '保存', run: () => { const a = h('a', { href: img.src, download: mime === 'image/svg+xml' ? 'figure.svg' : 'figure.png' }); a.click(); return false } }, { label: '閉じる', primary: true, value: null }] }) })
+    if (key) { if (!this.imgKeys) this.imgKeys = new Map(); this.imgKeys.set(key, img) }
+    this.appendBlock(h('div', { class: 'out-figure' }, img))
+    img.addEventListener('load', () => { if (!this.holdScroll) this.outEl.scrollTop = this.outEl.scrollHeight })
+  }
+
+  // pandas の表など (安全な HTML だけ)
+  showHtml(html, text = '') {
+    let frag
+    try { frag = safeHtml(html) } catch { this.append([{ kind: 'result', text: text || html }]); return }
+    const el = h('div', { class: 'out-html' }, frag)
+    el.dataset.text = text || el.textContent
+    this.appendBlock(el)
+  }
+
+  showLink(url) {
+    let u
+    try { u = new URL(url) } catch {}
+    if (!u || !/^https?:$/.test(u.protocol)) { this.append([{ kind: 'meta', text: 'webbrowser: ' + url }]); return }
+    const el = h('div', { class: 'out-line meta out-weblink' }, icon('link', 14), h('a', { href: u.href, target: '_blank', rel: 'noopener noreferrer' }, u.href))
+    el.dataset.text = u.href
+    this.appendBlock(el)
+  }
+
+  // turtle: 実行ごとに 1 つの画面
+  showTurtle(json) {
+    let ops
+    try { ops = JSON.parse(json) } catch { return }
+    if (!this.turtle) {
+      this.turtle = new TurtleView(ev => this.sendEvent(ev))
+      this.turtle.live = !!this.running
+      this.appendBlock(this.turtle.el)
+      // 絵が見えるように、画面の上端までスクロールして止める (あとの出力で流れないように)
+      if (!this.holdScroll) {
+        this.holdScroll = true
+        const el = this.turtle.el, out = this.outEl
+        requestAnimationFrame(() => { out.scrollTop = Math.max(0, el.offsetTop - out.offsetTop - 6) })
+      }
+    }
+    this.turtle.push(ops)
+  }
+
+  // turtle のキー操作・クリック → 共有メモリ → Python
+  sendEvent(ev) {
+    if (!this.shared || !this.running) return
+    this.eq = this.eq || []
+    if (this.eq.length < 200) this.eq.push(ev)
+    this.pumpEvents()
+  }
+  pumpEvents() {
+    clearTimeout(this.eqTimer)
+    if (!this.shared || !this.running || !this.eq || !this.eq.length) return
+    const ctl = new Int32Array(this.shared.ectl)
+    if (Atomics.load(ctl, 0) === 0) {
+      const bytes = new TextEncoder().encode(JSON.stringify(this.eq.splice(0)))
+      const buf = new Uint8Array(this.shared.ebuf)
+      if (bytes.length <= buf.length) {
+        buf.set(bytes)
+        Atomics.store(ctl, 1, bytes.length)
+        Atomics.store(ctl, 0, 1)
+        Atomics.notify(ctl, 0)
+      }
+    } else this.eqTimer = setTimeout(() => this.pumpEvents(), 40)
   }
 
   showError(err) {
@@ -586,7 +701,10 @@ export class Runner {
     if (!this.running) return
     const info = this.running
     if (this.shared) {
-      new Int32Array(this.shared.interrupt)[0] = 2
+      const ib = new Int32Array(this.shared.interrupt)
+      ib[0] = 2
+      Atomics.notify(ib, 0)   // time.sleep で待っている途中でも、すぐ止まる
+      Atomics.notify(new Int32Array(this.shared.ectl), 0)
       // input() で待っている途中なら、待つのをやめさせる
       if (this.inputPending) { const ctl = new Int32Array(this.shared.ctl); Atomics.store(ctl, 0, 2); Atomics.notify(ctl, 0) }
       setTimeout(() => {

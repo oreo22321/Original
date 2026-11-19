@@ -129,6 +129,74 @@ const output = page => page.evaluate(() => (document.querySelector('.output') ||
     })
     if (!names.includes('sqrt')) throw new Error(names.join(','))
   })
+  await step(page, 'src: pre-run check (input() used as a number) with a one-tap fix', async () => {
+    await setDoc('age = input("年齢: ")\nprint(age + 1)\n')
+    let seen = false
+    for (let i = 0; i < 120 && !seen; i++) { await page.waitForTimeout(250); seen = await hasDiag('input\\(\\) の結果なので文字列') }
+    if (!seen) throw new Error('no check warning')
+    await page.evaluate(async () => {
+      const { forEachDiagnostic } = await import('/vendor/codemirror.js')
+      const v = window.__app.editors.activeView()
+      forEachDiagnostic(v.state, (d, from, to) => { if (/input\(\)/.test(d.message) && d.actions) d.actions[0].apply(v, from, to) })
+    })
+    const doc = await page.evaluate(() => window.__app.editors.activeView().state.doc.toString())
+    if (!/age = int\(input\("年齢: "\)\)/.test(doc)) throw new Error(doc)
+  })
+  await step(page, 'src: auto-import completion adds the import line', async () => {
+    await setDoc('x = sqr')
+    await page.evaluate(() => { const v = window.__app.editors.activeView(); v.focus(); v.dispatch({ selection: { anchor: v.state.doc.length } }) })
+    const { startCompletion, acceptCompletion, currentCompletions } = { startCompletion: 'startCompletion', acceptCompletion: 'acceptCompletion', currentCompletions: 'currentCompletions' }
+    await page.evaluate(async names => {
+      const cm = await import('/vendor/codemirror.js')
+      cm[names.startCompletion](window.__app.editors.activeView())
+    }, { startCompletion })
+    let picked = false
+    for (let i = 0; i < 60 && !picked; i++) {
+      await page.waitForTimeout(200)
+      picked = await page.evaluate(async names => {
+        const cm = await import('/vendor/codemirror.js')
+        const v = window.__app.editors.activeView()
+        const list = cm[names.currentCompletions](v.state)
+        const idx = list.findIndex(c => c.label === 'sqrt' && /from math import sqrt/.test(c.detail || ''))
+        if (idx < 0) return false
+        v.dispatch({ effects: cm.setSelectedCompletion(idx) })
+        return cm[names.acceptCompletion](v)
+      }, { currentCompletions, acceptCompletion })
+    }
+    const doc = await page.evaluate(() => window.__app.editors.activeView().state.doc.toString())
+    if (!/^from math import sqrt\nx = sqrt$/.test(doc)) throw new Error(JSON.stringify(doc))
+  })
+  await step(page, 'src: turtle draws and takes key input', async () => {
+    await setDoc(`import turtle
+wn = turtle.Screen()
+p = turtle.Turtle()
+p.speed(0)
+p.circle(40)
+p.penup()
+def up():
+    p.sety(p.ycor() + 10)
+    if p.ycor() >= 29.9:
+        print("moved", p.position())
+        wn.bye()
+wn.onkeypress(up, "Up")
+wn.listen()
+turtle.done()
+`)
+    await run()
+    await page.waitForSelector('.out-turtle canvas.tt-top', { timeout: 60000 })
+    await waitOut('キー操作・クリックを待っています', 30000)
+    await page.focus('.out-turtle canvas.tt-top')
+    for (let i = 0; i < 3; i++) { await page.keyboard.press('ArrowUp'); await page.waitForTimeout(120) }
+    await waitOut('moved \\(-?0\\.00,30\\.00\\)', 20000).catch(async () => { throw new Error('output: ' + (await output(page)).slice(-400)) })
+    // 線が描かれている (真っ白ではない)
+    const ink = await page.evaluate(() => { const c = document.querySelector('.out-turtle canvas.tt-base'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] < 128) n++; return n })
+    if (ink < 50) throw new Error('nothing drawn: ' + ink)
+  })
+  await step(page, 'src: asyncio, threads and display()', async () => {
+    await setDoc('import asyncio, threading\nasync def main():\n    await asyncio.sleep(0.05)\n    return "async ok"\nprint(asyncio.run(main()))\nt = threading.Thread(target=lambda: print("thread ok"))\nt.start(); t.join()\nclass T:\n    def _repr_html_(self):\n        return "<table><tr><td>cell</td></tr></table>"\ndisplay(T())\n')
+    await run()
+    await waitOut('async ok[\\s\\S]*thread ok[\\s\\S]*cell', 60000)
+  })
   await step(page, 'src: debugger stops at a breakpoint', async () => {
     await setDoc('total = 0\nfor i in range(3):\n    total += i\nprint("sum", total)\n')
     await page.evaluate(async () => {
