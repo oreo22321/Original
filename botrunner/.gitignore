@@ -1,0 +1,4 @@
+# bot のコード・トークン・ログ (ここに入るものは GitHub に上げない)
+data/
+.venv/
+__pycache__/

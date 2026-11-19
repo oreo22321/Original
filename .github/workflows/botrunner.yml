@@ -1,0 +1,25 @@
+# BotRunner (Discord bot 管理アプリ) のテスト
+name: botrunner
+
+on:
+  push:
+    branches: [main]
+    paths: ['botrunner/**', '.github/workflows/botrunner.yml']
+  pull_request:
+    paths: ['botrunner/**', '.github/workflows/botrunner.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r botrunner/requirements.txt
+      - run: python -m unittest discover -s botrunner/tests -v

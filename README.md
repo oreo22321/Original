@@ -1,5 +1,7 @@
 # ForgeCode — スマホ・iPad で使える Python エディタ
 
+> このリポジトリには、Discord bot を 24 時間無料で動かす管理アプリ **[BotRunner](botrunner/README.md)** も入っています。
+
 ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタです。インストールは要りません。
 本物の Python (CPython 3.14 を WebAssembly にした [Pyodide](https://pyodide.org/)) が端末の中で動くので、書いたコードをその場で実行できます。コードはサーバーに送りません。
 
