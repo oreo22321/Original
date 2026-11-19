@@ -1,13 +1,14 @@
 // 実行パネル: 出力 (コンソール・input・図) / 問題 / デバッグ — Python
 import * as vfs from './vfs.js'
 import { app, command, refreshFiles, runCommand } from './app.js'
-import { getSettings, on, emit, isTouch } from './store.js'
+import { getSettings, setSettings, on, emit, isTouch } from './store.js'
 import { h, icon, toast, copyText, haptic, menu, modal } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { langOf } from '../editor/setup.js'
 import { explainError } from './explain.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
 import { TurtleView } from './turtle-view.js'
+import { SurfaceView, SoundPlayer, handleRpc } from './surface.js'
 
 const MAX_DOM_LINES = 3000
 // 'File "main.py", line 3' / 'main.py:3' をタップで開けるリンクにする
@@ -51,7 +52,12 @@ export class Runner {
     this.seq = 0
     this.evalWaits = new Map()
     this.pyStatus = ''
+    this.full = false
+    this.surfaces = new Map()
+    this.sound = new SoundPlayer()
     this.build()
+    // 実行画面 (全画面) は、ブラウザの「戻る」でも閉じられる
+    addEventListener('popstate', () => { if (this.full) { this.pushed = false; this.exitFull() } })
     on('docchange', () => this.scheduleProblems())
     on('active', () => this.scheduleProblems(120))
     on('diagnostics', doc => { if (doc && doc.path === app.editors.active) this.scheduleProblems(60) })
@@ -71,7 +77,26 @@ export class Runner {
     this.probEl = h('div', { class: 'panel-view problems hidden' })
     this.debugEl = h('div', { class: 'panel-view debug-view hidden' })
     this.debug = new DebugPanel(this, this.debugEl)
-    this.root.append(this.head, this.outWrap, this.probEl, this.debugEl)
+    // 全画面の実行画面の上部 (左上に小さな「戻る」)
+    this.runTitle = h('span', { class: 'rh-file' })
+    this.runState = h('span', { class: 'rh-state' })
+    this.runActions = h('div', { class: 'rh-actions' })
+    this.runHead = h('div', { class: 'run-head' },
+      h('button', { class: 'rh-back', 'aria-label': '戻る', title: '戻る (Esc)', onclick: () => this.exitFull() }, icon('chevronLeft', 18), h('span', null, '戻る')),
+      h('div', { class: 'rh-title' }, this.runTitle, this.runState),
+      this.runActions)
+    this.root.append(this.runHead, this.head, this.outWrap, this.probEl, this.debugEl)
+    // 実行中に実行画面を閉じたとき、戻るためのボタン
+    this.pill = h('button', { class: 'run-pill hidden', onclick: () => this.enterFull() }, h('span', { class: 'spinner' }), h('span', { class: 'rp-text' }, '実行中'), h('span', { class: 'rp-open' }, '画面を開く'))
+    document.body.append(this.pill)
+    document.addEventListener('keydown', e => {
+      if (!this.full || e.key !== 'Escape' || e.defaultPrevented) return
+      if (document.querySelector('.modal-overlay, .menu-overlay, .sf-max')) return
+      const t = e.target
+      if (t && /^(INPUT|TEXTAREA)$/.test(t.tagName) && t.value) return
+      e.preventDefault()
+      this.exitFull()
+    })
     this.renderTabs()
     this.placeholder()
   }
@@ -131,6 +156,9 @@ export class Runner {
     this.inputRow = null
     if (this.turtle) { this.turtle.finish(); this.turtle = null }
     this.imgKeys = new Map()
+    this.endSurfaces()
+    this.surfaces = new Map()
+    if (this.tk) { this.tk.destroyAll(); this.tk = null }
     this.placeholder()
   }
 
@@ -153,7 +181,7 @@ export class Runner {
       let file = m && (m[1] || m[3])
       if (file && file.startsWith(PROJECT_DIR)) file = file.slice(PROJECT_DIR.length)
       if (m && app.files.some(f => f.path === file)) {
-        el.append(h('a', { class: 'out-link', href: '#', onclick: e => { e.preventDefault(); app.editors.open(file, { line: Number(m[2] || m[4]) }) } }, p))
+        el.append(h('a', { class: 'out-link', href: '#', onclick: e => { e.preventDefault(); this.exitFull(); app.editors.open(file, { line: Number(m[2] || m[4]) }) } }, p))
       } else if (p) el.append(p)
     }
   }
@@ -232,7 +260,7 @@ export class Runner {
     }
     // 共有メモリ (input() と停止に使う)。使えない環境では、停止はワーカーごと止める
     if (self.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined') {
-      this.shared = { interrupt: new SharedArrayBuffer(4), ctl: new SharedArrayBuffer(8), buf: new SharedArrayBuffer(64 * 1024), dctl: new SharedArrayBuffer(8), dbuf: new SharedArrayBuffer(256 * 1024), ectl: new SharedArrayBuffer(8), ebuf: new SharedArrayBuffer(64 * 1024) }
+      this.shared = { interrupt: new SharedArrayBuffer(4), ctl: new SharedArrayBuffer(8), buf: new SharedArrayBuffer(64 * 1024), dctl: new SharedArrayBuffer(8), dbuf: new SharedArrayBuffer(256 * 1024), ectl: new SharedArrayBuffer(8), ebuf: new SharedArrayBuffer(64 * 1024), fack: new SharedArrayBuffer(8) }
     } else this.shared = null
     w.onmessage = e => { if (this.worker === w) this.onMessage(e.data) }
     w.onerror = e => {
@@ -307,7 +335,8 @@ export class Runner {
     if (this.running) this.stop(true)
     app.editors.saveAll().catch(() => {})
     if (!agent) {
-      runCommand('togglePanel', true)
+      if (this.useFull(debug)) this.enterFull()
+      else runCommand('togglePanel', true)
       if (this.tab !== 'output') this.show('output')
     }
     if (s.clearOnRun) this.clear()
@@ -322,6 +351,13 @@ export class Runner {
     if (this.turtle) this.turtle.flushAll()
     this.turtle = null
     this.imgKeys = new Map()
+    this.endSurfaces()
+    this.surfaces = new Map()
+    this.tk = null
+    this.sound.stopAll()
+    this.runPath = path
+    this.runSelection = !!selection
+    this.lastReason = null
     this.eq = []
     if (this.shared) Atomics.store(new Int32Array(this.shared.ectl), 0, 0)
     const id = ++this.seq
@@ -370,9 +406,11 @@ export class Runner {
       h('button', { class: 'btn small ghost', title: '入力を終える (EOF)', onclick: () => send(true) }, '終わり'))
     this.outEl.append(this.inputRow)
     this.outEl.scrollTop = this.outEl.scrollHeight
-    runCommand('togglePanel', true)
+    if (this.useFull()) this.enterFull()
+    else runCommand('togglePanel', true)
     if (this.tab !== 'output') this.show('output')
     this.renderTabs()
+    this.updateRunHead()
     setTimeout(() => field.focus(), 30)
   }
   removeInput() {
@@ -450,6 +488,7 @@ export class Runner {
     this.running = info
     if (!info) clearInterval(this.watchdog)
     emit('running', info)
+    this.updateRunHead()
   }
 
   // 最大実行時間 (設定)。入力待ち・一時停止の間は数えない
@@ -472,7 +511,11 @@ export class Runner {
 
   finished(reason, ms) {
     this.debug.onFinished()
-    if (this.turtle) this.turtle.finish()
+    if (this.turtle) { this.turtle.finish(); this.turtle.el.classList.remove('sf-sticky') }
+    this.endSurfaces()
+    this.sound.stopAll()
+    this.lastReason = reason
+    this.lastSec = ((ms !== undefined ? ms : performance.now() - this.t0) / 1000)
     this.eq = []
     this.inputPending = false
     this.removeInput()
@@ -481,6 +524,7 @@ export class Runner {
     this.append([{ kind: reason === 'error' || reason === 'load' ? 'meta error' : 'meta', text: msg }])
     this.setRunning(null)
     this.renderTabs()
+    this.updateRunHead()
   }
 
   onMessage(m) {
@@ -505,6 +549,11 @@ export class Runner {
       case 'html': this.showHtml(m.html, m.text); break
       case 'link': this.showLink(m.url); break
       case 'turtle': this.showTurtle(m.ops); break
+      case 'frame': this.showFrame(m); break
+      case 'surface': this.onSurface(m); break
+      case 'rpc': handleRpc(m); break
+      case 'sound': this.sound.handle(m); break
+      case 'tk': this.showTk(m.ops); break
       case 'evTaken': this.pumpEvents(); break
       case 'evalResult':
         if (m.ok) { if (m.html) this.showHtml(m.html, m.value); else if (m.value !== null && m.value !== undefined) this.append([{ kind: 'result', text: m.value }]) }
@@ -590,12 +639,8 @@ export class Runner {
       this.turtle = new TurtleView(ev => this.sendEvent(ev))
       this.turtle.live = !!this.running
       this.appendBlock(this.turtle.el)
-      // 絵が見えるように、画面の上端までスクロールして止める (あとの出力で流れないように)
-      if (!this.holdScroll) {
-        this.holdScroll = true
-        const el = this.turtle.el, out = this.outEl
-        requestAnimationFrame(() => { out.scrollTop = Math.max(0, el.offsetTop - out.offsetTop - 6) })
-      }
+      // 絵は出力の上に留めて、あとの出力 (print) はその下に流す
+      if (this.running) this.pin(this.turtle.el)
     }
     this.turtle.push(ops)
   }
@@ -621,6 +666,131 @@ export class Runner {
         Atomics.notify(ctl, 0)
       }
     } else this.eqTimer = setTimeout(() => this.pumpEvents(), 40)
+  }
+
+  // ============================================================
+  // 図・ゲームの画面 (1 つのキャンバスで描き直す)
+  // ============================================================
+  showFrame(m) {
+    let sv = this.surfaces.get(m.key)
+    if (!sv || !sv.el.isConnected) {
+      sv = new SurfaceView({ key: m.key, kind: m.kind || 'fig', onEvent: ev => this.sendEvent(ev), ack: seq => this.ackFrame(seq) })
+      sv.live = !!this.running
+      this.surfaces.set(m.key, sv)
+      this.appendBlock(sv.el)
+      if (sv.kind === 'pg' && this.running) this.pin(sv.el)
+      if (sv.kind === 'pg' && this.pgKeys) sv.setKeys(this.pgKeys)
+    } else if (sv.frames === 1 && this.running) this.pin(sv.el) // 2 枚目が来た = 動いている図
+    sv.frame(m)
+  }
+  ackFrame(seq) {
+    if (!this.shared || !this.shared.fack) return
+    const a = new Int32Array(this.shared.fack)
+    if (seq > Atomics.load(a, 0)) { Atomics.store(a, 0, seq); Atomics.notify(a, 0) }
+  }
+  // 動いている絵は、出力の上に留める (print はその下に流れる)
+  pin(el) {
+    for (const x of this.outEl.querySelectorAll('.sf-sticky')) if (x !== el) x.classList.remove('sf-sticky')
+    el.classList.add('sf-sticky')
+  }
+  onSurface(m) {
+    if (m.op === 'keys') {
+      this.pgKeys = m.keys || []
+      for (const sv of this.surfaces.values()) if (sv.kind === 'pg') sv.setKeys(this.pgKeys)
+    } else if (m.op === 'close') {
+      const sv = this.surfaces.get(m.key)
+      if (sv) sv.finish()
+    } else if (m.op === 'caption') {
+      const sv = this.surfaces.get(m.key)
+      if (sv) sv.title = m.title
+      if (this.full) this.runTitle.textContent = m.title || this.runTitle.textContent
+    }
+  }
+  endSurfaces() {
+    this.pgKeys = null
+    for (const sv of this.surfaces.values()) sv.finish()
+    if (this.tk) this.tk.finish()
+  }
+  // tkinter の画面
+  async showTk(ops) {
+    if (!this.tk || !this.tk.el.isConnected) {
+      const { TkView } = await import('./tk-view.js')
+      if (!this.tk || !this.tk.el.isConnected) {
+        this.tk = new TkView(ev => this.sendEvent(ev))
+        this.tk.live = !!this.running
+        this.appendBlock(this.tk.el)
+      }
+    }
+    this.tk.push(ops)
+  }
+
+  // ============================================================
+  // 全画面の実行画面
+  // ============================================================
+  useFull(debug = false) {
+    const mode = getSettings().runView || 'full'
+    if (mode !== 'full' || debug || (this.debug && this.debug.paused)) return false
+    return !(this.running && this.running.debug)
+  }
+  enterFull() {
+    if (this.full) { this.updateRunHead(); return }
+    this.full = true
+    this.wasPanelOpen = !!(app.wb && app.wb.panelOpen)
+    this.root.classList.add('run-full')
+    document.body.classList.add('run-full-open')
+    if (this.tab !== 'output') this.show('output')
+    this.updateRunHead()
+    try { history.pushState({ fcRun: 1 }, ''); this.pushed = true } catch {}
+    requestAnimationFrame(() => { this.root.classList.add('run-full-in') })
+  }
+  exitFull() {
+    if (!this.full) return
+    this.full = false
+    this.root.classList.remove('run-full', 'run-full-in')
+    document.body.classList.remove('run-full-open')
+    for (const sv of this.surfaces.values()) sv.toggleMax(false)
+    if (app.wb) { app.wb.panelOpen = false; app.wb.togglePanel(this.wasPanelOpen && document.body.dataset.layout !== 'mobile') }
+    if (this.pushed) { this.pushed = false; try { if (history.state && history.state.fcRun) history.back() } catch {} }
+    this.updateRunHead()
+    const v = app.editors && app.editors.activeView()
+    if (v && document.body.dataset.layout !== 'mobile') setTimeout(() => v.focus(), 60)
+  }
+  updateRunHead() {
+    if (!this.runHead) return
+    const running = this.running
+    this.pill.classList.toggle('hidden', !running || this.full || (getSettings().runView || 'full') !== 'full')
+    const pt = this.pill.querySelector('.rp-text')
+    if (pt) pt.textContent = this.inputPending ? '入力待ち' : '実行中'
+    if (!this.full) return
+    if (this.consoleInput) this.consoleInput.placeholder = innerWidth < 600 ? '式やコードを入力 (例: 1 + 2)' : 'Python の式やコードを入力して Enter (例: 1 + 2, len(names))'
+    this.runTitle.textContent = this.runPath ? vfs.basename(this.runPath) + (this.runSelection ? ' (選択範囲)' : '') : '実行'
+    this.runState.className = 'rh-state'
+    this.runState.textContent = ''
+    if (running) {
+      this.runState.classList.add(this.inputPending ? 'wait' : 'run')
+      this.runState.append(h('span', { class: 'spinner' }), this.inputPending ? '入力待ち' : '実行中')
+    } else if (this.lastReason) {
+      const r = this.lastReason
+      this.runState.classList.add(r === 'error' || r === 'load' ? 'err' : r === 'stopped' ? 'stop' : 'ok')
+      this.runState.append(r === 'error' || r === 'load' ? '✕ エラー' : r === 'stopped' ? '■ 停止' : '✓ 完了', h('span', { class: 'rh-sec' }, ` ${(this.lastSec || 0).toFixed(2)} 秒`))
+    }
+    this.runActions.textContent = ''
+    const btn = (ic, title, fn, cls = '') => h('button', { class: 'icon-btn ' + cls, title, 'aria-label': title, onclick: fn }, icon(ic, 18))
+    if (running) this.runActions.append(h('button', { class: 'run-btn stop', title: '停止', 'aria-label': '停止', onclick: () => runCommand('stop') }, icon('stop', 16), h('span', null, '停止')))
+    else this.runActions.append(h('button', { class: 'run-btn', title: 'もう一度実行', 'aria-label': 'もう一度実行', onclick: () => this.rerun() }, icon('refresh', 16), h('span', null, 'もう一度')))
+    this.runActions.append(btn('more', 'その他', e => menu([
+      { label: '出力をコピー', icon: 'copy', run: () => copyText(this.outputText()).then(() => toast('出力をコピーしました', { icon: 'copy' })) },
+      { label: 'クリア', icon: 'trash', run: () => this.clear(), disabled: !!running },
+      { label: 'エラーと警告だけ表示', icon: 'filter', checked: this.filter !== 'all', run: () => { this.filter = this.filter === 'all' ? 'issues' : 'all'; this.outEl.classList.toggle('only-issues', this.filter !== 'all'); this.renderTabs() } },
+      { label: 'Python を再起動', icon: 'refresh', run: () => this.restartPython() },
+      '-',
+      { label: '実行結果を下のパネルに出す (全画面にしない)', icon: 'terminal', run: () => { setSettings({ runView: 'panel' }); this.exitFull(); runCommand('togglePanel', true); toast('実行結果は下のパネルに出します (設定 → 実行 で戻せます)') } },
+    ], e.currentTarget, { title: '実行' })))
+  }
+  rerun() {
+    const p = this.runPath
+    if (this.runSelection) { this.exitFull(); return }
+    this.run(p ? { path: p } : {})
   }
 
   showError(err) {
@@ -658,9 +828,9 @@ export class Runner {
       el.append(tb)
     }
     const acts = h('div', { class: 'oe-actions' })
-    if (at) acts.append(h('button', { class: 'btn small', onclick: () => app.editors.open(at.file, { line: at.line }) }, `${at.line} 行目へ`))
+    if (at) acts.append(h('button', { class: 'btn small', onclick: () => { this.exitFull(); app.editors.open(at.file, { line: at.line }) } }, `${at.line} 行目へ`))
     acts.append(h('button', { class: 'btn small ghost', onclick: () => copyText(err.text || title).then(() => toast('エラーをコピーしました', { icon: 'copy' })) }, 'コピー'))
-    acts.append(h('button', { class: 'btn small ai-fix', onclick: () => runCommand('aiFixRunError', err.text || title) }, icon('sparkle', 14), 'AI で直す'))
+    acts.append(h('button', { class: 'btn small ai-fix', onclick: () => { this.exitFull(); runCommand('aiFixRunError', err.text || title) } }, icon('sparkle', 14), 'AI で直す'))
     el.append(acts)
     if (!this.lineCount) this.outEl.textContent = ''
     const out = this.outEl
@@ -768,3 +938,4 @@ command('runSelection', '選択範囲だけ実行', () => app.runner.run({ selec
 command('stop', '停止', () => app.runner.stop(), { icon: 'stop' })
 command('restartPython', 'Python を再起動 (変数をすべて消す)', () => app.runner.restartPython(), { icon: 'refresh' })
 command('clearOutput', '出力をクリア', () => app.runner.clear(), { icon: 'trash' })
+command('openRunScreen', '実行画面を開く', () => { if (getSettings().runView === 'panel') runCommand('togglePanel', true); else app.runner.enterFull() }, { icon: 'terminal' })

@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = 'f7a0b71386'
+const VERSION = 'af49e77fbd'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -10,21 +10,23 @@ const PRECACHE = [
   "boot.js",
   "css/app.css",
   "dist/app/main.js",
-  "dist/chunks/app-JNUCL3VR.js",
-  "dist/chunks/chunk-2HUDDNXI.js",
+  "dist/chunks/app-WRHM3ZT4.js",
+  "dist/chunks/chunk-2LETSP27.js",
   "dist/chunks/chunk-4MYTFDFL.js",
   "dist/chunks/chunk-6YYWDLBJ.js",
-  "dist/chunks/chunk-BEPEHWSD.js",
   "dist/chunks/chunk-BQ23ITVI.js",
   "dist/chunks/chunk-CANPDHTU.js",
+  "dist/chunks/chunk-GS7GOFRA.js",
+  "dist/chunks/chunk-IPI5JKKD.js",
+  "dist/chunks/chunk-RUWENCJJ.js",
   "dist/chunks/chunk-WG23Z3JL.js",
-  "dist/chunks/chunk-ZAXZ4FEI.js",
   "dist/chunks/engine-6BTUALJR.js",
   "dist/chunks/fflate-ECKODDUP.js",
   "dist/chunks/generate-GFHSBG4N.js",
   "dist/chunks/knowledge-ERSTBRLI.js",
   "dist/chunks/text-GPDYCE7D.js",
-  "dist/chunks/ui-B7M57HVL.js",
+  "dist/chunks/tk-view-CKJWK3Z6.js",
+  "dist/chunks/ui-BY42G7NV.js",
   "dist/workers/python-worker.js",
   "dist/workers/pytools-worker.js",
   "vendor/pywheels/autopep8-2.3.2-py2.py3-none-any.whl",

@@ -11,13 +11,11 @@ export const PIP_NAMES = {
 }
 // ブラウザでは動かないもの (入れようとせず、理由を伝える)
 export const NO_PIP = {
-  tkinter: 'tkinter (ウィンドウを出す GUI) はブラウザでは使えません。絵や簡単なゲームは turtle、グラフは matplotlib で作れます',
-  PyQt5: 'PyQt (ウィンドウを出す GUI) はブラウザでは使えません', PyQt6: 'PyQt (ウィンドウを出す GUI) はブラウザでは使えません',
-  PySide2: 'PySide (ウィンドウを出す GUI) はブラウザでは使えません', PySide6: 'PySide (ウィンドウを出す GUI) はブラウザでは使えません',
+  PyQt5: 'PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます', PyQt6: 'PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます',
+  PySide2: 'PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます', PySide6: 'PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます',
   wx: 'wxPython (ウィンドウを出す GUI) はブラウザでは使えません', kivy: 'kivy (アプリの画面) はブラウザでは使えません',
   pyautogui: 'pyautogui (パソコンの操作) はブラウザでは使えません', pynput: 'pynput (キーボード・マウスの操作) はブラウザでは使えません',
   keyboard: 'keyboard (キーボードの操作) はブラウザでは使えません', mouse: 'mouse (マウスの操作) はブラウザでは使えません',
-  pygame: 'pygame の画面 (ウィンドウ) はこの環境ではまだ表示できません。ゲームは turtle (onkey・ontimer) で作れます',
   selenium: 'selenium (ブラウザの自動操作) はこの環境では使えません', discord: 'discord.py (常時接続の通信) はブラウザでは使えません',
   telegram: 'Telegram のボット (常時接続の通信) はブラウザでは使えません', torch: 'PyTorch はブラウザでは使えません',
   tensorflow: 'TensorFlow はブラウザでは使えません',

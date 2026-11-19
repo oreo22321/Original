@@ -45,6 +45,7 @@ export const DEFAULTS = {
   // 実行
   maxRunTime: 0,       // 最大実行時間 (秒)。0 は無制限
   clearOnRun: true,
+  runView: 'full',     // 実行結果の表示: full (全画面の実行画面) / panel (下のパネル)
   groupOutput: true,   // 同じ出力をまとめる (×3)
   explainErrors: true, // 実行エラーに日本語の解説を付ける
   // AI

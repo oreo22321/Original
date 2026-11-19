@@ -68,6 +68,7 @@ const SCHEMA = [
     { key: 'githubSync', type: 'action', label: 'GitHub と同期 (自動バックアップ)', desc: 'プロジェクトを GitHub のリポジトリに自動で保存します。端末が壊れても消えず、PC からも開けます', button: '設定', run: () => runCommand('githubSync') },
   ] },
   { group: '実行', icon: 'play', items: [
+    { key: 'runView', type: 'select', label: '実行結果の表示', options: [['full', '全画面の実行画面 (おすすめ)'], ['panel', '下のパネル']], desc: '全画面では、左上の「戻る」でコードに戻れます' },
     { key: 'clearOnRun', type: 'bool', label: '実行前に出力をクリア' },
     { key: 'groupOutput', type: 'bool', label: '同じ出力をまとめる (×3 のように表示)' },
     { key: 'maxRunTime', type: 'range', min: 0, max: 600, step: 10, label: '最大実行時間', unit: '秒', desc: '0 で無制限。超えたら止めます (無限ループ対策)。input() の入力待ちと一時停止の間は数えません' },

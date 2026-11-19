@@ -96,6 +96,7 @@ export class DebugPanel {
         v.dispatch({ effects: debugLineEffect.of(info.line) })
       })
     }
+    if (this.runner.full) this.runner.exitFull()
     this.runner.renderTabs()
     if (this.runner.tab !== 'debug') this.runner.show('debug')
     else this.render()

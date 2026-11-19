@@ -9,8 +9,7 @@
 import { loadPyodide } from '../../vendor/pyodide/pyodide.mjs'
 import { ANALYSIS } from './py-analysis.js'
 import { CHECK } from './py-check.js'
-import { runtimeFiles, FC_LIB } from './py-runtime.js'
-import { TURTLE } from './py-turtle.js'
+import { libFiles, FC_LIB, SHIMS } from './py-lib.js'
 import { PIP_NAMES, NO_PIP, PYODIDE_CDN } from './py-packages.js'
 
 const PROJECT = '/home/pyodide/project'
@@ -42,7 +41,7 @@ function ensure() {
       p.FS.mkdirTree('/tmp/wheels')
       for (const w of WHEELS) p.FS.writeFile('/tmp/wheels/' + w, await bytes(local('../../vendor/pywheels/' + w)))
       // 実行用と同じ turtle などを置く (補完・チェックで使う)
-      for (const [rel, src] of Object.entries(runtimeFiles(TURTLE))) {
+      for (const [rel, src] of Object.entries(libFiles())) {
         const full = FC_LIB + '/' + rel
         p.FS.mkdirTree(full.slice(0, full.lastIndexOf('/')))
         p.FS.writeFile(full, src)
@@ -330,7 +329,7 @@ function importsOf(code) {
   return [...out].filter(Boolean)
 }
 function ensurePackages(code) {
-  const names = importsOf(code).filter(n => !tried.has(n) && !NO_PIP[n])
+  const names = importsOf(code).filter(n => !tried.has(n) && !NO_PIP[n] && !SHIMS.has(n))
   if (!names.length) return
   for (const n of names) tried.add(n)
   pkgPending++

@@ -18,6 +18,18 @@ globalThis.XMLHttpRequest = class {
   }
   getAllResponseHeaders() { return 'content-type: application/json\r\nx-test: 1\r\n' }
 }
+// ブラウザのキャンバスの代わり (pygame のテスト用: 命令を数えるだけ。画素はすべて 0)
+const canvasCalls = []
+class FakeCtx {
+  constructor(c) { this.canvas = c; this.font = ''; this.fillStyle = '#000' }
+  measureText(t) { return { width: String(t).length * 8, fontBoundingBoxAscent: 11, fontBoundingBoxDescent: 3 } }
+  getImageData(x, y, w, h) { return { data: new Uint8ClampedArray(w * h * 4) } }
+}
+for (const m of ['fillRect', 'clearRect', 'strokeRect', 'drawImage', 'beginPath', 'arc', 'ellipse', 'fill', 'stroke', 'moveTo', 'lineTo', 'closePath', 'rect', 'roundRect', 'save', 'restore', 'translate', 'rotate', 'scale', 'fillText', 'putImageData', 'setLineDash', 'quadraticCurveTo', 'clip']) {
+  FakeCtx.prototype[m] = function (...a) { canvasCalls.push([m, a.length]) }
+}
+globalThis.OffscreenCanvas = class { constructor(w, h) { this.width = w; this.height = h; this.ctx = new FakeCtx(this) } getContext() { return this.ctx } transferToImageBitmap() { return { close() {} } } }
+globalThis.ImageData = class { constructor(d, w, h) { this.data = d; this.width = w; this.height = h } }
 await import('../js/workers/python-worker.js')
 const send = m => globalThis.onmessage({ data: m })
 const until = (pred, ms = 120000) => new Promise((resolve, reject) => {
@@ -133,8 +145,205 @@ ok('display() sends html and plain repr', r.msgs.some(m => m.type === 'html' && 
 await run('import helper\nprint(helper.V)\n', { 'helper.py': 'V = 1\n' })
 r = await run('import helper\nprint(helper.V)\n', { 'helper.py': 'V = 2\n' })
 ok('edited project modules are reloaded', /^2$/m.test(r.out), r.out)
-r = await run('import tkinter\n')
-ok('tkinter explains', !r.done.ok && /tkinter/.test(r.meta) && /turtle/.test(r.meta), r.meta)
+
+// ---- matplotlib: 図は 1 つの場所で描き直す (偽の matplotlib で確かめる) ----
+const FAKE_MPL = {
+  'matplotlib/__init__.py': 'def use(x):\n    pass\n',
+  'matplotlib/backend_bases.py': 'class FigureCanvasBase:\n    figure = None\n    def flush_events(self):\n        pass\n',
+  'matplotlib/pyplot.py': `from matplotlib.backend_bases import FigureCanvasBase
+_figs = {}
+_cur = [None]
+class _Canvas(FigureCanvasBase):
+    def __init__(self, fig):
+        self.figure = fig
+        self.draws = 0
+    def draw(self):
+        self.draws += 1
+    def buffer_rgba(self):
+        w, h = int(4 * self.figure.dpi / 100), int(3 * self.figure.dpi / 100)
+        return memoryview(bytearray(w * h * 4)).cast("B", (h, w, 4))
+class Figure:
+    def __init__(self, num):
+        self.number = num
+        self.dpi = 100
+        self.canvas = _Canvas(self)
+def figure(num=None):
+    if num is None:
+        num = max(_figs, default=0) + 1
+    if num not in _figs:
+        _figs[num] = Figure(num)
+    _cur[0] = _figs[num]
+    return _figs[num]
+def gcf():
+    return _cur[0] or figure()
+def get_fignums():
+    return sorted(_figs)
+def close(x=None):
+    _figs.clear()
+    _cur[0] = None
+def plot(*a, **k):
+    gcf()
+def clf():
+    gcf()
+def show(*a, **k):
+    pass
+def pause(t):
+    pass
+def draw():
+    pass
+`,
+  'matplotlib/animation.py': `class Animation:
+    def __init__(self, fig, event_source=None, blit=False):
+        self._fig = fig
+        self._blit = blit
+        self.event_source = None
+class FuncAnimation(Animation):
+    def __init__(self, fig, func, frames=None, init_func=None, interval=200, repeat=True, **kw):
+        self._func = func
+        self._frames = frames
+        self._interval = interval
+        self._repeat = repeat
+        self.calls = []
+        Animation.__init__(self, fig)
+    def new_frame_seq(self):
+        return iter(range(self._frames))
+    def _init_draw(self):
+        pass
+    def _draw_frame(self, fd):
+        self.calls.append(fd)
+        self._func(fd)
+`,
+}
+r = await run(`import matplotlib.pyplot as plt, time
+plt.plot([1, 2])
+plt.show()
+for i in range(4):
+    plt.clf()
+    plt.pause(0.01)
+for i in range(3):
+    plt.plot([i])
+    plt.show()
+    time.sleep(0.01)
+for i in range(2):
+    plt.plot([i])
+    plt.show()
+`, FAKE_MPL)
+let frames = r.msgs.filter(m => m.type === 'frame')
+const keys = frames.map(f => f.key)
+ok('matplotlib frames are RGBA (no PNG)', r.done.ok && frames.length >= 9 && frames.every(f => f.data && f.data.length === f.w * f.h * 4 && f.scale === 2), r.out + errText(r) + JSON.stringify(frames.map(f => [f.key, f.w, f.h])))
+ok('plt.pause redraws in the same place', new Set(keys.slice(1, 5)).size === 1 && keys[1] !== keys[0], keys.join(','))
+ok('plt.show in a loop with sleep updates one place, without sleep adds new ones', new Set(keys.slice(5, 8)).size === 1 && keys[8] !== keys[9], keys.join(','))
+r = await run(`import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+fig = plt.figure()
+seen = []
+ani = FuncAnimation(fig, lambda i: seen.append(i), frames=5, interval=10, repeat=False)
+plt.show()
+print("frames", seen, ani.calls)
+`, FAKE_MPL)
+frames = r.msgs.filter(m => m.type === 'frame')
+ok('FuncAnimation plays all frames in one place', r.done.ok && /frames \[0, 1, 2, 3, 4\]/.test(r.out) && frames.length >= 6 && new Set(frames.map(f => f.key)).size === 1, r.out + errText(r) + frames.length)
+
+// ---- pygame (ForgeCode の互換版) ----
+canvasCalls.length = 0
+r = await run(`import pygame, sys
+pygame.init()
+screen = pygame.display.set_mode((320, 240))
+pygame.display.set_caption("テスト")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont(None, 24)
+player = pygame.Rect(10, 20, 30, 40)
+player.center = (100, 100)
+print("rect", player, player.colliderect(pygame.Rect(90, 90, 5, 5)), player.collidepoint(200, 200))
+v = pygame.math.Vector2(3, 4)
+print("vec", v.length(), (v + (1, 1)).xy, v.normalize().x)
+c = pygame.Color("red")
+print("color", tuple(c), pygame.Color("#00ff0080").a)
+class Ball(pygame.sprite.Sprite):
+    def __init__(self, x):
+        super().__init__()
+        self.image = pygame.Surface((10, 10), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, (255, 0, 0), (5, 5), 5)
+        self.rect = self.image.get_rect(topleft=(x, 0))
+    def update(self):
+        self.rect.y += 2
+g = pygame.sprite.Group(Ball(0), Ball(50))
+for frame in range(3):
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            sys.exit()
+    keys = pygame.key.get_pressed()
+    screen.fill((0, 0, 30))
+    pygame.draw.rect(screen, (0, 200, 0), player, border_radius=4)
+    pygame.draw.line(screen, "white", (0, 0), (100, 100), 3)
+    g.update()
+    g.draw(screen)
+    text = font.render("Score: %d" % frame, True, (255, 255, 255))
+    screen.blit(text, (5, 5))
+    pygame.display.flip()
+    clock.tick(60)
+hits = pygame.sprite.spritecollide(Ball(0), g, False)
+print("hits", len(hits), keys[pygame.K_LEFT], text.get_size())
+img = pygame.transform.rotate(pygame.Surface((20, 10)), 90)
+print("rot", img.get_size(), pygame.transform.scale(img, (40, 80)).get_width())
+pygame.quit()
+`)
+frames = r.msgs.filter(m => m.type === 'frame' && m.kind === 'pg')
+ok('pygame runs (Rect / Vector2 / Color / sprites / font)', r.done.ok && /rect <Rect\(85, 80, 30, 40\)> True False/.test(r.out) && /vec 5\.0 \[4, 5\] 0\.6/.test(r.out) && /color \(255, 0, 0, 255\) 128/.test(r.out) && /hits 1 False \(\d+, 14\)/.test(r.out) && /rot \(10, 20\) 40/.test(r.out), r.out + errText(r))
+ok('pygame frames reach the screen', frames.length >= 4 && frames.every(f => f.bitmap && f.w === 320 && f.h === 240) && frames[0].key === frames[frames.length - 1].key, JSON.stringify(frames.map(f => [f.key, f.w, f.title])))
+ok('pygame draws through the canvas', canvasCalls.some(c => c[0] === 'fillText') && canvasCalls.some(c => c[0] === 'arc') && canvasCalls.filter(c => c[0] === 'drawImage').length >= 6, JSON.stringify(canvasCalls.slice(0, 12)))
+ok('pygame tells the screen which keys the game uses', r.msgs.some(m => m.type === 'surface' && m.op === 'keys' && m.keys.includes('K_LEFT')) && r.msgs.some(m => m.type === 'surface' && m.op === 'caption' && m.title === 'テスト'), JSON.stringify(r.msgs.filter(m => m.type === 'surface')))
+r = await run('import pygame\nfrom pygame.locals import *\nprint(K_SPACE, QUIT, pygame.KEYDOWN, pygame.event.Event(pygame.USEREVENT, a=1).a, pygame.Rect((1, 2), (3, 4)).bottomright)\n')
+ok('pygame.locals', r.done.ok && /32 256 768 1 \(4, 6\)/.test(r.out), r.out + errText(r))
+
+// ---- tkinter (ForgeCode の互換版) ----
+r = await run(`import tkinter as tk
+from tkinter import ttk, messagebox
+root = tk.Tk()
+root.title("計算")
+root.geometry("300x200")
+name = tk.StringVar(value="Py")
+count = tk.IntVar()
+tk.Label(root, text="名前", font=("Arial", 14, "bold"), fg="navy").pack(pady=4)
+e = tk.Entry(root, textvariable=name)
+e.pack(fill="x", padx=8)
+out = tk.Label(root, textvariable=count)
+out.pack()
+def inc():
+    count.set(count.get() + 1)
+b = tk.Button(root, text="+1", command=inc, bg="light blue")
+b.pack(side="left")
+b.invoke(); b.invoke()
+frm = ttk.Frame(root)
+frm.pack()
+for r_ in range(2):
+    for c_ in range(2):
+        ttk.Button(frm, text=f"{r_}{c_}").grid(row=r_, column=c_, sticky="ew")
+cv = tk.Canvas(root, width=200, height=100, bg="black")
+cv.pack()
+ball = cv.create_oval(10, 10, 30, 30, fill="red", tags="ball")
+cv.move("ball", 5, 0)
+print("coords", cv.coords(ball), cv.bbox(ball), cv.find_overlapping(0, 0, 20, 20))
+print("vars", name.get(), count.get(), e.get())
+e.delete(0, tk.END); e.insert(0, "abc")
+print("entry", name.get(), e.get())
+lb = tk.Listbox(root)
+for x in ["a", "b", "c"]:
+    lb.insert(tk.END, x)
+lb.selection_set(1)
+print("list", lb.size(), lb.get(1), lb.curselection())
+t = tk.Text(root, height=3)
+t.insert("1.0", "hello\\nworld")
+print("text", repr(t.get("1.0", "end")), t.get("2.0", "2.end"), t.index("end-1c"))
+root.after(10, root.destroy)
+root.mainloop()
+print("closed")
+`)
+const tkops = r.msgs.filter(m => m.type === 'tk').flatMap(m => JSON.parse(m.ops))
+ok('tkinter runs (vars / entry / canvas / listbox / text)', r.done.ok && /coords \[15\.0, 10\.0, 35\.0, 30\.0\]/.test(r.out) && /vars Py 2 Py/.test(r.out) && /entry abc abc/.test(r.out) && /list 3 b \(1,\)/.test(r.out) && /text 'hello\\nworld\\n' world 2\.5/.test(r.out) && /closed/.test(r.out), r.out + errText(r))
+ok('tkinter sends widgets to the screen', tkops.some(o => o[0] === 'win' && o[3].title === 'tk') && tkops.some(o => o[0] === 'title' && o[2] === '計算') && tkops.some(o => o[0] === 'new' && o[3] === 'label' && o[4].font && /bold 19px/.test(o[4].font) && o[4].fg === 'navy') && tkops.some(o => o[0] === 'new' && o[3] === 'button' && o[4].bg === 'lightblue') && tkops.some(o => o[0] === 'geo' && o[2] === 'grid' && o[3].sticky === 'ew') && tkops.some(o => o[0] === 'cv' && o[2] === 'new' && o[4] === 'oval') && tkops.some(o => o[0] === 'cfg' && o[2].text === '2') && tkops.some(o => o[0] === 'del'), JSON.stringify(tkops.slice(0, 8)))
+r = await run('import tkinter as tk\nroot = tk.Tk()\ndef bad():\n    1 / 0\nb = tk.Button(root, text="x", command=bad)\nb.invoke()\nprint("still running")\n')
+ok('tkinter callback errors are printed and the program goes on', r.done.ok && /still running/.test(r.out) && /Exception in Tkinter callback/.test(r.out) && /ZeroDivisionError/.test(r.out), r.out + errText(r))
 
 // ---- turtle ----
 r = await run(`import turtle
