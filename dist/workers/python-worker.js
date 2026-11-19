@@ -1,11 +1,15 @@
-import{loadPyodide as T}from"../../vendor/pyodide/pyodide.mjs";var b="/home/pyodide/project",S="314.0.8",R=`https://cdn.jsdelivr.net/pyodide/v${S}/full/`,a=t=>self.postMessage(t),o=null,x=null,r=null,I=0,g=null,h=new Map,d=[],w=0,E=0,y=0,k=2e4,v={out:"",err:""},A={out:new TextDecoder,err:new TextDecoder};function c(t=!1){for(let e of["out","err"])v[e]&&(t||performance.now()-E>150)&&(F(e,v[e],!0),v[e]="");d.length&&(a({type:"output",items:d}),d=[]),w=performance.now()}function F(t,e,s=!1){if(y>=k){y===k&&(d.push({kind:"warn",text:`出力が ${k} 行を超えたため、以降は省略します`}),y++);return}y++,d.push({kind:t==="err"?"error-text":"",text:e,partial:s}),d.length>200&&c()}function j(t,e){let f=(v[t]+A[t].decode(e,{stream:!0})).split(`
-`);v[t]=f.pop();for(let l of f)F(t,l);return E=performance.now(),d.length&&performance.now()-w>60&&(a({type:"output",items:d}),d=[],w=performance.now()),e.length}setInterval(()=>c(),80);async function N(){return o||(x||(x=(async()=>{a({type:"status",state:"loading",text:"Python を準備しています…"});let t=new URL("../../vendor/pyodide/",import.meta.url),e=t.protocol==="file:"?decodeURIComponent(t.pathname):t.href,s=await T({indexURL:e,lockFileURL:e+"pyodide-lock.json",packageBaseUrl:R,env:{HOME:"/home/pyodide",MPLBACKEND:"AGG",PYTHONUNBUFFERED:"1"}});return s.setStdout({write:f=>j("out",f)}),s.setStderr({write:f=>j("err",f)}),s.setStdin({stdin:D,isatty:!0}),r&&s.setInterruptBuffer(r.interrupt),s.FS.mkdirTree(b),s.globals.set("__fc_dbg_src",C),s.runPython(O),o=s,a({type:"status",state:"ready",text:`Python ${s.runPython("import sys; sys.version.split()[0]")}`}),s})().catch(t=>{throw x=null,t})),x)}function D(){if(c(!0),!r)throw new Error("この環境では input() を使えません。ページを再読み込みしてからもう一度試してください (初回は再読み込みが必要です)");for(Atomics.store(r.ctl,0,0),a({type:"input"});;){let s=Atomics.wait(r.ctl,0,0,250);if(Atomics.load(r.ctl,0)!==0)break;if(s==="timed-out"&&r.interrupt[0]===2)return a({type:"inputDone"}),null}let t=Atomics.load(r.ctl,0),e=Atomics.load(r.ctl,1);return a({type:"inputDone"}),t===2?null:new TextDecoder().decode(r.buf.slice(0,e))+`
-`}var O=`
+import{a as j,b as A,c as O,d as P,e as k}from"../chunks/chunk-BEPEHWSD.js";import{loadPyodide as J}from"../../vendor/pyodide/pyodide.mjs";var b="/home/pyodide/project",L="314.0.8",B=`https://cdn.jsdelivr.net/pyodide/v${L}/full/`,z="micropip-0.11.1-py3-none-any.whl",_=e=>self.postMessage(e),i=null,x=null,r=null,G=0,y=null,v=new Map,S=!1,W=e=>{let t=new URL(e,import.meta.url);return t.protocol==="file:"?decodeURIComponent(t.pathname):t.href},T=new Map,R=new Set,m=[],F=0,D=0,h=0,E=2e4,w={out:"",err:""},K={out:new TextDecoder,err:new TextDecoder};function p(e=!1){for(let t of["out","err"])w[t]&&(e||performance.now()-D>150)&&(M(t,w[t],!0),w[t]="");m.length&&(_({type:"output",items:m}),m=[]),F=performance.now()}function M(e,t,s=!1){if(h>=E){h===E&&(m.push({kind:"warn",text:`出力が ${E} 行を超えたため、以降は省略します`}),h++);return}h++,m.push({kind:e==="err"?"error-text":"",text:t,partial:s}),m.length>200&&p()}function C(e,t){let a=(w[e]+K[e].decode(t,{stream:!0})).split(`
+`);w[e]=a.pop();for(let f of a)M(e,f);return D=performance.now(),m.length&&performance.now()-F>60&&(_({type:"output",items:m}),m=[],F=performance.now()),t.length}setInterval(()=>p(),80);async function I(){return i||(x||(x=(async()=>{_({type:"status",state:"loading",text:"Python を準備しています…"});let e=new URL("../../vendor/pyodide/",import.meta.url),t=e.protocol==="file:"?decodeURIComponent(e.pathname):e.href,s=await J({indexURL:t,lockFileURL:t+"pyodide-lock.json",packageBaseUrl:B,env:{HOME:"/home/pyodide",MPLBACKEND:"AGG",PYTHONUNBUFFERED:"1"}});s.setStdout({write:a=>C("out",a)}),s.setStderr({write:a=>C("err",a)}),s.setStdin({stdin:V,isatty:!0}),r&&s.setInterruptBuffer(r.interrupt),s.FS.mkdirTree(b);for(let[a,f]of Object.entries(A(O))){let o=j+"/"+a;s.FS.mkdirTree(o.slice(0,o.lastIndexOf("/"))),s.FS.writeFile(o,f)}return s.globals.set("__fc_dbg_src",Y),s.runPython(H),i=s,_({type:"status",state:"ready",text:`Python ${s.runPython("import sys; sys.version.split()[0]")}`}),s})().catch(e=>{throw x=null,e})),x)}function V(){if(p(!0),!r)throw new Error("この環境では input() を使えません。ページを再読み込みしてからもう一度試してください (初回は再読み込みが必要です)");for(Atomics.store(r.ctl,0,0),_({type:"input",password:S}),S=!1;;){let s=Atomics.wait(r.ctl,0,0,250);if(Atomics.load(r.ctl,0)!==0)break;if(s==="timed-out"&&r.interrupt[0]===2)return _({type:"inputDone"}),null}let e=Atomics.load(r.ctl,0),t=Atomics.load(r.ctl,1);return _({type:"inputDone"}),e===2?null:new TextDecoder().decode(r.buf.slice(0,t))+`
+`}var H=`
 import sys, os, traceback, builtins, json, base64, io
 __fc_builtin_input = builtins.input
 __fc_project = ${JSON.stringify(b)}
+__fc_lib = ${JSON.stringify(j)}
 if __fc_project not in sys.path:
     sys.path.insert(0, __fc_project)
+if __fc_lib not in sys.path:
+    sys.path.insert(1, __fc_lib)
+import _forgecode
 
 def __fc_frames(tb):
     out = []
@@ -28,34 +32,26 @@ def __fc_error(e):
         info.update({"file": fn, "line": e.lineno, "col": e.offset, "text": (e.text or "").rstrip("\\n"), "syntax": True})
     lines = traceback.format_exception(type(e), e, tb)
     text = "".join(lines).replace(__fc_project + "/", "")
-    # この道具自体の行は見せない
-    text = "\\n".join(l for l in text.split("\\n") if "<exec>" not in l and "__fc_" not in l)
-    info["text"] = text
+    # この道具自体の行 (とそのコード) は見せない
+    out, skip = [], False
+    for l in text.split("\\n"):
+        if l.startswith('  File "'):
+            skip = "<exec>" in l or "__fc_" in l or __fc_lib in l
+            if skip:
+                continue
+        elif skip and l.startswith("    "):
+            continue
+        else:
+            skip = False
+        out.append(l)
+    info["text"] = "\\n".join(out)
     return json.dumps(info)
 
 def __fc_no_input(prompt=""):
     raise RuntimeError("この環境では input() を使えません。ページを再読み込みしてから、もう一度実行してください (はじめて開いたときは再読み込みが必要です)")
 
 def __fc_show_figures():
-    plt = sys.modules.get("matplotlib.pyplot")
-    if plt is None:
-        return
-    import js
-    for num in plt.get_fignums():
-        fig = plt.figure(num)
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
-        js.__fc_image(base64.b64encode(buf.getvalue()).decode())
-    plt.close("all")
-
-def __fc_prepare_matplotlib():
-    try:
-        import matplotlib
-        matplotlib.use("agg")
-        import matplotlib.pyplot as plt
-        plt.show = lambda *a, **k: __fc_show_figures()
-    except Exception:
-        pass
+    _forgecode.show_figures()
 
 __fc_last = {"g": None, "err": None}
 def __fc_run(path, src, dbg=None):
@@ -65,6 +61,7 @@ def __fc_run(path, src, dbg=None):
     opt = json.loads(dbg) if dbg else None
     __fc_dbg["opt"] = opt
     d = None
+    _forgecode.begin([path])
     try:
         code = compile(src, __fc_project + "/" + path, "exec")
         # ブレークポイントがあるときだけデバッガーを付けて実行 (ないときは breakpoint() / 一時停止で途中から付ける)
@@ -74,8 +71,16 @@ def __fc_run(path, src, dbg=None):
         else:
             exec(code, g)
     except BaseException as e:
-        __fc_last["err"] = __fc_error(e)
+        # turtle の画面を閉じた (bye) あとの Terminator は、ふつうの終わり
+        if type(e).__name__ == "Terminator" and type(e).__module__ == "turtle":
+            __fc_last["err"] = json.dumps({"type": "SystemExit", "message": "", "frames": [], "text": ""})
+        else:
+            __fc_last["err"] = __fc_error(e)
     finally:
+        try:
+            _forgecode.end()
+        except BaseException:
+            pass
         d = __fc_dbg["cur"]
         if d is not None:
             try:
@@ -87,22 +92,104 @@ def __fc_run(path, src, dbg=None):
     return __fc_last["err"]
 
 def __fc_eval_in(code, g, l=None):
-    import ast
+    # 最後が式ならその値を返す。await もそのまま書ける (python -m asyncio と同じ)
+    import ast, inspect
+    flags = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+    def run(c):
+        r = eval(c, g, l)
+        if c.co_flags & inspect.CO_COROUTINE:
+            r = _forgecode.run_coro(r)
+        return r
     try:
         tree = ast.parse(code, "<console>", "exec")
+        last = None
         if tree.body and isinstance(tree.body[-1], ast.Expr):
             last = ast.Expression(tree.body.pop().value)
-            exec(compile(tree, "<console>", "exec"), g, l)
-            v = eval(compile(last, "<console>", "eval"), g, l)
-            return {"ok": True, "value": None if v is None else repr(v)}
-        exec(compile(tree, "<console>", "exec"), g, l)
-        return {"ok": True, "value": None}
+        if tree.body:
+            run(compile(tree, "<console>", "exec", flags=flags))
+        if last is None:
+            return {"ok": True, "value": None}
+        v = run(compile(last, "<console>", "eval", flags=flags))
+        if v is None:
+            return {"ok": True, "value": None}
+        mod = type(v).__module__ or ""
+        if (mod.startswith("matplotlib") and hasattr(v, "savefig")) or (mod.startswith("PIL") and hasattr(v, "mode") and hasattr(v, "save")):
+            _forgecode.display(v)
+            return {"ok": True, "value": None}
+        return {"ok": True, "value": repr(v), "html": _forgecode.rich(v)}
     except BaseException as e:
         info = json.loads(__fc_error(e))
         return {"ok": False, "type": info["type"], "error": info["text"].strip()}
 
 def __fc_eval(code, g):
-    return json.dumps(__fc_eval_in(code, g))
+    _forgecode.begin()
+    try:
+        return json.dumps(__fc_eval_in(code, g))
+    finally:
+        _forgecode.end()
+
+# ---- import しているライブラリ ----
+def __fc_imports(files_json):
+    # {"req": 必要なもの, "opt": try / except ImportError の中だけのもの} (トップの名前。プロジェクトのファイルは除く)
+    import ast, re
+    files = json.loads(files_json)
+    local = set()
+    for p in files:
+        first = p.split("/")[0]
+        local.add(first[:-3] if first.endswith(".py") else first)
+    req, opt = set(), set()
+    def catches_import(t):
+        for h in t.handlers:
+            if h.type is None:
+                return True
+            names = [h.type] if not isinstance(h.type, ast.Tuple) else h.type.elts
+            for n in names:
+                if isinstance(n, ast.Name) and n.id in ("ImportError", "ModuleNotFoundError", "Exception", "BaseException"):
+                    return True
+        return False
+    def walk(node, optional):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.Import):
+                for a in child.names:
+                    (opt if optional else req).add(a.name.split(".")[0])
+            elif isinstance(child, ast.ImportFrom):
+                if child.level == 0 and child.module:
+                    (opt if optional else req).add(child.module.split(".")[0])
+            elif isinstance(child, ast.Try) or (hasattr(ast, "TryStar") and isinstance(child, ast.TryStar)):
+                o = optional or catches_import(child)
+                for st in child.body:
+                    walk(ast.Module(body=[st], type_ignores=[]), o)
+                for part in child.handlers + child.orelse + child.finalbody:
+                    walk(ast.Module(body=[part] if not isinstance(part, ast.excepthandler) else part.body, type_ignores=[]), optional)
+            elif isinstance(child, ast.If) and "TYPE_CHECKING" in ast.dump(child.test):
+                continue
+            else:
+                walk(child, optional)
+    for p, src in files.items():
+        if not p.endswith(".py"):
+            continue
+        try:
+            walk(ast.parse(src), False)
+        except Exception:
+            for m in re.finditer(r"^[ \\t]*(?:from[ \\t]+([A-Za-z_]\\w*)[\\w.]*[ \\t]+import\\b|import[ \\t]+([A-Za-z_]\\w*))", src, re.M):
+                req.add(m.group(1) or m.group(2))
+    opt -= req
+    return json.dumps({"req": sorted(req - local), "opt": sorted(opt - local)})
+
+def __fc_missing(names_json):
+    # まだ使えない (入っていない) ライブラリ
+    import importlib.util
+    out = []
+    for n in json.loads(names_json):
+        if n in sys.stdlib_module_names or n in sys.builtin_module_names or n in sys.modules:
+            continue
+        try:
+            if importlib.util.find_spec(n) is not None:
+                continue
+        except Exception:
+            pass
+        out.append(n)
+    return json.dumps(out)
 
 # ---- デバッガー (はじめて使うときに読み込む) ----
 __fc_dbg = {"cur": None, "loaded": False, "opt": None}
@@ -139,7 +226,7 @@ def __fc_breakpointhook(*args, **kwargs):
     d.reason = {"kind": "breakpoint"}
     d.pause_now(frame)
 sys.breakpointhook = __fc_breakpointhook
-`;self.__fc_image=t=>{c(!0),a({type:"image",data:t})};var C=`import bdb, reprlib, inspect, types, sys, json, js, re as _re
+`;self.__fc_image=(e,t)=>{p(!0),_({type:"image",data:e,key:t||null})};self.__fc_svg=e=>{p(!0),_({type:"image",data:btoa(unescape(encodeURIComponent(String(e)))),mime:"image/svg+xml"})};self.__fc_html=(e,t)=>{p(!0),_({type:"html",html:String(e).slice(0,4e5),text:String(t||"")})};self.__fc_meta=e=>{p(!0),_({type:"output",items:[{kind:"meta",text:String(e)}]})};self.__fc_link=e=>{p(!0),_({type:"link",url:String(e)})};self.__fc_password=()=>{S=!0};self.__fc_turtle=e=>{p(!0),_({type:"turtle",ops:e})};self.__fc_sleep=e=>(p(!0),r?(Atomics.wait(r.interrupt,0,0,Math.max(0,e*1e3)),!0):!1);self.__fc_ev_ok=()=>!!(r&&r.ectl);self.__fc_ev_poll=()=>{if(!r||!r.ectl||Atomics.load(r.ectl,0)!==1)return"";let e=Atomics.load(r.ectl,1),t=new TextDecoder().decode(r.ebuf.slice(0,e));return Atomics.store(r.ectl,0,0),_({type:"evTaken"}),t};self.__fc_ev_wait=e=>(p(!0),!r||!r.ectl?!1:(r.interrupt[0]!==0||Atomics.wait(r.ectl,0,0,Math.max(1,e)),!0));var Y=`import bdb, reprlib, inspect, types, sys, json, js, re as _re
 
 # クラスの中では __ で始まる名前が変わってしまうので、別名で使う
 _FC_PROJECT = __fc_project
@@ -432,5 +519,21 @@ def __fc_dbg_signal(sig, frame):
         elif t == "debug" and cmd.get("action") == "pause":
             d.reason = {"kind": "pause"}
             d.pause_now(frame)
-`;function P(){let t=Atomics.load(r.dctl,1),e=new TextDecoder().decode(r.dbuf.slice(0,t));return Atomics.store(r.dctl,0,0),e}self.__fc_dbg_post=t=>{c(!0),a(JSON.parse(t))};self.__fc_dbg_wait=()=>{for(c(!0);;){if(Atomics.wait(r.dctl,0,0,250),Atomics.load(r.dctl,0)===1)return P();if(r.interrupt[0]===2)return r.interrupt[0]=0,'{"type":"stop"}'}};self.__fc_dbg_poll=()=>r&&Atomics.load(r.dctl,0)===1?P():"";function U(t){let e=o.FS;for(let s of h.keys())if(!(s in t))try{e.unlink(b+"/"+s)}catch{}h=new Map;for(let[s,f]of Object.entries(t)){let l=b+"/"+s;e.mkdirTree(l.slice(0,l.lastIndexOf("/"))),e.writeFile(l,f),h.set(s,f)}}function B(){let t=o.FS,e={},s=(f,l)=>{let p=[];try{p=t.readdir(f)}catch{return}for(let i of p){if(i==="."||i===".."||i==="__pycache__")continue;let u=f+"/"+i,n=l?l+"/"+i:i,m;try{m=t.stat(u)}catch{continue}if(t.isDir(m.mode))s(u,n);else if(m.size<2e6&&/\.(py|txt|csv|json|md|tsv|log|html|xml|ya?ml|ini|cfg|toml)$/i.test(i)){let _;try{_=t.readFile(u,{encoding:"utf8"})}catch{continue}h.get(n)!==_&&(e[n]=_)}}};s(b,"");for(let f of h.keys())try{t.stat(b+"/"+f)}catch{e[f]=null}return e}async function J(t){let e=t.id;I=e,y=0;let s=performance.now();try{await N()}catch(n){c(!0),a({type:"done",id:e,ok:!1,reason:"load",error:"Python を読み込めませんでした: "+(n&&n.message||n)});return}r&&(r.interrupt[0]=0),U(t.files||{});let f=t.files[t.entry]??"";try{let n=Object.entries(t.files).filter(([_])=>_.endsWith(".py")).map(([,_])=>_).join(`
-`),m=!1;await o.loadPackagesFromImports(n,{messageCallback:_=>{/^Loading /.test(_)&&!m&&(m=!0,c(!0),a({type:"output",items:[{kind:"meta",text:"ライブラリを読み込んでいます… (初回だけ時間がかかります)"}]}))},errorCallback:_=>a({type:"output",items:[{kind:"warn",text:_}]})}),/\bmatplotlib\b/.test(n)&&o.runPython("__fc_prepare_matplotlib()")}catch(n){a({type:"output",items:[{kind:"warn",text:"ライブラリを読み込めませんでした (インターネットの接続を確認してください): "+(n&&n.message||n)}]})}let l=!0,p=null,i="done";try{o.globals.set("__fc_entry",t.entry),o.globals.set("__fc_src",f),o.globals.set("__fc_dbgopt",r&&t.debug?JSON.stringify(t.debug):null),o.runPython("import os; os.chdir(__fc_project)"),o.runPython(r?"builtins.input = __fc_builtin_input":"builtins.input = __fc_no_input"),r&&Atomics.store(r.dctl,0,0);let n=o.runPython("__fc_run(__fc_entry, __fc_src, __fc_dbgopt)");if(g)try{g.destroy()}catch{}g=o.runPython('__fc_last["g"]'),n&&(p=JSON.parse(n),p.type==="KeyboardInterrupt"?(i="stopped",p=null):p.type==="SystemExit"?(i="exit",p=null):(l=!1,i="error"));try{o.runPython("__fc_show_figures()")}catch{}}catch(n){l=!1,i="error",p={type:"Error",message:String(n&&n.message||n),text:String(n&&n.message||n),frames:[]}}c(!0);let u={};try{u=B()}catch{}a({type:"done",id:e,ok:l,reason:i,error:p,files:u,ms:Math.round(performance.now()-s)})}async function G(t){try{await N()}catch(e){a({type:"evalResult",id:t.id,ok:!1,error:String(e.message||e)});return}r&&(r.interrupt[0]=0);try{g||(g=o.runPython('{"__name__": "__main__", "__builtins__": __import__("builtins")}')),await o.loadPackagesFromImports(t.code).catch(()=>{}),o.globals.set("__fc_g",g),o.globals.set("__fc_code",t.code);let e=JSON.parse(o.runPython("__fc_eval(__fc_code, __fc_g)"));c(!0);try{o.runPython("__fc_show_figures()")}catch{}e.ok?a({type:"evalResult",id:t.id,ok:!0,value:e.value}):a({type:"evalResult",id:t.id,ok:!1,error:e.type==="KeyboardInterrupt"?"停止しました":e.error})}catch(e){c(!0),a({type:"evalResult",id:t.id,ok:!1,error:String(e&&e.message||e)})}}self.onmessage=t=>{let e=t.data;e&&(e.type==="init"?(e.interrupt&&e.ctl&&e.buf&&e.dctl&&e.dbuf&&(r={interrupt:new Int32Array(e.interrupt),ctl:new Int32Array(e.ctl),buf:new Uint8Array(e.buf),dctl:new Int32Array(e.dctl),dbuf:new Uint8Array(e.dbuf)}),N().catch(s=>a({type:"status",state:"error",text:"Python を読み込めませんでした: "+(s&&s.message||s)}))):e.type==="run"?J(e):e.type==="eval"&&G(e))};
+`;function U(){let e=Atomics.load(r.dctl,1),t=new TextDecoder().decode(r.dbuf.slice(0,e));return Atomics.store(r.dctl,0,0),t}self.__fc_dbg_post=e=>{p(!0),_(JSON.parse(e))};self.__fc_dbg_wait=()=>{for(p(!0);;){if(Atomics.wait(r.dctl,0,0,250),Atomics.load(r.dctl,0)===1)return U();if(r.interrupt[0]===2)return r.interrupt[0]=0,'{"type":"stop"}'}};self.__fc_dbg_poll=()=>r&&Atomics.load(r.dctl,0)===1?U():"";function Z(e){let t=i.FS;for(let s of v.keys())if(!(s in e))try{t.unlink(b+"/"+s)}catch{}v=new Map;for(let[s,a]of Object.entries(e)){let f=b+"/"+s;t.mkdirTree(f.slice(0,f.lastIndexOf("/"))),t.writeFile(f,a),v.set(s,a)}}function X(){let e=i.FS,t={},s=(a,f)=>{let o=[];try{o=e.readdir(a)}catch{return}for(let n of o){if(n==="."||n===".."||n==="__pycache__")continue;let l=a+"/"+n,d=f?f+"/"+n:n,c;try{c=e.stat(l)}catch{continue}if(e.isDir(c.mode))s(l,d);else if(c.size<2e6&&/\.(py|txt|csv|json|md|tsv|log|html|xml|ya?ml|ini|cfg|toml)$/i.test(n)){let g;try{g=e.readFile(l,{encoding:"utf8"})}catch{continue}v.get(d)!==g&&(t[d]=g)}}};s(b,"");for(let a of v.keys())try{e.stat(b+"/"+a)}catch{t[a]=null}return t}async function Q(e){let t=e.id;G=t,h=0;let s=performance.now();try{await I()}catch(c){p(!0),_({type:"done",id:t,ok:!1,reason:"load",error:"Python を読み込めませんでした: "+(c&&c.message||c)});return}r&&(r.interrupt[0]=0),Z(e.files||{});let a=e.files[e.entry]??"",f=Object.fromEntries(Object.entries(e.files).filter(([c])=>c.endsWith(".py")));await q(f,e.files["requirements.txt"]);let o=!0,n=null,l="done";try{i.globals.set("__fc_entry",e.entry),i.globals.set("__fc_src",a),i.globals.set("__fc_dbgopt",r&&e.debug?JSON.stringify(e.debug):null),i.runPython("import os; os.chdir(__fc_project)"),i.runPython(r?"builtins.input = __fc_builtin_input":"builtins.input = __fc_no_input"),r&&Atomics.store(r.dctl,0,0);let c=i.runPython("__fc_run(__fc_entry, __fc_src, __fc_dbgopt)");if(y)try{y.destroy()}catch{}y=i.runPython('__fc_last["g"]'),c&&(n=JSON.parse(c),n.type==="KeyboardInterrupt"?(l="stopped",n=null):n.type==="SystemExit"?(l="exit",n=null):(o=!1,l="error"));try{i.runPython("__fc_show_figures()")}catch{}}catch(c){o=!1,l="error",n={type:"Error",message:String(c&&c.message||c),text:String(c&&c.message||c),frames:[]}}p(!0);let d={};try{d=X()}catch{}_({type:"done",id:t,ok:o,reason:l,error:n,files:d,ms:Math.round(performance.now()-s)})}var u=(e,t)=>{p(!0),_({type:"output",items:[{kind:e,text:t}]})};async function q(e,t){let s={req:[],opt:[]};try{s=JSON.parse(i.globals.get("__fc_imports")(JSON.stringify(e)))}catch{}for(let n of s.req)k[n]&&u("warn",k[n]);let a=s.req.filter(n=>!k[n]);a.includes("zoneinfo")&&a.push("tzdata");try{let n=!1;await i.loadPackagesFromImports(a.map(l=>`import ${l}`).join(`
+`),{messageCallback:l=>{/^Loading /.test(l)&&!n&&(n=!0,u("meta","ライブラリを読み込んでいます… (初回だけ時間がかかります)"))},errorCallback:l=>u("warn",l)})}catch(n){u("warn","ライブラリを読み込めませんでした (インターネットの接続を確認してください): "+(n&&n.message||n))}let f=[];for(let n of String(t||"").split(`
+`)){let l=n.replace(/\s+#.*$|^#.*$/,"").trim();l&&!l.startsWith("-")&&!R.has(l)&&f.push(l)}let o=[];try{o=JSON.parse(i.globals.get("__fc_missing")(JSON.stringify(a)))}catch{}o=o.filter(n=>!T.has(n)),!(!f.length&&!o.length)&&await $([...f,...o.map(n=>P[n]||n)],{fromImports:o,reqs:f})}async function N(){if(!i.globals.get("__fc_has_micropip")){try{i.pyimport("micropip")}catch{await i.loadPackage(W("../../vendor/pywheels/"+z),{messageCallback:()=>{}})}i.pyimport("micropip"),i.globals.set("__fc_has_micropip",!0)}}async function $(e,{fromImports:t=[],reqs:s=[],quiet:a=!1}={}){if(!e.length)return[];a||u("meta",`PyPI からライブラリを入れています: ${e.join(", ")} …`);let f=[];try{await N(),i.globals.set("__fc_pip_names",i.toPy(e));let o=await i.runPythonAsync(`
+import micropip, json
+_r = []
+for _n in __fc_pip_names:
+    try:
+        await micropip.install(_n)
+        _r.append([_n, None])
+    except Exception as _e:
+        _r.append([_n, str(_e).split("\\n")[0][:300]])
+json.dumps(_r)`);for(let[l,d]of JSON.parse(o)){let c=t.find(g=>(P[g]||g)===l);if(c&&T.set(c,d||"ok"),s.includes(l)&&!d&&R.add(l),d){f.push(l);let g=/Can't find a pure Python 3 wheel|No matching distribution|Can't fetch metadata|not found/i.test(d)?/pure Python/.test(d)?"ブラウザで動く形 (pure Python) が PyPI にないため":"PyPI に見つからないため":d;u("warn",`${l} を入れられませんでした (${g})`)}}let n=e.filter(l=>!f.includes(l));n.length&&!a&&u("meta",`入れました: ${n.join(", ")}`)}catch(o){for(let n of t)T.set(n,String(o&&o.message||o));return u("warn","PyPI からライブラリを入れられませんでした (インターネットの接続を確認してください): "+String(o&&o.message||o).split(`
+`).slice(-1)[0]),e}return f}async function ee(e){let t=/^\s*[%!]?\s*(?:python3?\s+-m\s+)?pip3?\s+(\w+)\s*(.*)$/s.exec(e);if(!t)return null;let[,s,a]=t,f=a.split(/\s+/).filter(o=>o&&!o.startsWith("-"));if(s==="install"){if(!f.length)return{ok:!1,error:"入れるライブラリの名前を書いてください (例: pip install emoji)"};let o=await $(f);return o.length?{ok:!1,error:`入れられなかったもの: ${o.join(", ")}`}:{ok:!0,value:null}}if(s==="list"||s==="freeze"){await N();let o=await i.runPythonAsync(`import micropip
+"\\n".join(sorted(f"{p.name}{'==' if ${s==="freeze"?"True":"False"} else ' '}{p.version}" for p in micropip.list().values()))`);return u("",String(o)),{ok:!0,value:null}}if(s==="uninstall")return await N(),i.globals.set("__fc_pip_names",i.toPy(f)),await i.runPythonAsync(`import micropip
+micropip.uninstall(list(__fc_pip_names))`),u("meta",`外しました: ${f.join(", ")}`),{ok:!0,value:null};if(s==="show"){await N(),i.globals.set("__fc_pip_names",i.toPy(f));let o=await i.runPythonAsync(`import micropip
+_l = micropip.list()
+"\\n".join(f"Name: {_l[n].name}\\nVersion: {_l[n].version}\\nSource: {_l[n].source}" if n in _l else f"{n} は入っていません" for n in __fc_pip_names)`);return u("",String(o)),{ok:!0,value:null}}return{ok:!1,error:`pip ${s} はこの環境では使えません (install / list / show / uninstall が使えます)`}}async function te(e){try{await I()}catch(t){_({type:"evalResult",id:e.id,ok:!1,error:String(t.message||t)});return}r&&(r.interrupt[0]=0);try{let t=await ee(e.code).catch(a=>({ok:!1,error:String(a&&a.message||a).split(`
+`).slice(-1)[0]}));if(t){_({type:"evalResult",id:e.id,...t});return}y||(y=i.runPython('{"__name__": "__main__", "__builtins__": __import__("builtins")}')),await q({"<console>.py":e.code}).catch(()=>{}),i.globals.set("__fc_g",y),i.globals.set("__fc_code",e.code);let s=JSON.parse(i.runPython("__fc_eval(__fc_code, __fc_g)"));p(!0);try{i.runPython("__fc_show_figures()")}catch{}s.ok?_({type:"evalResult",id:e.id,ok:!0,value:s.value,html:s.html||null}):_({type:"evalResult",id:e.id,ok:!1,error:s.type==="KeyboardInterrupt"?"停止しました":s.error})}catch(t){p(!0),_({type:"evalResult",id:e.id,ok:!1,error:String(t&&t.message||t)})}}self.onmessage=e=>{let t=e.data;t&&(t.type==="init"?(t.interrupt&&t.ctl&&t.buf&&t.dctl&&t.dbuf&&(r={interrupt:new Int32Array(t.interrupt),ctl:new Int32Array(t.ctl),buf:new Uint8Array(t.buf),dctl:new Int32Array(t.dctl),dbuf:new Uint8Array(t.dbuf)},t.ectl&&t.ebuf&&(r.ectl=new Int32Array(t.ectl),r.ebuf=new Uint8Array(t.ebuf))),I().catch(s=>_({type:"status",state:"error",text:"Python を読み込めませんでした: "+(s&&s.message||s)}))):t.type==="run"?Q(t):t.type==="eval"&&te(t))};

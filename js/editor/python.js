@@ -118,7 +118,7 @@ export function pythonCompletionSource(getPath) {
           if (d.doc) { const p = document.createElement('div'); p.className = 'doc'; p.textContent = d.doc.slice(0, 600); el.append(p) }
           return el
         }, () => null),
-      })),
+      }),
     }
   }
 }

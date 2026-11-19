@@ -665,8 +665,9 @@ print(df.sort_values("score", ascending=False).head(3))` },
   { id: 'packages', t: '使えるライブラリ', k: 'ライブラリ パッケージ pip install 使える numpy pandas matplotlib scipy requests インストール モジュールがない',
     b: `ForgeCode の Python はブラウザの中で動く **Pyodide (Python 3.14)** です。
 - 標準ライブラリ (math・random・datetime・json・csv・re・collections など) はすぐ使えます
-- **numpy・pandas・matplotlib・scipy・scikit-learn・sympy・pillow** なども \`import\` するだけで使えます (初回だけインターネットから読み込みます)
-- \`pip install\` はできません。また、tkinter (ウィンドウ)・turtle など画面を開くもの、インターネットへの自由な通信は使えません`,
+- **numpy・pandas・matplotlib・scipy・scikit-learn・sympy・pillow・requests** なども \`import\` するだけで使えます (初回だけインターネットから読み込み、あとは端末に保存)
+- それ以外のライブラリも、\`import\` すると **PyPI から自動で入ります** (pure Python のもの)。\`requirements.txt\` があれば実行の前に入れます。コンソールで \`pip install 名前\`・\`pip list\` も使えます
+- tkinter などウィンドウを出す GUI・pygame の画面・subprocess は使えません。絵やゲームは **turtle** で作れます`,
     c: `import sympy
 
 x = sympy.symbols("x")
@@ -740,6 +741,58 @@ print(average)` },
 while count < 5:
     count += 1  # これを忘れると無限ループ
 print(count)` },
+  { id: 'turtle', t: 'turtle (タートルグラフィックス・絵とゲーム)', k: 'turtle タートル 亀 絵 描く 図形 星 円 線 色 forward left right ゲーム onkey キー操作 クリック ontimer',
+    b: `\`turtle\` はペンを持った亀を動かして絵を描くライブラリです。ForgeCode では出力にキャンバスで表示されます。
+- \`forward(長さ)\` で進む、\`left(角度)\`・\`right(角度)\` で向きを変える、\`penup()\`・\`pendown()\` で線を引く/引かない
+- \`color("red", "yellow")\` + \`begin_fill()\` 〜 \`end_fill()\` で塗りつぶし、\`circle(半径)\`・\`dot(大きさ)\`・\`write("文字")\`
+- \`speed(0)\` でいちばん速く。\`screen.tracer(0)\` + \`screen.update()\` で描く様子を見せずに速く描けます
+- ゲーム: \`screen.onkeypress(関数, "Up")\`・\`screen.onclick(関数)\`・\`screen.ontimer(関数, ミリ秒)\` と \`turtle.done()\`。スマホでは使うキーのボタンが出ます`,
+    c: `import turtle
+
+t = turtle.Turtle()
+t.color("red", "yellow")
+t.begin_fill()
+for _ in range(5):
+    t.forward(150)
+    t.right(144)
+t.end_fill()
+turtle.done()` },
+  { id: 'asyncio', t: 'asyncio (async / await・非同期処理)', k: 'asyncio async await 非同期 並行 gather sleep コルーチン create_task イベントループ',
+    b: `\`async def\` で作った関数 (コルーチン) は \`await\` で待ちながら、いくつかの処理を並行して進められます。\`asyncio.run(main())\` で始めます。
+- \`await asyncio.sleep(秒)\` で待つ、\`await asyncio.gather(a(), b())\` でまとめて実行
+- ForgeCode のコンソールでは \`await\` をそのまま書けます`,
+    c: `import asyncio
+
+async def job(name, sec):
+    await asyncio.sleep(sec)
+    return f"{name} 完了"
+
+async def main():
+    results = await asyncio.gather(job("A", 1), job("B", 0.5))
+    print(results)
+
+asyncio.run(main())` },
+  { id: 'threads', t: 'スレッドと並列処理 (threading・concurrent.futures・multiprocessing)', k: 'スレッド thread threading 並列 並行 同時 ThreadPoolExecutor multiprocessing Pool プロセス',
+    b: `ブラウザの Python ではスレッドやプロセスを同時には動かせないため、ForgeCode では **start() や submit() の時点で順番に実行** します (結果は同じになります)。
+- 待ち時間を重ねたい処理は \`asyncio\` を使うと、本当に並行して進みます
+- \`multiprocessing.Pool().map\` なども使えます (順番に実行)`,
+    c: `from concurrent.futures import ThreadPoolExecutor
+
+def square(n):
+    return n * n
+
+with ThreadPoolExecutor() as ex:
+    print(list(ex.map(square, range(5))))` },
+  { id: 'web', t: 'インターネットから読み込む (urllib・requests)', k: 'インターネット ネット 通信 http https url api json ダウンロード requests urllib web スクレイピング',
+    b: `\`urllib.request.urlopen(url)\` や \`requests.get(url)\` でインターネットのデータを読めます。
+- ブラウザの決まりで、相手のサーバーが読み込みを許可している (CORS) ときだけ読めます (公開 API の多くは OK)
+- \`webbrowser.open(url)\` は出力にリンクを出します`,
+    c: `import json
+import urllib.request
+
+with urllib.request.urlopen("https://api.github.com/repos/python/cpython") as f:
+    data = json.loads(f.read())
+print(data["full_name"], data["stargazers_count"])` },
   // ============================================================
   // ForgeCode の使い方
   // ============================================================

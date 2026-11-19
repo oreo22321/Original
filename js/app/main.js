@@ -110,7 +110,7 @@ async function boot() {
   })
   on('files', pythonFilesChanged)
   on('saved', pythonFilesChanged)
-  setTimeout(() => { if (typeof requestIdleCallback === 'function') requestIdleCallback(() => warmPython(), { timeout: 6000 }); else warmPython() }, 2500)
+  setTimeout(() => { if (typeof requestIdleCallback === 'function') requestIdleCallback(() => warmPython(), { timeout: 4000 }); else warmPython() }, 1200)
 
   const projects = await vfs.listProjects()
   if (!s.onboarded && !projects.length) {

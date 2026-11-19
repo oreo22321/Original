@@ -223,8 +223,13 @@ export function showHelp(section) {
   <h3 id="help-packages">使えるライブラリ</h3>
   <ul>
     <li><b>標準ライブラリ</b>: <code>random</code>・<code>math</code>・<code>datetime</code>・<code>json</code>・<code>csv</code>・<code>re</code>・<code>collections</code>・<code>itertools</code>・<code>pathlib</code>・<code>dataclasses</code> など、ほぼすべて使えます (オフラインでも)。</li>
-    <li><b>追加のライブラリ</b>: <code>numpy</code>・<code>pandas</code>・<code>matplotlib</code>・<code>scipy</code>・<code>sympy</code>・<code>scikit-learn</code>・<code>pillow</code>・<code>beautifulsoup4</code> など、Pyodide が用意しているものは <code>import</code> するだけで使えます。はじめて使うときだけインターネットから読み込み (数 MB〜)、あとは端末に保存されます。</li>
-    <li>使えないもの: <code>tkinter</code>・<code>turtle</code> (画面を開くもの)、<code>pip install</code>、<code>subprocess</code>、ふつうのネットワーク通信 (<code>socket</code> / <code>requests</code>)。</li>
+    <li><b>追加のライブラリ</b>: <code>numpy</code>・<code>pandas</code>・<code>matplotlib</code>・<code>scipy</code>・<code>sympy</code>・<code>scikit-learn</code>・<code>pillow</code>・<code>beautifulsoup4</code>・<code>requests</code> など、Pyodide が用意しているものは <code>import</code> するだけで使えます。はじめて使うときだけインターネットから読み込み (数 MB〜)、あとは端末に保存されます。</li>
+    <li><b>PyPI のライブラリ</b>: それ以外も、<code>import</code> すると PyPI から自動で入ります (pure Python のもの。例: <code>emoji</code>・<code>tabulate</code>・<code>faker</code>)。<code>requirements.txt</code> があれば、実行の前にまとめて入れます。コンソールで <code>pip install 名前</code>・<code>pip list</code> も使えます。</li>
+    <li><b>turtle</b>: タートルグラフィックスは出力にキャンバスで表示されます。<code>onkey</code>・<code>onclick</code>・<code>ontimer</code> でゲームも作れます (スマホでは使うキーのボタンが出ます)。</li>
+    <li><b>asyncio・スレッド</b>: <code>asyncio.run()</code> が使えます。<code>threading</code>・<code>concurrent.futures</code>・<code>multiprocessing</code> は同時には動かず、順番に実行されます (結果は同じになります)。</li>
+    <li><b>インターネット</b>: <code>urllib.request</code>・<code>requests</code> で読み込めます (相手のサーバーがブラウザからの読み込みを許可している (CORS) とき)。<code>webbrowser.open()</code> は出力にリンクを出します。</li>
+    <li><b>表示</b>: <code>display(df)</code> で pandas の表を見やすく、PIL の画像は <code>img.show()</code> で表示します。<code>plt.pause()</code> で動くグラフも描けます。</li>
+    <li>使えないもの: <code>tkinter</code> などウィンドウを出す GUI、<code>pygame</code> の画面、<code>subprocess</code>、<code>socket</code> での直接の通信。</li>
   </ul>
   <h3>コンソール</h3>
   <ul>
@@ -237,6 +242,8 @@ export function showHelp(section) {
     <li><b>引数ヒント・説明</b>: 関数の <code>(</code> の中で引数の名前を表示します。名前を長押し (PC はマウスを乗せる) と説明 (docstring) が出ます。</li>
     <li><b>続きの提案</b>: 薄い文字の続きは <b>Tab</b> (スマホはキーボードの上の <b>✓</b>) で確定。<code># 1 から 100 まで足す</code> のようなコメントの次の行で AI キー (<kbd>Alt + \\</kbd>) を押すと、コードを組み立てます。</li>
     <li><b>整形</b> (<kbd>Shift + Alt + F</kbd>): PEP 8 に合わせて、空白・字下げ・空行をそろえます (autopep8)。設定 → 保存 で、保存のたびに整形することもできます。</li>
+    <li><b>自動で import</b>: まだ import していない <code>random</code> や <code>sqrt</code> なども候補に出て、選ぶとファイルの先頭に import を足します。</li>
+    <li><b>実行前のチェック</b>: 実行しなくても分かる間違いに下線を引きます — <code>input()</code> の結果 (文字列) を数として使っている・<code>math.squareroot</code> のようにないもの・引数の数や名前の間違い・<code>nums.push()</code> のような他の言語の書き方・<code>x = nums.sort()</code> など。多くはワンタップで直せます。</li>
     <li><b>字下げ</b>: <code>:</code> の後で改行すると自動で字下げします。スペース 4 つが基本です。</li>
     <li><b>スティッキースクロール</b>: 長いコードをスクロールすると、いま見ている <code>def</code> / <code>class</code> / <code>for</code> の行が上に固定されます (タップでその行へ)。</li>
   </ul>
@@ -310,6 +317,16 @@ export function showHelp(section) {
 export function showWhatsNew() {
   const body = h('div', { class: 'help whats-new' })
   body.innerHTML = `
+  <p>ForgeCode 12.1 — <b>Python がもっとそのまま動く</b>ようになりました。</p>
+  <ul>
+    <li><b>turtle</b> — タートルグラフィックスが出力に描かれます。キー操作・タップ・タイマーでゲームも作れます。</li>
+    <li><b>PyPI から自動で</b> — Pyodide にないライブラリも、<code>import</code> すると PyPI から入ります。<code>requirements.txt</code>・コンソールの <code>pip install</code> にも対応。</li>
+    <li><b>asyncio・スレッド・time.sleep</b> — <code>asyncio.run()</code> が動き、スレッドやプロセスは順番に実行されます。<code>time.sleep()</code> の途中でも ■ で止まり、出力もすぐ出ます。</li>
+    <li><b>通信と表示</b> — <code>urllib</code>・<code>requests</code> での読み込み、pandas の表・PIL の画像・<code>plt.pause()</code> の表示。</li>
+    <li><b>補完がライブラリにも</b> — numpy・pandas や PyPI のライブラリの中身も候補に出ます。まだ import していない名前は、選ぶと import を足します。</li>
+    <li><b>実行前のチェック</b> — <code>input()</code> を数として使う・ないメソッド・引数の数の間違いなどを、実行する前に教えます。</li>
+    <li><b>速く</b> — Python の準備が早くなり、とても長い出力もすぐ表示します。一度読んだライブラリは端末に保存して、次からすぐ (オフラインでも) 使えます。</li>
+  </ul>
   <p>ForgeCode 12 — <b>Python のエディタ</b>になりました。</p>
   <ul>
     <li><b>本物の Python 3.14</b> — 端末の中で CPython が動きます。<code>input()</code>・■ で停止・いくつものファイルの <code>import</code>・ファイルの読み書きに対応。</li>

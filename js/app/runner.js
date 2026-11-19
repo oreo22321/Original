@@ -56,7 +56,7 @@ export class Runner {
     on('active', () => this.scheduleProblems(120))
     on('diagnostics', doc => { if (doc && doc.path === app.editors.active) this.scheduleProblems(60) })
     // ▶ を押してすぐ実行できるよう、手が空いたら Python を準備しておく
-    setTimeout(() => this.ensureWorker(), 1500)
+    setTimeout(() => this.ensureWorker(), 300)
   }
 
   build() {
@@ -145,7 +145,10 @@ export class Runner {
 
   // ファイルの行をタップで開けるリンクにする
   linkify(el, text) {
-    for (const p of String(text).split(LINK_RE)) {
+    text = String(text)
+    // 長い行や、ファイルの場所がない行はそのまま (正規表現が遅くならないように)
+    if (text.length > 4000 || !(text.includes('.py') || text.includes('File "'))) { if (text) el.append(text); return }
+    for (const p of text.split(LINK_RE)) {
       const m = LINK_PARTS.exec(p)
       let file = m && (m[1] || m[3])
       if (file && file.startsWith(PROJECT_DIR)) file = file.slice(PROJECT_DIR.length)
@@ -159,7 +162,13 @@ export class Runner {
     const el = h('div', { class: 'out-line ' + kind })
     el.dataset.text = text
     const body = h('span', { class: 'out-text' })
-    this.linkify(body, text)
+    // とても長い行は先頭だけ表示して、タップで全部 (コピーでは全部)
+    const LONG = 20000
+    if (text.length > LONG) {
+      body.append(text.slice(0, LONG))
+      const more = h('button', { class: 'btn small ghost out-more', onclick: () => { more.remove(); body.append(text.slice(LONG)) } }, `… 続きを表示 (${(text.length - LONG).toLocaleString()} 文字)`)
+      body.append(more)
+    } else this.linkify(body, text)
     el.append(body)
     if (this.query && !text.toLowerCase().includes(this.query)) el.classList.add('q-hide')
     return el
