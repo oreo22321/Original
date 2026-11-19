@@ -2,25 +2,14 @@
 
 [← 目次に戻る](../README.md)
 
-## /order  ・  !order
+## !order
 
 - **トリガー**: `!order`
-- **スラッシュコマンド**: オン（グローバル）
-  - 名前: `order`
-  - 説明: 代行を注文します（専用チャンネルが作られます）
-  - オプション: なし
-- **!で使う例**: `!order サービス名 | 内容 | 納期`
-- **メモ**: スラッシュでは入力フォームが開きます。! では「|」で区切って書きます。スラッシュのオプションはありません。
+- **使い方**: `!order サービス名 | 内容 | 納期`
+- **メモ**: パネルの「注文する」ボタンを使わずに、コマンドで注文する方法です。
 
 ```
 $nomention
-$if[$isSlash==true]
-  $newModal[ord_form;ご注文フォーム]
-  $addTextInput[svc;short;サービス・ゲーム名;1;100;yes;;例: ランク上げ（〇〇ゲーム）]
-  $addTextInput[detail;paragraph;ご依頼の内容;1;1000;yes;;例: シルバーからゴールドまで]
-  $addTextInput[deadline;short;希望の納期;0;100;no;;例: 今週末まで]
-  $stop
-$endif
 $cooldown[2m;⏰ 少し待ってから、もう一度お試しください。]
 $textSplit[$message;|]
 $var[svc;$trimSpace[$splitText[1]]]
@@ -32,8 +21,8 @@ $endif
 $if[$getTextSplitLength>=3]
   $var[dl;$trimSpace[$splitText[3]]]
 $endif
-$onlyIf[$getServerVar[TicketCat]!=;❌ まだ初期設定が終わっていません。管理者に /setup をお願いしてください。]
-$onlyIf[$var[svc]!=;❌ サービス名を入力してください。]
+$onlyIf[$getServerVar[TicketCat]!=;❌ まだ初期設定が終わっていません。管理者に !setup をお願いしてください。]
+$onlyIf[$var[svc]!=;❌ 使い方: `!order サービス名 | 内容 | 納期`]
 $var[open;$getUserVar[OpenTicket]]
 $if[$var[open]!=]
   $if[$channelExists[$var[open]]==true]
@@ -63,15 +52,15 @@ $channelSendMessage[$var[ch];<@$authorID> さん、ご注文ありがとうご�
 **希望納期**: $var[dl]
 スタッフが確認するまで少しお待ちください。
 ━━━━━━━━━━
-スタッフ用: `/claim` 担当する ・ `/done` 完了 ・ `/close` チケットを閉じる]
+スタッフ用: `!claim` 担当する ・ `!done` 完了 ・ `!close` チケットを閉じる]
 ✅ 注文チケットを作成しました → <#$var[ch]>
 ```
 
 ## 「注文する」ボタン
 
 - **トリガー**: `$onInteraction[ord_open]`
-- **スラッシュコマンド**: オフ
-- **メモ**: パネルのボタンを押すと注文フォームを開きます。スラッシュコマンドはオフのまま。
+- **使い方**: ボタン・フォームから自動で動きます（コマンドとして打つものではありません）
+- **メモ**: パネルのボタンを押すと注文フォームを開きます。
 
 ```
 $nomention
@@ -84,8 +73,8 @@ $addTextInput[deadline;short;希望の納期;0;100;no;;例: 今週末まで]
 ## 注文フォームの送信
 
 - **トリガー**: `$onInteraction[ord_form]`
-- **スラッシュコマンド**: オフ
-- **メモ**: フォームが送信されたら、専用チャンネルを作ります。スラッシュコマンドはオフのまま。
+- **使い方**: ボタン・フォームから自動で動きます（コマンドとして打つものではありません）
+- **メモ**: フォームが送信されたら、専用チャンネルを作ります。
 
 ```
 $nomention
@@ -94,7 +83,7 @@ $cooldown[2m;⏰ 少し待ってから、もう一度お試しください。]
 $var[svc;$input[svc]]
 $var[detail;$input[detail]]
 $var[dl;$input[deadline]]
-$onlyIf[$getServerVar[TicketCat]!=;❌ まだ初期設定が終わっていません。管理者に /setup をお願いしてください。]
+$onlyIf[$getServerVar[TicketCat]!=;❌ まだ初期設定が終わっていません。管理者に !setup をお願いしてください。]
 $onlyIf[$var[svc]!=;❌ サービス名を入力してください。]
 $var[open;$getUserVar[OpenTicket]]
 $if[$var[open]!=]
@@ -125,18 +114,14 @@ $channelSendMessage[$var[ch];<@$authorID> さん、ご注文ありがとうご�
 **希望納期**: $var[dl]
 スタッフが確認するまで少しお待ちください。
 ━━━━━━━━━━
-スタッフ用: `/claim` 担当する ・ `/done` 完了 ・ `/close` チケットを閉じる]
+スタッフ用: `!claim` 担当する ・ `!done` 完了 ・ `!close` チケットを閉じる]
 ✅ 注文チケットを作成しました → <#$var[ch]>
 ```
 
-## /menu  ・  !menu
+## !menu
 
 - **トリガー**: `!menu`
-- **スラッシュコマンド**: オン（グローバル）
-  - 名前: `menu`
-  - 説明: 料金表を表示します
-  - オプション: なし
-- **!で使う例**: `!menu`
+- **使い方**: `!menu`
 - **メモ**: 料金は見本です。自分のサービスに合わせて書き換えてください。
 
 ```
@@ -156,8 +141,8 @@ $footer[ご注文は「注文する」ボタンから]
 ## 「料金表」ボタン
 
 - **トリガー**: `$onInteraction[ord_menu]`
-- **スラッシュコマンド**: オフ
-- **メモ**: /menu と同じ内容を、押した人にだけ表示します。料金を変えたら両方とも直してください。スラッシュはオフのまま。
+- **使い方**: ボタン・フォームから自動で動きます（コマンドとして打つものではありません）
+- **メモ**: !menu と同じ内容を、押した人にだけ表示します。料金を変えたら両方とも直してください。
 
 ```
 $nomention
