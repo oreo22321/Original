@@ -50,5 +50,53 @@ ok('rename across files', r.ok && r.result.files && /def double_it/.test(r.resul
 r = await req({ type: 'outline', code: 'class A:\n    def f(self):\n        pass\n\n\ndef g():\n    pass\n', path: 'main.py' })
 ok('outline', r.ok && r.result.map(x => x.name + x.depth).join(',') === 'A0,f1,g0', JSON.stringify(r).slice(0, 300))
 
+// ---- 実行する前に分かる間違い (py-check.js) ----
+const checks = async code => (await req({ type: 'lint', code })).result.filter(d => d.kind === 'Check')
+let c = await checks('import math\nprint(math.squareroot(2))\nfrom math import sqroot\nimport ramdom\nimport turtle\nturtle.forwad(100)\n')
+ok('check: module attribute', c.some(d => d.line === 2 && /squareroot/.test(d.msg) && d.col === 12 && d.endCol === 22), JSON.stringify(c))
+ok('check: from-import name with fix', c.some(d => d.line === 3 && d.fix && d.fix.old === 'sqroot' && d.fix.text === 'sqrt'), JSON.stringify(c))
+ok('check: module name typo', c.some(d => d.line === 4 && /random/.test(d.msg)), JSON.stringify(c))
+ok('check: turtle attribute (our turtle)', c.some(d => d.line === 6 && d.fix && d.fix.text === 'forward'), JSON.stringify(c))
+c = await checks('age = input("年齢: ")\nprint(age + 1)\nif age >= 20:\n    print("大人")\nname = "abc"\nprint(name.uppercase())\nnums = [3, 1]\nnums.push(2)\nx = nums.sort()\nname.upper()\nprint(len(nums, 2))\n')
+ok('check: input() used as a number (with int() fix)', c.some(d => d.line === 2 && /input\(\)/.test(d.msg) && d.fix && d.fix.text === 'int(input("年齢: "))') && c.some(d => d.line === 3 && /比べる/.test(d.msg)), JSON.stringify(c))
+ok('check: str / list methods', c.some(d => d.line === 6 && d.fix && d.fix.text === 'upper') && c.some(d => d.line === 8 && d.fix && d.fix.text === 'append'), JSON.stringify(c))
+ok('check: None-returning method and unused str result', c.some(d => d.line === 9 && /None/.test(d.msg)) && c.some(d => d.line === 10 && d.severity === 'info'), JSON.stringify(c))
+ok('check: builtin arity', c.some(d => d.line === 11 && /len\(\)/.test(d.msg)), JSON.stringify(c))
+c = await checks('def greet(name, greeting="hi"):\n    return greeting + name\ngreet()\ngreet("a", "b", "c")\ngreet("a", greting="x")\nclass P:\n    def __init__(self, x):\n        self.x = x\nP()\nimport math\nmath.sqrt(1, 2)\n')
+ok('check: call arity / keywords (own functions, classes, stdlib)', [3, 4, 5, 9, 11].every(n => c.some(d => d.line === n)) && c.some(d => /greeting/.test(d.msg)), JSON.stringify(c))
+c = await checks(`import os, sys, json, random
+def f(items, *args, **kw):
+    s = ""
+    for i in items:
+        s += str(i)
+    return s
+class A:
+    name = "x"
+    def m(self):
+        name = 5
+        return name + 1
+v = input()
+v = int(v)
+print(v + 1)
+t = "x"
+t = t * 3
+w = [x for x in "abc"]
+print(t.upper(), os.path.join("a", "b"), sys.argv, json.dumps({}), random.randint(1, 2), [s.upper() for s in w], f([1]))
+display(1)
+`)
+ok('check: no false positives on normal code', c.length === 0, JSON.stringify(c))
+r = await req({ type: 'lint', code: 'display(1)\n' })
+ok('display() is a known builtin', r.result.length === 0, JSON.stringify(r.result))
+
+// ---- import の候補 ----
+r = await req({ type: 'complete', code: 'x = sqr', line: 1, col: 7 })
+ok('auto-import candidate (from math import sqrt)', r.result.some(c => c.name === 'sqrt' && c.auto === 'from math import sqrt'), JSON.stringify(r.result).slice(0, 300))
+r = await req({ type: 'complete', code: 'rand', line: 1, col: 4 })
+ok('auto-import module candidate', r.result.some(c => c.name === 'random' && c.auto === 'import random') && r.result.filter(c => c.name === 'random').length === 1, JSON.stringify(r.result).slice(0, 300))
+r = await req({ type: 'complete', code: 'import random\nrand', line: 2, col: 4 })
+ok('no auto-import for names already imported', !r.result.some(c => c.auto === 'import random'), JSON.stringify(r.result).slice(0, 300))
+r = await req({ type: 'complete', code: 'import turtle\nturtle.forw', line: 2, col: 11 })
+ok('turtle completion', r.result.some(c => c.name === 'forward'), JSON.stringify(r.result).slice(0, 200))
+
 console.log(`pytools: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

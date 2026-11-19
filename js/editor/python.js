@@ -98,7 +98,14 @@ export function pythonCompletionSource(getPath) {
     return {
       from,
       validFor: /^\w*$/,
-      options: list.map((c, i) => ({
+      options: list.map((c, i) => c.auto ? {
+        // まだ import していない名前: 選ぶと import の行も足す
+        label: c.name,
+        type: TYPE_MAP[c.type] || 'variable',
+        detail: c.desc,
+        boost: -20,
+        apply: (view, completion, from, to) => applyAutoImport(view, c.name, c.auto, from, to),
+      } : {
         label: c.name,
         type: TYPE_MAP[c.type] || 'variable',
         detail: c.type === 'keyword' ? '' : (c.desc || '').replace(/^(def|class|module|instance|param|statement) /, '').slice(0, 60),
@@ -114,6 +121,22 @@ export function pythonCompletionSource(getPath) {
       })),
     }
   }
+}
+
+// 補完で選んだ名前を入れて、ファイルの先頭に import を足す (まだなければ)
+function applyAutoImport(view, name, stmt, from, to) {
+  const doc = view.state.doc.toString()
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const has = new RegExp(`^\\s*${esc(stmt)}\\s*$`, 'm').test(doc)
+  const changes = [{ from, to, insert: name }]
+  let shift = 0
+  if (!has) {
+    const at = importInsertPos(view.state)
+    const line = stmt + '\n'
+    changes.unshift({ from: at, insert: line })
+    if (at <= from) shift = line.length
+  }
+  view.dispatch({ changes, selection: { anchor: from + name.length + shift }, userEvent: 'input.complete', scrollIntoView: true })
 }
 
 // ============================================================
@@ -191,6 +214,16 @@ function toDiagnostics(state, list) {
       out.push({ from, to, severity: 'error', source: acts.some(a => a.source === '全角') ? '全角' : '構文', message: syntaxJa(d.msg), actions: acts })
       continue
     }
+    if (d.kind === 'Check') {
+      // 実行する前に分かる間違い (py-check.js)。メッセージは日本語で届く
+      from = Math.min(line.to, line.from + Math.max(0, (d.col || 1) - 1))
+      const endLine = d.endLine && d.endLine !== d.line ? state.doc.line(Math.min(state.doc.lines, d.endLine)) : line
+      to = Math.max(from, Math.min(endLine.to, endLine.from + Math.max(0, (d.endCol || d.col || 1) - 1)))
+      const diag = { from, to, severity: d.severity || 'warning', message: d.msg, source: 'チェック' }
+      if (d.fix && d.fix.text) diag.actions = [checkFix(d.fix)]
+      out.push(diag)
+      continue
+    }
     const name = (d.args || [])[0]
     const m = name ? new RegExp(`\\b${String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').split('.')[0]}\\b`).exec(state.doc.sliceString(from, line.to)) : null
     if (m) { from += m.index; to = from + m[0].length } else to = Math.min(line.to, from + 1)
@@ -204,6 +237,21 @@ function toDiagnostics(state, list) {
     out.push(diag)
   }
   return out
+}
+// チェックの直し方: 範囲をそのまま置き換える / その行の old を text にする
+function checkFix(fix) {
+  return {
+    name: fix.label,
+    apply(view, from, to) {
+      if (fix.span) { view.dispatch({ changes: { from, to, insert: fix.text }, userEvent: 'input.fix' }); return }
+      const doc = view.state.doc
+      if (!fix.line || fix.line > doc.lines) return
+      const l = doc.line(fix.line)
+      const at = l.text.indexOf(fix.old)
+      if (at < 0) return
+      view.dispatch({ changes: { from: l.from + at, to: l.from + at + fix.old.length, insert: fix.text }, userEvent: 'input.fix' })
+    },
+  }
 }
 const lineEdit = (view, n, fn) => {
   const l = view.state.doc.line(Math.min(view.state.doc.lines, n))
