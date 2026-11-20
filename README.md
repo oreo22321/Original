@@ -6,6 +6,8 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 - **書く**: 補完 (jedi。numpy・pandas などライブラリの中身も)・自動で import・引数のヒント・説明・エラーチェック (pyflakes + 実行前のチェック)・ワンタップの修正・整形 (autopep8)・打ち間違いの自動修正
 - **動かす**: 全画面の実行画面で `print` / `input()` / ■ で停止 / いくつものファイルの `import` / ファイルの読み書き / matplotlib のグラフとアニメーション (1 枚でなめらかに) / pygame のゲーム / tkinter のウィンドウ / turtle / asyncio / PyPI のライブラリ (自動でインストール)
 - **調べる**: ブレークポイント・ステップ実行・変数とウォッチ・コンソール
+- **ターミナル**: `ls`・`cd`・`cat`・`grep`・`mkdir`・`cp`・`mv`・`rm` などでファイルを扱い、`python main.py 引数`・`python` (対話モード)・`pip install` が使えます (パイプ・リダイレクト・Tab の補完・色付きの出力)
+- **24 時間動かす**: アプリを閉じても・電源を切っても GitHub のサーバーで決めた間隔に動かす (クラウド実行)・実行中は画面を消さない・エラーで止まったら自動で再実行・何時間でも止まらない出力
 - **頼む**: 内蔵の AI (Forge AI) が、直す・説明する・コメントや型ヒントを付ける・コードを作る・質問に答える。端末内の AI モデルをダウンロードすると、エラー検知・実行エラーの修正・続きの提案も AI が行います
 - **見やすい**: VS Code と同じ配色 (Dark Modern / Light Modern) で、変数・関数・クラス・モジュール・定数を色分け
 
@@ -44,7 +46,31 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 - **pygame**: ゲームの画面を出力に表示します (互換版。`display`・`draw`・`event`・`key`・`mouse`・`time`・`font`・`image`・`transform`・`mixer`・`math`・`sprite`・`mask`・`Rect`・`Color`)。描画はワーカーの中のキャンバス (OffscreenCanvas) で行い、1 枚の画像にして送るので 60 fps で動きます。キーボード・タップで操作でき、スマホではプログラムが使うキーのボタンが出ます。
 - **tkinter**: ウィンドウを出力の中に表示します (互換版。`Label`・`Button`・`Entry`・`Text`・`Checkbutton`・`Radiobutton`・`Scale`・`Listbox`・`Spinbox`・`Canvas`・`Menu`・`ttk` (`Combobox`・`Notebook`・`Treeview`・`Progressbar` など)・`pack` / `grid` / `place`・`StringVar` など・`after`・`bind`・`messagebox`・`simpledialog`・`filedialog`・`colorchooser`・`PhotoImage`)。
 - **音**: `pygame.mixer`・`winsound`・`playsound` は Web Audio で鳴らします。
-- 使えないもの: `subprocess`、本当に同時に動くスレッド、`socket` での直接の通信、パソコンの操作、PyQt などほかの GUI。
+- **バイナリのファイル**: 画像 (`plt.savefig`・PIL)・Excel (`openpyxl`)・SQLite・pickle・NumPy の `.npy` など、プログラムが書いたファイルもそのまま (バイト列で) プロジェクトに入り、次の実行で読めます。端末から読み込んだ写真・ZIP の中身・GitHub 同期も、バイナリのまま扱います。ファイル一覧でタップすると、画像は表示、ほかは種類と Python での読み方を出します。
+- **os.system・subprocess**: `cls` / `clear` (画面を消す)・`pause`・`echo`・`python ほかのファイル.py` / `-c` / `-m`・`ls` `dir` `cat` `type` `mkdir` `rm` `del` `sleep` `timeout` などを、Python の中で再現します (`subprocess.run` / `call` / `check_output` / `getoutput` / `Popen`・`os.popen`)。`print("\033[2J")` でも出力を消せます。`msvcrt.getch()` / `kbhit()` も使えます。
+- 使えないもの: ほかのプログラム (`git` など) の起動、本当に同時に動くスレッド、`socket` での直接の通信、パソコンの操作、PyQt などほかの GUI。
+
+### ターミナル
+
+- 上のバーの **>_** (PC・タブレットは下のパネルの「ターミナル」タブ) か **Ctrl + \`** で開きます。スマホでは全画面で開き、左上の「‹ 戻る」で戻ります。ファイル一覧の「…」→「ターミナルで開く / ターミナルで実行」からも。
+- **ファイルの操作**: `ls` `cd` `pwd` `tree` `cat` `head` `tail` `touch` `mkdir` `cp` `mv` `rm` `rmdir` `find` `grep` `wc` `sort` `uniq` `cut` `tr` `sed` `tee` `diff` `du` `df` `stat` など。`~` と `/` はプロジェクトの一番上で、作ったファイルはすぐファイル一覧に出ます。
+- **Python**: `python ファイル.py 引数` (`sys.argv`・`input()` に対応、図やゲームは実行画面に)、`python` (対話モード `>>>`。複数行・Tab で名前の補完・`exit()`)、`python -c "コード"`、`python -m モジュール`、`python -i ファイル.py`、`pip install 名前` / `pip install -r requirements.txt` / `pip list`。
+- **シェルの書き方**: パイプ `|`、リダイレクト `>` `>>` `<` `2>` `2>&1`、`&&` `||` `;`、`"…"` `'…'`、`$変数`・`$(コマンド)`、`*` `?` `[…]`、`alias`・`export`。例: `python main.py | grep 合計 > result.txt`
+- **操作**: Tab で補完、↑↓ で履歴、Ctrl+C で止める、Ctrl+L で画面を消す、Ctrl+D で入力の終わり。貼り付けた複数行は順に実行します。スマホでは画面の下に Tab・^C・矢印・記号のボタンが出ます。
+- 色 (ANSI) と `\r` での書き換え (進み具合の表示) に対応 (色は VS Code のターミナルと同じ)。閉じても、次に開いたときに続きから始まります。
+- **スクリプト**: `for` / `while` / `until` / `if … elif … else … fi` / 関数 `名前() { … }` / `[ -f a ]` (`test`) / `$((計算))` / `read` / `break` `continue` `return` `local` `shift`。`sh run.sh` / `./run.sh` / `source` でシェルスクリプトも動きます。`do` や `then` の後で Enter すると続きの行 (`>`) を入力できます。
+- **便利に**: 履歴からの提案 (薄い文字。→ で確定)、`Ctrl + R` で履歴を検索、ターミナルを増やす (タブ)、`xargs` `watch` `zip` `unzip` `base64` `sha256sum` `file` `nl` `rev` `expr` `let`。
+- そのほか: `curl` / `wget` (相手が CORS を許可しているとき)、`date` `sleep` `time` `seq` `printf` `echo -e` `uptime` `free` `ps` `kill` `open` (エディタで開く)・`git push` / `git pull` (GitHub と同期)・`help`。
+
+### 24 時間動かす
+
+- **クラウドで動かす (アプリを閉じても・電源を切っても)**: 「その他」→「クラウドで動かす」(ターミナルでは `cloud setup`) で、GitHub Actions のワークフロー (`.github/workflows/forgecode-cloud-<id>.yml`) と道具 (`.forgecode/cloud.py`) を同期先のリポジトリに置きます。GitHub のサーバーが 5 分ごと〜毎日 決まった時刻にプログラムを動かし、import しているライブラリは pip で入れ、`input()` には `input.txt` を渡します。プログラムが書いたファイルはリポジトリに保存 (次の実行はその続き)、出力と結果は `forgecode-cloud` ブランチに 1 つだけ残します (毎回置き換えるので増えません)。アプリでは実行の記録・最後の出力・「今すぐ実行」・「止める」が使え、ターミナルでも `cloud` / `cloud run` / `cloud log` / `cloud pull` / `cloud stop`。トークンには Contents に加えて Workflows と Actions の「Read and write」が要ります。公開リポジトリは無料・使い放題、非公開リポジトリは無料で月 2,000 分まで (1 回 1 分ほど) です。
+
+- **画面を消さない**: 実行中は画面が自動で消えないようにします (Screen Wake Lock。設定で「いつも」「使わない」も選べます)。
+- **ずっと動かす**: 設定 (または実行画面の「…」) で「エラーで止まったら自動で再実行」をオンにすると、止まったプログラムを 3 秒後に実行し直します (すぐ止まるのが続くと最大 60 秒まで間を延ばします)。実行画面に続けて動いている時間と再実行の回数、下のバーに経過時間を出します。
+- **止まらない出力**: 行数の上限をなくし、とても多いときだけ省いて知らせます (最後の 100 行は残します)。画面に残すのは新しい 3000 行 (ターミナルは 4000 行) なので、何時間動かしてもメモリが増え続けません。
+- **見守り**: 長い間アプリが裏にあった後は Python が応えるか確かめて、応えなければ立ち上げ直します。何も動いていないまま 20 分以上裏にあると、Python を休ませてメモリを空けます (iPhone などはメモリを多く使うページから閉じるため)。データを自動で消されないよう、ブラウザにも頼みます。
+- アプリが裏に回っている間や画面が消えている間は、端末 (特に iPhone・iPad) がプログラムを止めることがあります。
 
 ### デバッガー
 
@@ -163,7 +189,14 @@ css/, js/                    アプリ本体のソース (ES モジュール)
     themes.js                テーマ (VS Code の Dark Modern / Light Modern と同じ色)・エディタの外のコードの色付け
     semantic.js              意味による色分け (変数・関数・クラス・モジュール・定数。Pylance と同じ考え方)
   js/app/                    画面 (ファイル一覧・タブ・実行パネル・デバッグ・設定・初回案内など)
-    runner.js                実行 (Python ワーカーとの受け渡し・input()・停止・図・表・リンク・コンソール)
+    runner.js                実行 (Python ワーカーとの受け渡し・input()・停止・図・表・リンク・コンソール・自動の再実行)・ターミナルの表示
+    terminal.js              ターミナルの画面 (入力・履歴・Tab の補完・Python の対話モード・実行の出力と input())
+    shell.js                 ターミナルのシェル (字句・構文・展開・パイプ・リダイレクト・コマンド)。画面から切り離してあり、Node でテストできます
+    ansi.js                  ANSI の色 (VS Code のターミナルと同じ色) を画面の飾りに
+    keep-alive.js            24 時間動かすための見張り (画面を消さない・Python の見守りと休ませる・データを消えにくく)
+    cloud-core.js / cloud.js クラウド実行 (GitHub Actions のワークフローと cloud.py を作る・今すぐ実行・記録) と、その画面
+    bin.js / file-preview.js バイナリのファイル (画像・Excel・SQLite など) の判定と表示
+    help.js                  使い方・新しくなったところ (開いたときに読み込む)
     turtle-view.js           turtle の画面 (キャンバスに描く・アニメーション・キー操作とタップを Python へ)
     surface.js               図・ゲームの画面 (1 枚のキャンバスで描き直す)・画像の読み込み・プログラムのダイアログ・音
     tk-view.js               tkinter のウィンドウ (ウィジェット・pack / grid / place・キャンバス・操作を Python へ)
@@ -207,7 +240,7 @@ tools/                       ビルド・ローカルサーバー・ライブラ
 ```
 
 - テスト: `node tests/run-all.mjs` (すべてのユニットテスト。Python のワーカーも Node の中で動かします)
-  - `python` (実行) / `runtime` (asyncio・スレッド・turtle・urllib など。`NET=1` で PyPI からのインストールも) / `pydebug` (デバッガー) / `pytools` (補完・チェック・整形・参照・名前の変更) / `ai` (Forge AI) / `github` (GitHub 同期。偽の GitHub `tests/mock-github.mjs` を相手に)
+  - `shell` (ターミナルのシェル) / `cloud` (クラウド実行。cloud.py を python3 と git で実際に動かします) / `python` (実行・ターミナルの対話モード) / `runtime` (asyncio・スレッド・turtle・urllib など。`NET=1` で PyPI からのインストールも) / `pydebug` (デバッガー) / `pytools` (補完・チェック・整形・参照・名前の変更) / `ai` (Forge AI) / `github` (GitHub 同期。偽の GitHub `tests/mock-github.mjs` を相手に)
   - ブラウザでの通し確認: `node tests/e2e/run.mjs` (`cd tools && npm ci && npx playwright install chromium` が必要)
   - GitHub Actions (`.github/workflows/test.yml`) が、main へのプッシュとプルリクエストのたびに、ユニットテスト・配信用ファイルが最新か・ブラウザでの通し確認を行います
 - **ファイルを変更したら `node tools/build.mjs`** を実行してください (dist/ のまとめ直し・index.html の先読み・Service Worker のキャッシュ一覧を更新します。CI は dist/ が最新でないと失敗します)

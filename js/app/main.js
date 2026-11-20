@@ -9,12 +9,13 @@ import { Workbench } from './workbench.js'
 import { showOnboarding } from './onboarding.js'
 import { createFromTemplate } from './explorer.js'
 import { APP_VERSION } from './settings-ui.js'
-import { showWhatsNew } from './views.js'
+import './views.js'
 import './palette.js'
 import './ai-actions.js'
 import { refreshCorpus, loadEngine } from './ai-host.js'
 import { startAssist, noteLlmCrash } from './ai-assist.js'
 import { bootHealth } from './crash-guard.js'
+import { startKeepAlive } from './keep-alive.js'
 import { warmComplete } from '../ai/complete.js'
 import './code-nav.js'
 import './github-sync.js'
@@ -96,7 +97,7 @@ function registerServiceWorker() {
 async function boot() {
   const s = getSettings()
   const health = bootHealth()
-  startI18n()
+  await startI18n()
   applyTheme(s)
   setupErrorHandling()
   const root = document.getElementById('app')
@@ -139,6 +140,8 @@ async function boot() {
 
   // 画面外でのショートカット
   addEventListener('keydown', e => {
+    // Ctrl + ` : ターミナル (VS Code と同じ。エディタの中でも)
+    if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === '`' || e.code === 'Backquote')) { e.preventDefault(); runCommand('toggleTerminal'); return }
     const mod = e.metaKey || e.ctrlKey
     if (!mod) { if (e.key === 'F5') { e.preventDefault(); runCommand('run') } return }
     const k = e.key.toLowerCase()
@@ -203,12 +206,14 @@ async function boot() {
   }, 3500)
   // 端末内 AI をダウンロード済みなら、手が空いたときに読み込む (エラー検知・続きの提案を AI に任せる)
   startAssist()
+  // 24 時間動かすための見張り (画面を消さない・Python の見守り・データを消えにくく)
+  startKeepAlive()
 
   // バージョンアップ後に 1 度だけ変更点を表示
   try {
     const prev = localStorage.getItem('forgecode.version')
     localStorage.setItem('forgecode.version', APP_VERSION)
-    if (prev !== APP_VERSION && s.onboarded && projects.length) setTimeout(showWhatsNew, 600)
+    if (prev !== APP_VERSION && s.onboarded && projects.length) setTimeout(() => runCommand('whatsNew'), 600)
   } catch {}
 }
 

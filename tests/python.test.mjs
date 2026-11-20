@@ -72,6 +72,87 @@ send({ type: 'eval', id: 101, code: 'undefined_name' })
 ev = await until(m => m.type === 'evalResult' && m.id === 101)
 ok('console error', !ev.ok && /NameError/.test(ev.error), JSON.stringify(ev))
 
+// バイナリのファイル (画像・データベースなど): 書いたものはバイト列で戻り、次の実行で読める
+r = await run({ 'main.py': 'import zlib, struct\ndata = bytes([0, 1, 2, 255]) + zlib.compress(b"x" * 100)\nopen("blob.bin", "wb").write(data)\nopen("note.log", "w").write("ログ")\nprint(len(data))\n' })
+const blob = r.done.files['blob.bin']
+ok('binary file comes back as bytes', blob instanceof Uint8Array && blob[3] === 255 && r.done.files['note.log'] === 'ログ', JSON.stringify(Object.keys(r.done.files)) + String(blob))
+r = await run({ 'main.py': 'd = open("blob.bin", "rb").read()\nprint(d[:4].hex(), len(d))\n', 'blob.bin': blob })
+ok('binary file is readable in the next run', /000102ff/.test(r.out) && !('blob.bin' in r.done.files), r.out + JSON.stringify(Object.keys(r.done.files)))
+
+// 変わっていないファイルは送らない (keep): 前の実行のまま使える / 消えたファイルは消える
+msgs.length = 0
+send({ type: 'run', id: ++seq, files: { 'main.py': 'print(open("blob.bin", "rb").read()[:2].hex(), open("helper.py").read().strip())\n', 'helper.py': 'X = 1\n' }, keep: ['blob.bin'], entry: 'main.py' })
+let dk = await until(m => m.type === 'done' && m.id === seq)
+await new Promise(r => setTimeout(r, 100))
+ok('kept files stay without being resent', dk.ok && /0001 X = 1/.test(outputText()), outputText() + JSON.stringify(dk.error))
+msgs.length = 0
+send({ type: 'run', id: ++seq, files: {}, keep: ['main.py', 'helper.py'], entry: 'main.py' })
+dk = await until(m => m.type === 'done' && m.id === seq)
+ok('a file that is neither sent nor kept is removed', !dk.ok && /FileNotFoundError/.test(dk.error.text), JSON.stringify(dk.error && dk.error.text))
+
+// os.system / subprocess: cls・echo・python ほかのファイル・使えないコマンド
+r = await run({ 'main.py': 'import os, subprocess, sys\nos.system("cls")\nprint("after clear")\ncp = subprocess.run(["python", "sub.py", "x"], capture_output=True, text=True)\nprint("sub:", cp.stdout.strip(), cp.returncode)\nprint(subprocess.check_output("echo hello", shell=True, text=True).strip())\nprint(os.system("git status") >> 8)\ntry:\n    subprocess.run(["git", "status"])\nexcept FileNotFoundError:\n    print("not found ok")\nprint(subprocess.getoutput("ls"))\n', 'sub.py': 'import sys\nprint("argv", sys.argv[1:])\nsys.exit(3)\n' })
+ok('os.system("cls") clears the screen', /\x1b\[2J/.test(r.out) && /after clear/.test(r.out), JSON.stringify(r.out.slice(0, 80)))
+ok('subprocess runs another python file', /sub: argv \['x'\] 3/.test(r.out), r.out)
+ok('subprocess echo + unknown commands', /^hello$/m.test(r.out) && /^127$/m.test(r.out) && /not found ok/.test(r.out) && /main\.py/.test(r.out), r.out)
+
+// ターミナル: python main.py a b → sys.argv
+msgs.length = 0
+send({ type: 'run', id: ++seq, files: { 'main.py': 'import sys\nprint(sys.argv)\n' }, entry: 'main.py', argv: ['main.py', 'a', 'b c'] })
+let d = await until(m => m.type === 'done' && m.id === seq)
+await new Promise(r => setTimeout(r, 100))
+ok('argv from terminal', d.ok && /\['main\.py', 'a', 'b c'\]/.test(outputText()), outputText())
+
+// ターミナル: python -c (ファイルに書かない) / cd したフォルダで実行 / サブフォルダのスクリプトの import
+msgs.length = 0
+send({ type: 'run', id: ++seq, files: { 'main.py': 'x = 1\n', '<string>': 'import os, sys\nprint(os.getcwd(), sys.argv)\nprint(sorted(p for p in os.listdir("/home/pyodide/project") if not p.startswith("_")))' }, entry: '<string>', argv: ['-c', 'z'], cwd: 'sub' })
+d = await until(m => m.type === 'done' && m.id === seq)
+await new Promise(r => setTimeout(r, 100))
+ok('python -c is not written as a file', d.ok && /'main\.py'/.test(outputText()) && !/<string>/.test(outputText().split('\n')[1] || '') && /\['-c', 'z'\]/.test(outputText()), outputText() + JSON.stringify(d.error))
+msgs.length = 0
+send({ type: 'run', id: ++seq, files: { 'sub/a.py': 'import b\nimport os\nprint(b.V, os.path.basename(os.getcwd()))\n', 'sub/b.py': 'V = "from b"\n', 'sub/data.txt': 'x' }, entry: 'sub/a.py', argv: ['a.py'], cwd: 'sub' })
+d = await until(m => m.type === 'done' && m.id === seq)
+await new Promise(r => setTimeout(r, 100))
+ok('script folder is importable and cwd follows the terminal', d.ok && /from b sub/.test(outputText()), outputText() + JSON.stringify(d.error))
+msgs.length = 0
+send({ type: 'run', id: ++seq, files: { 'main.py': '' , '<string>': '1/0' }, entry: '<string>', argv: ['-c'] })
+d = await until(m => m.type === 'done' && m.id === seq)
+ok('python -c error points at <string>', !d.ok && /File "<string>", line 1/.test(d.error.text), d.error && d.error.text)
+
+// ターミナルの python (対話モード): 続きが要るか・自分の変数・Tab の補完・exit()
+send({ type: 'eval', id: 200, code: 'zz = 41', ns: 'repl-new', repl: true })
+ev = await until(m => m.type === 'evalResult' && m.id === 200)
+ok('repl statement', ev.ok && !ev.incomplete, JSON.stringify(ev))
+send({ type: 'eval', id: 201, code: 'for i in range(2):', ns: 'repl', repl: true })
+ev = await until(m => m.type === 'evalResult' && m.id === 201)
+ok('repl needs more lines', ev.ok && ev.incomplete === true, JSON.stringify(ev))
+send({ type: 'eval', id: 202, code: 'for i in range(2):\n    zz += 1\n', ns: 'repl', repl: true })
+ev = await until(m => m.type === 'evalResult' && m.id === 202)
+ok('repl block runs after blank line', ev.ok && !ev.incomplete, JSON.stringify(ev))
+send({ type: 'eval', id: 203, code: 'zz', ns: 'repl', repl: true })
+ev = await until(m => m.type === 'evalResult' && m.id === 203)
+ok('repl keeps its own variables', ev.ok && ev.value === '43', JSON.stringify(ev))
+send({ type: 'eval', id: 204, code: 'total', ns: 'repl', repl: true })
+ev = await until(m => m.type === 'evalResult' && m.id === 204)
+ok('repl is separate from the last run', !ev.ok && /NameError/.test(ev.error), JSON.stringify(ev))
+send({ type: 'eval', id: 205, complete: 'zz.bit', ns: 'repl' })
+ev = await until(m => m.type === 'evalResult' && m.id === 205)
+ok('repl tab completion', ev.ok && ev.names.some(n => n.startsWith('zz.bit_length')), JSON.stringify(ev))
+send({ type: 'eval', id: 206, code: 'x = (1,', ns: 'repl', repl: true })
+ev = await until(m => m.type === 'evalResult' && m.id === 206)
+ok('repl open bracket is incomplete', ev.incomplete === true, JSON.stringify(ev))
+send({ type: 'eval', id: 207, code: 'exit()', ns: 'repl', repl: true })
+ev = await until(m => m.type === 'evalResult' && m.id === 207)
+ok('repl exit() reports SystemExit', !ev.ok && ev.etype === 'SystemExit', JSON.stringify(ev))
+send({ type: 'ping', id: 7 })
+ev = await until(m => m.type === 'pong' && m.id === 7)
+ok('ping', ev.ready === true)
+
+// 長く動かしても出力が止まらない (とても多い出力は省略して知らせる)
+r = await run({ 'main.py': 'for i in range(30000):\n    print(i)\nprint("end")\n' })
+const outItems = msgs.filter(m => m.type === 'output').flatMap(m => m.items)
+ok('huge output is summarized, not cut off', /省略しました/.test(r.out) && outItems[outItems.length - 1].text === 'end' && outItems.length < 30000, outItems.length + ' ' + outItems.slice(-3).map(i => i.text).join('|'))
+
 // input() は共有メモリがないときは、分かるエラーになる
 r = await run({ 'main.py': 'name = input("名前: ")\n' })
 ok('input without shared memory explains', !r.done.ok && /input\(\)/.test(r.done.error.text), r.done.error && r.done.error.text)

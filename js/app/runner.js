@@ -1,4 +1,5 @@
-// 実行パネル: 出力 (コンソール・input・図) / 問題 / デバッグ — Python
+// 実行パネル: 出力 (コンソール・input・図) / ターミナル / 問題 / デバッグ — Python
+// ・ターミナル (terminal.js) は、はじめて開いたときに読み込む。スマホでは全画面で開く
 import * as vfs from './vfs.js'
 import { app, command, refreshFiles, runCommand } from './app.js'
 import { getSettings, setSettings, on, emit, isTouch } from './store.js'
@@ -6,13 +7,24 @@ import { h, icon, toast, copyText, haptic, menu, modal } from './ui.js'
 import { forEachDiagnostic } from '../../vendor/codemirror.js'
 import { langOf } from '../editor/setup.js'
 import { highlightPython } from '../editor/themes.js'
-import { explainError } from './explain.js'
 import { DebugPanel, bpStore } from './debug-panel.js'
 import { TurtleView } from './turtle-view.js'
 import { SurfaceView, SoundPlayer, handleRpc, clearTkImages } from './surface.js'
 import { busy, safeMode } from './crash-guard.js'
+import { AnsiState, appendAnsi, hasAnsi, stripAnsi } from './ansi.js'
 
 const MAX_DOM_LINES = 3000
+const MAX_LINE = 200000
+const CLS = /\x1b\[[23]J|\x1bc/          // 改行のない出力をつなげるのは、この長さまで (それ以上は次の行に)
+const pad2 = n => String(n).padStart(2, '0')
+// エラーの解説 (日本語) は、はじめてエラーが出たときに読み込む (手が空いたときに先読みもする)
+let explainMod = null
+const loadExplain = () => (explainMod ? Promise.resolve(explainMod) : import('./explain.js').then(m => (explainMod = m)))
+export function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60
+  return h ? `${h}:${pad2(m)}:${pad2(s % 60)}` : `${m}:${pad2(s % 60)}`
+}
 // 'File "main.py", line 3' / 'main.py:3' をタップで開けるリンクにする
 const LINK_RE = /(File "[^"]+", line \d+|[\w./-]+\.py:\d+)/
 const LINK_PARTS = /^(?:File "([^"]+)", line (\d+)|([\w./-]+\.py):(\d+))$/
@@ -55,16 +67,26 @@ export class Runner {
     this.evalWaits = new Map()
     this.pyStatus = ''
     this.full = false
+    this.termFull = false
+    this.sink = null              // ターミナルから実行したときの出力・入力の受け口
+    this.evalBusy = 0
+    this.pongs = new Map()
+    this.sent = new Map()
     this.surfaces = new Map()
+    this.ansi = new AnsiState()
     this.sound = new SoundPlayer()
     this.build()
     // 実行画面 (全画面) は、ブラウザの「戻る」でも閉じられる
-    addEventListener('popstate', () => { if (this.full) { this.pushed = false; this.exitFull() } })
+    addEventListener('popstate', () => {
+      if (this.full) { this.pushed = false; this.exitFull() }
+      else if (this.termFull) { this.termPushed = false; this.exitTermFull() }
+    })
     on('docchange', () => this.scheduleProblems())
     on('active', () => this.scheduleProblems(120))
     on('diagnostics', doc => { if (doc && doc.path === app.editors.active) this.scheduleProblems(60) })
     // ▶ を押してすぐ実行できるよう、手が空いたら Python を準備しておく (安全モードでは、実行したときに準備する)
     if (!safeMode()) setTimeout(() => this.ensureWorker(), 300)
+    setTimeout(() => { const go = () => loadExplain().catch(() => {}); if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 15000 }); else go() }, 6000)
   }
 
   build() {
@@ -79,6 +101,14 @@ export class Runner {
     this.probEl = h('div', { class: 'panel-view problems hidden' })
     this.debugEl = h('div', { class: 'panel-view debug-view hidden' })
     this.debug = new DebugPanel(this, this.debugEl)
+    this.termEl = h('div', { class: 'panel-view term-view hidden' })
+    // スマホの全画面ターミナルの上部
+    this.termState = h('span', { class: 'rh-state' })
+    this.termActions = h('div', { class: 'rh-actions' })
+    this.termHead = h('div', { class: 'term-head' },
+      h('button', { class: 'rh-back', 'aria-label': '戻る', title: '戻る (Esc)', onclick: () => this.closeTerminal() }, icon('chevronLeft', 18), h('span', null, '戻る')),
+      h('div', { class: 'rh-title' }, h('span', { class: 'rh-file' }, icon('terminal', 15), 'ターミナル'), this.termState),
+      this.termActions)
     // 全画面の実行画面の上部 (左上に小さな「戻る」)
     this.runTitle = h('span', { class: 'rh-file' })
     this.runState = h('span', { class: 'rh-state' })
@@ -87,13 +117,13 @@ export class Runner {
       h('button', { class: 'rh-back', 'aria-label': '戻る', title: '戻る (Esc)', onclick: () => this.exitFull() }, icon('chevronLeft', 18), h('span', null, '戻る')),
       h('div', { class: 'rh-title' }, this.runTitle, this.runState),
       this.runActions)
-    this.root.append(this.runHead, this.head, this.outWrap, this.probEl, this.debugEl)
+    this.root.append(this.runHead, this.termHead, this.head, this.outWrap, this.termEl, this.probEl, this.debugEl)
     // 実行中に実行画面を閉じたとき、戻るためのボタン
     this.pill = h('button', { class: 'run-pill hidden', onclick: () => this.enterFull() }, h('span', { class: 'spinner' }), h('span', { class: 'rp-text' }, '実行中'), h('span', { class: 'rp-open' }, '画面を開く'))
     document.body.append(this.pill)
     // スマホ: 実行画面の左端から右へスワイプで戻る
     let sx = null, sy = 0
-    this.root.addEventListener('touchstart', e => { const t = e.touches[0]; sx = this.full && e.touches.length === 1 && t.clientX < 26 ? t.clientX : null; sy = t.clientY }, { passive: true })
+    this.root.addEventListener('touchstart', e => { const t = e.touches[0]; sx = (this.full || this.termFull) && e.touches.length === 1 && t.clientX < 26 ? t.clientX : null; sy = t.clientY }, { passive: true })
     this.root.addEventListener('touchmove', e => {
       if (sx === null) return
       const t = e.touches[0]
@@ -108,17 +138,17 @@ export class Runner {
       sx = null
       this.root.style.transition = ''
       this.root.style.transform = ''
-      if (dx > 90) this.exitFull()
+      if (dx > 90) { if (this.full) this.exitFull(); else this.closeTerminal() }
     })
     document.addEventListener('keydown', e => {
       // 実行画面で ⌘/Ctrl + Enter: もう一度実行
       if (this.full && (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !this.running) { e.preventDefault(); this.rerun(); return }
-      if (!this.full || e.key !== 'Escape' || e.defaultPrevented) return
+      if (!(this.full || this.termFull) || e.key !== 'Escape' || e.defaultPrevented) return
       if (document.querySelector('.modal-overlay, .menu-overlay, .sf-max')) return
       const t = e.target
       if (t && /^(INPUT|TEXTAREA)$/.test(t.tagName) && t.value) return
       e.preventDefault()
-      this.exitFull()
+      if (this.full) this.exitFull(); else this.closeTerminal()
     })
     this.renderTabs()
     this.placeholder()
@@ -129,7 +159,8 @@ export class Runner {
     this.tabs.textContent = ''
     const pc = this.problemCount
     this.tabs.append(
-      t('output', '出力', this.inputPending ? { n: '⌨', kind: 'live' } : null),
+      t('output', '出力', this.inputPending && !this.sink ? { n: '⌨', kind: 'live' } : null),
+      t('terminal', 'ターミナル', this.terminal && (this.terminal.busy || this.terminal.pending) ? { n: '●', kind: 'live' } : null),
       t('problems', '問題', pc.error + pc.warning ? { n: pc.error + pc.warning, kind: pc.error ? 'error' : 'warn' } : null),
       t('debug', 'デバッグ', this.debug.paused ? { n: '⏸', kind: 'paused' } : bpStore.count() ? { n: bpStore.count(), kind: 'bp' } : null),
     )
@@ -152,16 +183,33 @@ export class Runner {
         btn('refresh', 'Python を再起動 (変数をすべて消す)', () => this.restartPython()),
         btn('trash', 'クリア', () => this.clear()))
     }
+    if (this.tab === 'terminal' && this.terminal) {
+      const busy = this.terminal.busy || this.terminal.pending
+      if (busy) this.actions.append(btn('stop', '止める (Ctrl+C)', () => this.terminal.interrupt()))
+      this.actions.append(btn('plus', '新しいターミナル', () => this.newTerminal()))
+      this.actions.append(
+        btn('copy', 'ターミナルの文字をコピー', () => copyText(this.terminal.text()).then(() => toast('コピーしました', { icon: 'copy' }))),
+        btn('trash', 'ターミナルを消す (Ctrl+L)', () => this.terminal.clear()))
+    }
+    if (document.body.dataset.layout !== 'mobile') {
+      const maxed = app.wb && app.wb.panelMax
+      this.actions.append(btn(maxed ? 'shrink' : 'expand', maxed ? 'パネルを元の大きさに' : 'パネルを最大化', () => app.wb.togglePanelMax(), maxed))
+    }
     this.actions.append(btn('close', 'パネルを閉じる', () => runCommand('togglePanel', false)))
   }
 
   show(tab) {
+    // スマホでは、ターミナルは全画面で開く (下のパネルはキーボードを出すと隠れるため)
+    if (tab === 'terminal' && !this.termFull && document.body.dataset.layout === 'mobile') { this.openTerminal(); return }
+    if (tab === 'terminal' && !this.terminal) { this.openTerminal(); return }
     this.tab = tab
     this.outWrap.classList.toggle('hidden', tab !== 'output')
+    this.termEl.classList.toggle('hidden', tab !== 'terminal')
     this.probEl.classList.toggle('hidden', tab !== 'problems')
     this.debugEl.classList.toggle('hidden', tab !== 'debug')
     if (tab === 'debug') this.debug.render()
     if (tab === 'problems') this.renderProblems()
+    if (tab === 'terminal' && this.terminal) setTimeout(() => this.terminal.focus(), 30)
     this.renderTabs()
   }
 
@@ -173,6 +221,7 @@ export class Runner {
 
   clear() {
     this.outEl.textContent = ''
+    this.ansi = new AnsiState()
     this.lineCount = 0
     this.last = null
     this.holdScroll = false
@@ -183,6 +232,13 @@ export class Runner {
     this.surfaces = new Map()
     if (this.tk) { this.tk.destroyAll(); this.tk = null }
     this.placeholder()
+  }
+
+  // 出力を消す (動いている図・ゲームの画面と入力欄は残す)
+  clearScreen() {
+    for (const el of [...this.outEl.children]) if (!el.classList.contains('sf-sticky') && el !== this.inputRow) el.remove()
+    this.last = null
+    this.lineCount = Math.max(1, this.outEl.childElementCount)
   }
 
   outputText() {
@@ -211,8 +267,16 @@ export class Runner {
 
   makeLine(kind, text) {
     const el = h('div', { class: 'out-line ' + kind })
-    el.dataset.text = text
     const body = h('span', { class: 'out-text' })
+    // 色付きの出力 (print("\033[31m…") / colorama / rich など)
+    if (hasAnsi(text) && text.length <= 20000) {
+      appendAnsi(body, text, this.ansi)
+      el.dataset.text = stripAnsi(text)
+      el.append(body)
+      if (this.query && !el.dataset.text.toLowerCase().includes(this.query)) el.classList.add('q-hide')
+      return el
+    }
+    el.dataset.text = text
     // とても長い行は先頭だけ表示して、タップで全部 (コピーでは全部)
     const LONG = 20000
     if (text.length > LONG) {
@@ -234,15 +298,33 @@ export class Runner {
     const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 60
     const group = getSettings().groupOutput
     const frag = document.createDocumentFragment()
-    for (const it of items) {
-      const kind = it.kind === 'error-text' ? 'stderr' : it.kind
+    for (const raw of items) {
+      const kind = raw.kind === 'error-text' ? 'stderr' : raw.kind
+      let it = raw
+      // 画面を消す (print("\033[2J") / os.system("cls") など): それまでの出力を消して、続きを書く
+      if (it.text && it.text.includes('\x1b') && CLS.test(it.text)) {
+        const parts = it.text.split(CLS)
+        while (frag.firstChild) frag.firstChild.remove()
+        this.clearScreen()
+        it = { ...it, text: parts[parts.length - 1].replace(/^(?:\x1b\[[0-9;]*[Hf])+/, '') }
+        if (!it.text) continue
+      }
       const last = this.last
+      // \r: その行を書き直す (進み具合の表示など)。行末の \r (Windows の改行) は取る
+      let rewrite = false
+      if (it.text && it.text.includes('\r')) {
+        const t = it.text.replace(/\r+$/, '')
+        const k = t.lastIndexOf('\r')
+        if (k >= 0) { it = { ...it, text: t.slice(k + 1) }; rewrite = true } else it = { ...it, text: t }
+      }
       // 改行のない行 (input の案内・end="" の print) の続きは、同じ行につなげる (入力した文字も、案内の横に)
-      if (last && last.partial && last.el.isConnected && (kind === 'input-echo' || kind === last.kind)) {
+      if (last && last.partial && last.el.isConnected && (kind === 'input-echo' || kind === last.kind) && last.text.length < MAX_LINE) {
         const body = last.el.querySelector('.out-text')
+        if (rewrite) { body.textContent = ''; last.text = '' }
         if (kind === 'input-echo') body.append(h('span', { class: 'out-echo' }, it.text))
+        else if (hasAnsi(it.text)) appendAnsi(body, it.text, this.ansi)
         else this.linkify(body, it.text)
-        last.text += it.text
+        last.text += stripAnsi(it.text)
         last.el.dataset.text = last.text
         last.partial = kind === 'input-echo' ? false : !!it.partial
         continue
@@ -287,6 +369,7 @@ export class Runner {
       this.shared = { interrupt: new SharedArrayBuffer(4), ctl: new SharedArrayBuffer(8), buf: new SharedArrayBuffer(64 * 1024), dctl: new SharedArrayBuffer(8), dbuf: new SharedArrayBuffer(256 * 1024), ectl: new SharedArrayBuffer(8), ebuf: new SharedArrayBuffer(64 * 1024), fack: new SharedArrayBuffer(8) }
     } else this.shared = null
     w.onmessage = e => { if (this.worker === w) this.onMessage(e.data) }
+    this.sent = new Map()   // このワーカーに送ったファイル (新しいワーカーは空)
     w.onerror = e => {
       if (e && e.preventDefault) e.preventDefault()
       if (this.worker !== w) return
@@ -300,8 +383,16 @@ export class Runner {
 
   resetWorker() {
     if (this.worker) { try { this.worker.terminate() } catch {} this.worker = null }
+    this.pyReady = false
     this.inputPending = false
     this.removeInput()
+    // 待っていた対話モードの実行・補完は、止まったことにする
+    const waits = [...this.evalWaits.values()]
+    this.evalWaits.clear()
+    this.evalBusy = 0
+    for (const fn of waits) { try { fn({ type: 'evalResult', ok: false, etype: 'KeyboardInterrupt', error: 'Python を立ち上げ直しました' }) } catch {} }
+    for (const fn of this.pongs.values()) { try { fn(false) } catch {} }
+    this.pongs.clear()
     setTimeout(() => this.ensureWorker(), 300)
   }
 
@@ -309,6 +400,23 @@ export class Runner {
     if (this.running) this.stop(true)
     this.resetWorker()
     this.line('meta', 'Python を再起動しました (変数をすべて消しました)')
+    for (const t of this.terminals || []) t.pythonRestarted('Python を再起動しました (変数をすべて消しました)')
+  }
+  // 長い間使っていない: Python を休ませてメモリを空ける (戻ったら準備し直す)
+  rest() {
+    if (!this.worker || this.running || this.evalBusy) return
+    try { this.worker.terminate() } catch {}
+    this.worker = null
+    this.pyReady = false
+    this.rested = true
+    emit('python', { state: 'rest' })
+    for (const t of this.terminals || []) t.pythonRestarted('長い間使っていなかったので、Python を休ませてメモリを空けました (変数は消えました)')
+  }
+  // Python が応えない: 立ち上げ直す
+  recover(msg) {
+    this.resetWorker()
+    this.line('meta', msg)
+    for (const t of this.terminals || []) t.pythonRestarted(msg)
   }
 
   runTarget() {
@@ -317,24 +425,30 @@ export class Runner {
   }
 
   // 実行に渡すファイル (開いているファイルは編集中の内容)
+  // 前の実行から変わっていないファイルは送らず、名前だけ (keep) にする (大きな画像・データがあっても速く始まる)
   filesPayload() {
-    const files = {}
+    const files = {}, keep = []
     for (const f of app.files) {
       if (f.dir) continue
       const content = app.editors.docs.has(f.path) ? app.editors.docs.get(f.path).state.doc.toString() : app.contents.get(f.path)
-      if (content !== undefined && content !== null && content.length < 2_000_000) files[f.path] = content
+      // 文字のファイルは 2MB まで、画像・SQLite などのバイナリは 20MB まで
+      if (content === undefined || content === null || content.length >= (content instanceof Uint8Array ? 20_000_000 : 2_000_000)) continue
+      if (this.sent.get(f.path) === content) keep.push(f.path)
+      else files[f.path] = content
     }
-    return files
+    return { files, keep }
   }
 
-  async run({ selection = false, path: forcePath = null, agent = false, debug = false, source: forceSource = null } = {}) {
+  // term: ターミナルの受け口 (出力・input() をターミナルへ) / argv: sys.argv / cwd: ターミナルのいる場所 / name: source の名前 (<string> など)
+  async run({ selection = false, path: forcePath = null, agent = false, debug = false, source: forceSource = null, term = null, argv = null, cwd = null, name = null, auto = false } = {}) {
+    this.cancelRestart()
     const doc = app.editors.activeDoc()
     const s = getSettings()
     let path = null, source = null
     this.scratchId = 0
     if (forceSource !== null) {
       // AI が作ったコードを試す (プロジェクトのファイルは変えない)
-      path = '_forge_ai_check.py'
+      path = name || '_forge_ai_check.py'
       source = forceSource
     } else if (selection) {
       const v = app.editors.activeView()
@@ -363,16 +477,21 @@ export class Runner {
     }
     if (this.running) this.stop(true)
     app.editors.saveAll().catch(() => {})
-    if (!agent) {
+    if (!agent && !term && !auto) {
       if (this.useFull(debug)) this.enterFull()
       else runCommand('togglePanel', true)
       if (this.tab !== 'output') this.show('output')
     }
-    if (s.clearOnRun) this.clear()
-    haptic(10)
+    if (s.clearOnRun && !auto) this.clear()
+    if (!auto) haptic(10)
+    // 続けて動かした時間と、自動で再実行した回数 (「ずっと動かす」用)
+    if (!auto) this.series = { t0: performance.now(), restarts: 0, fails: 0 }
+    this.autoOk = !agent && !term && !selection && !debug && forceSource === null
     app.editors.clearRunErrors()
-    const files = this.filesPayload()
+    const { files, keep } = this.filesPayload()
     files[path] = source
+    const ki = keep.indexOf(path)
+    if (ki >= 0) keep.splice(ki, 1)
     const w = this.ensureWorker()
     if (!w) return
     this.errors = 0
@@ -387,26 +506,32 @@ export class Runner {
     this.sound.reset()
     this.runPath = path
     this.runSelection = !!selection
+    this.sink = term || null
+    this.sinkShown = false
     this.lastReason = null
     this.eq = []
     if (this.shared) Atomics.store(new Int32Array(this.shared.ectl), 0, 0)
     const id = ++this.seq
     this.runId = id
-    if (forceSource !== null) this.scratchId = id
+    if (forceSource !== null && !term) this.scratchId = id
     // ブレークポイントがあれば、そこで止まる (なくても ⏸ や breakpoint() で途中から止められる)
     const bps = agent ? {} : bpStore.forRun()
     const hasBps = Object.keys(bps).length > 0
     this.dq = []
     if (this.shared) Atomics.store(new Int32Array(this.shared.dctl), 0, 0)
     if ((debug || hasBps) && !this.shared) this.append([{ kind: 'warn', text: 'デバッガーを使うには、ページを再読み込みしてください (はじめて開いたときは再読み込みが必要です)' }])
-    this.setRunning({ path, id, debug: !!this.shared && (debug || hasBps) })
+    this.setRunning({ path, id, debug: !!this.shared && (debug || hasBps), term: !!term })
     this.t0 = performance.now()
     this.startWatchdog(id)
-    this.append([{ kind: 'meta', text: `実行: ${path}${selection ? ' (選択範囲)' : ''}` }])
-    if (!this.pyReady) this.append([{ kind: 'meta', text: 'Python を準備しています… (初回は少し時間がかかります)' }])
+    if (term) { if (!this.pyReady) term.note('Python を準備しています… (初回は少し時間がかかります)') }
+    else {
+      this.append([{ kind: 'meta', text: `実行: ${path}${selection ? ' (選択範囲)' : ''}` }])
+      if (!this.pyReady) this.append([{ kind: 'meta', text: 'Python を準備しています… (初回は少し時間がかかります)' }])
+    }
     this.renderTabs()
     if (this.shared) new Int32Array(this.shared.interrupt)[0] = 0
-    w.postMessage({ type: 'run', id, files, entry: path, debug: this.shared ? { bps, watches: this.debug.watches } : null })
+    w.postMessage({ type: 'run', id, files, keep, entry: path, argv: argv || null, cwd: cwd || null, debug: this.shared ? { bps, watches: this.debug.watches } : null })
+    for (const [p, c] of Object.entries(files)) this.sent.set(p, c)
   }
 
   // ============================================================
@@ -417,17 +542,9 @@ export class Runner {
     this.inputPending = true
     const field = h('input', { class: 'input out-input-field', type: password ? 'password' : 'text', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': password ? 'パスワードの入力' : 'プログラムへの入力' })
     const send = (eof = false) => {
-      if (!this.shared || !this.inputPending) return
-      const ctl = new Int32Array(this.shared.ctl)
-      const bytes = new TextEncoder().encode(field.value)
-      const buf = new Uint8Array(this.shared.buf)
-      const n = Math.min(bytes.length, buf.length)
-      buf.set(bytes.subarray(0, n))
-      Atomics.store(ctl, 1, n)
-      Atomics.store(ctl, 0, eof ? 2 : 1)
-      Atomics.notify(ctl, 0)
-      if (!eof) this.append([{ kind: 'input-echo', text: password ? '•'.repeat(Math.min(12, field.value.length)) : field.value }])
-      this.inputPending = false
+      const v = field.value
+      if (!this.sendInput(v, eof)) return
+      if (!eof) this.append([{ kind: 'input-echo', text: password ? '•'.repeat(Math.min(12, v.length)) : v }])
       this.removeInput()
       this.renderTabs()
     }
@@ -446,6 +563,197 @@ export class Runner {
   }
   removeInput() {
     if (this.inputRow) { this.inputRow.remove(); this.inputRow = null }
+  }
+  // input() への答えを共有メモリで渡す (eof: 入力の終わり)
+  sendInput(text, eof = false) {
+    if (!this.shared || !this.inputPending) return false
+    const ctl = new Int32Array(this.shared.ctl)
+    const bytes = new TextEncoder().encode(String(text ?? ''))
+    const buf = new Uint8Array(this.shared.buf)
+    const n = Math.min(bytes.length, buf.length)
+    buf.set(bytes.subarray(0, n))
+    Atomics.store(ctl, 1, n)
+    Atomics.store(ctl, 0, eof ? 2 : 1)
+    Atomics.notify(ctl, 0)
+    this.inputPending = false
+    this.updateRunHead()
+    return true
+  }
+
+  // ============================================================
+  // ターミナルからの Python (対話モード・pip・Tab の補完)
+  // ============================================================
+  termEval(code, { ns = 'repl', repl = false, complete = null, sink = null } = {}) {
+    if (this.running) return Promise.resolve({ ok: false, busy: true, error: '別のプログラムが実行中です' })
+    const w = this.ensureWorker()
+    if (!w) return Promise.resolve({ ok: false, error: 'Python を起動できませんでした' })
+    const id = ++this.seq
+    return new Promise(resolve => {
+      this.evalWaits.set(id, m => {
+        if (sink && this.sink === sink) this.sink = null
+        if (this.evalBusy === id) this.evalBusy = 0
+        if (sink) { this.inputPending = false; busy('run', false); this.updateRunHead() }
+        resolve(m)
+      })
+      if (sink) { this.sink = sink; this.sinkShown = false; this.evalBusy = id; busy('run', true) }
+      if (this.shared) new Int32Array(this.shared.interrupt)[0] = 0
+      w.postMessage({ type: 'eval', id, code, ns, repl, complete: typeof complete === 'string' ? complete : undefined })
+    })
+  }
+  // 対話モードの実行を止める (KeyboardInterrupt。止まらなければ Python ごと立ち上げ直す)
+  interruptEval() {
+    const id = this.evalBusy
+    if (!id) return
+    if (this.shared) {
+      const ib = new Int32Array(this.shared.interrupt)
+      ib[0] = 2
+      Atomics.notify(ib, 0)
+      Atomics.notify(new Int32Array(this.shared.ectl), 0)
+      if (this.inputPending) { const ctl = new Int32Array(this.shared.ctl); Atomics.store(ctl, 0, 2); Atomics.notify(ctl, 0) }
+    }
+    setTimeout(() => { if (this.evalBusy === id) this.resetWorker() }, this.shared ? 1500 : 0)
+  }
+  // Python が応えるか (長い間、裏にあった後などに確かめる)
+  ping(ms = 8000) {
+    const w = this.worker
+    if (!w) return Promise.resolve(false)
+    const id = ++this.seq
+    return new Promise(resolve => {
+      const t = setTimeout(() => { this.pongs.delete(id); resolve(false) }, ms)
+      this.pongs.set(id, ok => { clearTimeout(t); resolve(ok !== false) })
+      w.postMessage({ type: 'ping', id })
+    })
+  }
+
+  // ============================================================
+  // ターミナルの表示 (PC: 下のパネルのタブ / スマホ: 全画面)
+  // ============================================================
+  async ensureTerminal() {
+    if (this.terminal) return this.terminal
+    if (!this.termLoading) {
+      this.termLoading = import('./terminal.js').then(mod => {
+        this.TerminalClass = mod.Terminal
+        this.terminals = []
+        this.termTabs = h('div', { class: 'term-tabs hidden' })
+        this.termEl.append(this.termTabs)
+        return this.addTerminal(0)
+      })
+    }
+    return this.termLoading
+  }
+  // ターミナルを 1 つ足す (それぞれ別の場所・履歴・画面。Python は 1 つを順番に使う)
+  addTerminal(index) {
+    const t = new this.TerminalClass({ index, onState: () => this.termStateChanged() })
+    this.terminals.push(t)
+    this.termEl.append(t.el)
+    this.switchTerminal(t)
+    return t
+  }
+  async newTerminal() {
+    await this.ensureTerminal()
+    const used = new Set(this.terminals.map(t => t.index))
+    let i = 1
+    while (used.has(i)) i++
+    try { localStorage.removeItem(`forgecode.term.state.${i}`) } catch {}
+    const t = this.addTerminal(i)
+    await this.openTerminal()
+    return t
+  }
+  switchTerminal(t) {
+    this.terminal = t
+    for (const x of this.terminals) x.el.classList.toggle('hidden', x !== t)
+    this.renderTermTabs()
+    this.termStateChanged()
+    if (this.tab === 'terminal') setTimeout(() => t.focus(), 30)
+  }
+  killTerminal(t = this.terminal) {
+    if (!t) return
+    if (t.busy || t.pending) t.interrupt()
+    t.el.remove()
+    this.terminals = this.terminals.filter(x => x !== t)
+    if (t.index) { try { localStorage.removeItem(`forgecode.term.state.${t.index}`) } catch {} } else t.saveState()
+    if (!this.terminals.length) { this.terminal = null; this.termLoading = null; this.termTabs.remove(); this.closeTerminal(); return }
+    this.switchTerminal(this.terminals[this.terminals.length - 1])
+  }
+  renderTermTabs() {
+    const bar = this.termTabs
+    if (!bar) return
+    bar.classList.toggle('hidden', this.terminals.length < 2)
+    bar.textContent = ''
+    this.terminals.forEach((t, k) => {
+      bar.append(h('div', { class: 'term-tab' + (t === this.terminal ? ' active' : '') },
+        h('button', { class: 'tt-name', onclick: () => this.switchTerminal(t) }, (t.busy || t.pending) ? h('span', { class: 'tt-dot' }) : null, `${k + 1}: ${t.mode === 'python' ? 'python' : t.shell.cwd ? t.shell.cwd.split('/').pop() : '~'}`),
+        h('button', { class: 'tt-close', 'aria-label': 'このターミナルを閉じる', onclick: () => this.killTerminal(t) }, icon('close', 13))))
+    })
+    bar.append(h('button', { class: 'tt-add', 'aria-label': '新しいターミナル', title: '新しいターミナル', onclick: () => this.newTerminal() }, icon('plus', 15)))
+  }
+  async openTerminal({ cwd = null, run = null } = {}) {
+    const t = await this.ensureTerminal()
+    if (this.full) this.exitFull()
+    if (document.body.dataset.layout === 'mobile') this.enterTermFull()
+    else {
+      if (app.wb && !app.wb.panelOpen) runCommand('togglePanel', true)
+      this.tab = 'terminal'
+      this.show('terminal')
+    }
+    if (cwd !== null && !t.busy && t.mode === 'shell') { t.shell.cwd = cwd; t.prompt() }
+    if (run && !t.busy && !t.pending && t.mode === 'shell') { t.input.value = run; t.submit() }
+    setTimeout(() => t.focus(), 60)
+    return t
+  }
+  closeTerminal({ forEditor = false } = {}) {
+    if (this.termFull) this.exitTermFull()
+    else if (!forEditor && app.wb && this.tab === 'terminal') runCommand('togglePanel', false)
+  }
+  enterTermFull() {
+    if (this.termFull) { this.show('terminal'); return }
+    this.termFull = true
+    this.root.classList.add('term-full')
+    document.body.classList.add('term-full-open')
+    this.tab = 'terminal'
+    this.show('terminal')
+    this.termStateChanged()
+    try { history.pushState({ fcTerm: 1 }, ''); this.termPushed = true } catch {}
+    requestAnimationFrame(() => this.root.classList.add('term-full-in'))
+  }
+  exitTermFull() {
+    if (!this.termFull) return
+    this.termFull = false
+    this.root.classList.remove('term-full', 'term-full-in')
+    document.body.classList.remove('term-full-open')
+    if (this.terminal) this.terminal.input.blur()
+    if (this.termPushed) { this.termPushed = false; try { if (history.state && history.state.fcTerm) history.back() } catch {} }
+    this.show('output')
+    if (app.wb) app.wb.applyPanel()
+  }
+  // ターミナルの状態が変わった (実行中・入力待ち) → 上部の表示を更新
+  termStateChanged() {
+    const t = this.terminal
+    if (!t) return
+    this.renderTabs()
+    const busy = t.busy || t.pending
+    this.renderTermTabs()
+    this.termState.className = 'rh-state' + (t.pending ? ' wait' : busy ? ' run' : '')
+    this.termState.textContent = ''
+    if (t.pending) this.termState.append(h('span', { class: 'spinner' }), '入力待ち')
+    else if (busy) this.termState.append(h('span', { class: 'spinner' }), '実行中')
+    else if (t.mode === 'python') this.termState.append('Python')
+    emit('termState')
+    this.termActions.textContent = ''
+    const btn = (ic, title, fn) => h('button', { class: 'icon-btn', title, 'aria-label': title, onclick: fn }, icon(ic, 18))
+    if (busy) this.termActions.append(h('button', { class: 'run-btn stop', title: '止める (Ctrl+C)', 'aria-label': '止める', onclick: () => t.interrupt() }, icon('stop', 16), h('span', null, '止める')))
+    this.termActions.append(btn('more', 'その他', e => menu([
+      { label: 'ターミナルの文字をコピー', icon: 'copy', run: () => copyText(t.text()).then(() => toast('コピーしました', { icon: 'copy' })) },
+      { label: '画面を消す', icon: 'trash', run: () => t.clear() },
+      { label: '新しいターミナル', icon: 'plus', run: () => this.newTerminal() },
+      this.terminals.length > 1 ? { label: 'このターミナルを閉じる', icon: 'close', run: () => this.killTerminal(t) } : null,
+      { label: 'Python の対話モード', icon: 'python', disabled: busy || t.mode === 'python', run: () => { t.input.value = 'python'; t.submit() } },
+      { label: '実行画面を開く', icon: 'play', run: () => this.enterFull() },
+      { label: 'Python を再起動', icon: 'refresh', run: () => this.restartPython() },
+      '-',
+      { label: 'コマンドの一覧 (help)', icon: 'book', disabled: busy, run: () => { if (t.mode === 'python') t.leaveRepl(); t.input.value = 'help'; t.submit() } },
+    ], e.currentTarget, { title: 'ターミナル' })))
+    this.updateRunHead()
   }
 
   // ============================================================
@@ -519,6 +827,9 @@ export class Runner {
     this.running = info
     busy('run', !!info)
     if (!info) clearInterval(this.watchdog)
+    // 実行中は 1 秒ごとに、経過時間を表示し直す
+    clearInterval(this.ticker)
+    if (info) this.ticker = setInterval(() => { this.tickElapsed(); emit('runTick') }, 1000)
     emit('running', info)
     this.updateRunHead()
   }
@@ -541,7 +852,14 @@ export class Runner {
     }, 250)
   }
 
-  finished(reason, ms) {
+  finished(reason, ms, quiet = false) {
+    // ターミナルから実行していたもの (止めたときなど): ターミナルに知らせる
+    if (this.sink) {
+      const sink = this.sink
+      this.sink = null
+      quiet = true
+      try { sink.done({ reason, ms }) } catch {}
+    }
     this.debug.onFinished()
     if (this.turtle) { this.turtle.finish(); this.turtle.el.classList.remove('sf-sticky') }
     this.endSurfaces()
@@ -553,10 +871,50 @@ export class Runner {
     this.removeInput()
     const sec = ((ms !== undefined ? ms : performance.now() - this.t0) / 1000).toFixed(2)
     const msg = reason === 'stopped' ? `■ 停止しました (${sec} 秒)` : reason === 'error' ? `✕ エラーで終了 (${sec} 秒)` : reason === 'load' ? '✕ Python を読み込めませんでした' : `✓ 完了 (${sec} 秒)`
-    this.append([{ kind: reason === 'error' || reason === 'load' ? 'meta error' : 'meta', text: msg }])
+    if (!quiet) this.append([{ kind: reason === 'error' || reason === 'load' ? 'meta error' : 'meta', text: msg }])
     this.setRunning(null)
+    if (reason === 'error' && this.autoOk && getSettings().autoRestart) this.scheduleRestart()
     this.renderTabs()
     this.updateRunHead()
+  }
+
+  // ============================================================
+  // ずっと動かす: エラーで止まったら、少し待って自動で再実行 (すぐ止まるのが続くと、待つ時間を延ばす)
+  // ============================================================
+  scheduleRestart() {
+    const se = this.series || (this.series = { t0: performance.now(), restarts: 0, fails: 0 })
+    se.fails = this.lastSec > 60 ? 1 : se.fails + 1
+    const wait = Math.min(60, 3 * 2 ** Math.min(5, se.fails - 1))
+    const path = this.runPath
+    this.restartAt = performance.now() + wait * 1000
+    this.append([{ kind: 'meta', text: `⟳ ${wait} 秒後に自動で再実行します (${se.restarts + 1} 回目) — やめるときは ■ か「戻る」の右のボタン` }])
+    clearTimeout(this.restartTimer)
+    clearInterval(this.countdown)
+    this.countdown = setInterval(() => this.updateRunHead(), 1000)
+    this.restartTimer = setTimeout(() => {
+      clearInterval(this.countdown)
+      this.restartTimer = 0
+      this.restartAt = 0
+      if (this.running) return
+      se.restarts++
+      this.run({ path, auto: true })
+    }, wait * 1000)
+    this.updateRunHead()
+  }
+  cancelRestart() {
+    if (!this.restartTimer) return false
+    clearTimeout(this.restartTimer)
+    clearInterval(this.countdown)
+    this.restartTimer = 0
+    this.restartAt = 0
+    this.updateRunHead()
+    return true
+  }
+  // 実行画面の経過時間だけを書き換える
+  tickElapsed() {
+    if (!this.elapsedEl || !this.running) return
+    this.elapsedEl.textContent = ' ' + fmtElapsed(performance.now() - this.t0)
+    if (this.seriesEl && this.series) this.seriesEl.textContent = `連続 ${fmtElapsed(performance.now() - this.series.t0)}・再実行 ${this.series.restarts} 回`
   }
 
   onMessage(m) {
@@ -566,7 +924,7 @@ export class Runner {
         if (m.state === 'ready') { this.pyReady = true; this.pyStatus = m.text; emit('python', m) }
         else if (m.state === 'error') { this.line('error', m.text) }
         break
-      case 'output': this.append(m.items); break
+      case 'output': if (this.sink) this.sink.output(m.items); else this.append(m.items); break
       case 'paused':
         if (!this.running) break
         if (!this.running.debug) this.running.debug = true
@@ -575,25 +933,50 @@ export class Runner {
       case 'resumed': if (this.debug.paused) this.debug.onResumed(); break
       case 'expanded': this.debug.onExpanded(m); break
       case 'watchValues': this.debug.onWatchValues(m); break
-      case 'input': this.showInput(!!m.password); break
-      case 'inputDone': if (this.inputPending) { this.inputPending = false; this.removeInput(); this.renderTabs() } break
-      case 'image': this.showImage(m.data, m.key, m.mime); break
-      case 'html': this.showHtml(m.html, m.text); break
-      case 'link': this.showLink(m.url); break
-      case 'turtle': this.showTurtle(m.ops); break
-      case 'frame': this.showFrame(m); break
+      case 'input':
+        if (this.sink) { this.inputPending = true; this.updateRunHead(); this.sink.input(!!m.password) }
+        else this.showInput(!!m.password)
+        break
+      case 'inputDone':
+        if (this.inputPending) { this.inputPending = false; if (this.sink) this.sink.inputDone(); else { this.removeInput(); this.renderTabs() } }
+        break
+      case 'image': if (this.sink) this.sink.block(m); else this.showImage(m.data, m.key, m.mime); break
+      case 'html': if (this.sink) this.sink.block(m); else this.showHtml(m.html, m.text); break
+      case 'link': if (this.sink) this.sink.block(m); else this.showLink(m.url); break
+      case 'turtle': this.sinkVisual(); this.showTurtle(m.ops); break
+      case 'frame': this.sinkVisual(); this.showFrame(m); break
       case 'surface': this.onSurface(m); break
       case 'rpc': handleRpc(m); break
       case 'sound': this.sound.handle(m); break
-      case 'tk': this.showTk(m.ops); break
+      case 'tk': this.sinkVisual(); this.showTk(m.ops); break
+      case 'pong': { const fn = this.pongs.get(m.id); if (fn) { this.pongs.delete(m.id); fn(true) } break }
       case 'evTaken': this.pumpEvents(); break
-      case 'evalResult':
+      case 'evalResult': {
+        const wait = this.evalWaits.get(m.id)
+        if (wait) { this.evalWaits.delete(m.id); wait(m); break }
         if (m.ok) { if (m.html) this.showHtml(m.html, m.value); else if (m.value !== null && m.value !== undefined) this.append([{ kind: 'result', text: m.value }]) }
         else this.append([{ kind: 'error', text: m.error }])
         break
+      }
       case 'done':
         if (m.id !== this.runId) break
+        // プログラムが変えたファイルは、次の実行で送り直す
+        for (const p of Object.keys(m.files || {})) this.sent.delete(p)
         if (m.id !== this.scratchId) this.applyFiles(m.files)
+        if (this.sink) {
+          // ターミナルから実行したもの: 結果はターミナルに (エラーの場所はエディタにも印を付ける)
+          const sink = this.sink
+          this.sink = null
+          if (m.error && m.error.frames) {
+            const frames = m.error.frames.filter(f => app.files.some(x => x.path === f.file))
+            const at = m.error.syntax && m.error.file ? { file: m.error.file, line: m.error.line } : frames[frames.length - 1]
+            if (at) app.editors.markRunError(at.file, at.line, `${m.error.type}: ${m.error.message}`)
+          }
+          sink.done(m)
+          if (this.running) this.finished(m.reason === 'exit' ? 'done' : m.reason, m.ms, true)
+          if (m.fatal) { this.pyReady = false; this.resetWorker() }
+          break
+        }
         if (m.error) this.showError(m.error)
         else if (m.reason === 'load') this.line('error', m.error || 'Python を読み込めませんでした')
         if (this.running) this.finished(m.reason === 'exit' ? 'done' : m.reason, m.ms)
@@ -615,7 +998,7 @@ export class Runner {
         if (text === null) { await vfs.remove(app.project.id, path); continue }
         await vfs.writeFile(app.project.id, path, text)
         app.contents.set(path, text)
-        if (app.editors.has(path)) app.editors.externalChange(path, text)
+        if (typeof text === 'string' && app.editors.has(path)) app.editors.externalChange(path, text)
         names.push(path)
       } catch {}
     }
@@ -760,6 +1143,15 @@ export class Runner {
     this.tk.push(ops)
   }
 
+  // ターミナルから実行したプログラムが、図・ゲームの画面を出した → 実行画面を開く
+  sinkVisual() {
+    if (!this.sink || this.sinkShown) return
+    this.sinkShown = true
+    try { this.sink.visual() } catch {}
+    if (this.useFull()) this.enterFull()
+    else { runCommand('togglePanel', true); this.show('output') }
+  }
+
   // ============================================================
   // 全画面の実行画面
   // ============================================================
@@ -772,6 +1164,7 @@ export class Runner {
     if (this.full) { this.updateRunHead(); return }
     this.full = true
     this.wasPanelOpen = !!(app.wb && app.wb.panelOpen)
+    this.tabBeforeFull = this.tab
     this.root.classList.add('run-full')
     document.body.classList.add('run-full-open')
     if (this.tab !== 'output') this.show('output')
@@ -785,17 +1178,25 @@ export class Runner {
     this.root.classList.remove('run-full', 'run-full-in')
     document.body.classList.remove('run-full-open')
     for (const sv of this.surfaces.values()) sv.toggleMax(false)
-    if (app.wb) { app.wb.panelOpen = false; app.wb.togglePanel(this.wasPanelOpen && document.body.dataset.layout !== 'mobile') }
+    if (this.termFull) this.show('terminal')
+    else if (app.wb) {
+      app.wb.panelOpen = false
+      const reopen = this.wasPanelOpen && document.body.dataset.layout !== 'mobile'
+      app.wb.togglePanel(reopen)
+      // ターミナルから実行していたら、ターミナルに戻る
+      if (reopen && this.tabBeforeFull && this.tabBeforeFull !== this.tab) this.show(this.tabBeforeFull)
+    }
     if (this.pushed) { this.pushed = false; try { if (history.state && history.state.fcRun) history.back() } catch {} }
     this.updateRunHead()
     const v = app.editors && app.editors.activeView()
-    if (v && document.body.dataset.layout !== 'mobile') setTimeout(() => v.focus(), 60)
+    if (this.termFull || this.tab === 'terminal') { if (this.terminal) setTimeout(() => this.terminal.focus(), 60) }
+    else if (v && document.body.dataset.layout !== 'mobile') setTimeout(() => v.focus(), 60)
   }
   updateRunHead() {
     if (!this.runHead) return
     const running = this.running
     this.root.classList.toggle('is-running', !!running)
-    this.pill.classList.toggle('hidden', !running || this.full || (getSettings().runView || 'full') !== 'full')
+    this.pill.classList.toggle('hidden', !running || running.term || this.full || (getSettings().runView || 'full') !== 'full')
     const pt = this.pill.querySelector('.rp-text')
     if (pt) pt.textContent = this.inputPending ? '入力待ち' : '実行中'
     if (!this.full) return
@@ -803,9 +1204,16 @@ export class Runner {
     this.runTitle.textContent = this.runPath ? vfs.basename(this.runPath) + (this.runSelection ? ' (選択範囲)' : '') : '実行'
     this.runState.className = 'rh-state'
     this.runState.textContent = ''
+    this.elapsedEl = null
+    this.seriesEl = null
     if (running) {
       this.runState.classList.add(this.inputPending ? 'wait' : 'run')
-      this.runState.append(h('span', { class: 'spinner' }), this.inputPending ? '入力待ち' : '実行中')
+      this.elapsedEl = h('span', { class: 'rh-sec' }, ' ' + fmtElapsed(performance.now() - this.t0))
+      this.runState.append(h('span', { class: 'spinner' }), this.inputPending ? '入力待ち' : '実行中', this.elapsedEl)
+      if (this.series && this.series.restarts) { this.seriesEl = h('span', { class: 'rh-series' }, ''); this.runState.append(this.seriesEl); this.tickElapsed() }
+    } else if (this.restartTimer) {
+      this.runState.classList.add('wait')
+      this.runState.append(h('span', { class: 'spinner' }), `${Math.max(1, Math.round((this.restartAt - performance.now()) / 1000))} 秒後に再実行`)
     } else if (this.lastReason) {
       const r = this.lastReason
       this.runState.classList.add(r === 'error' || r === 'load' ? 'err' : r === 'stopped' ? 'stop' : 'ok')
@@ -814,12 +1222,17 @@ export class Runner {
     this.runActions.textContent = ''
     const btn = (ic, title, fn, cls = '') => h('button', { class: 'icon-btn ' + cls, title, 'aria-label': title, onclick: fn }, icon(ic, 18))
     if (running) this.runActions.append(h('button', { class: 'run-btn stop', title: '停止', 'aria-label': '停止', onclick: () => runCommand('stop') }, icon('stop', 16), h('span', null, '停止')))
+    else if (this.restartTimer) this.runActions.append(h('button', { class: 'run-btn stop', title: '自動の再実行をやめる', 'aria-label': '自動の再実行をやめる', onclick: () => { this.cancelRestart(); this.append([{ kind: 'meta', text: '自動の再実行をやめました' }]) } }, icon('stop', 16), h('span', null, 'やめる')))
     else this.runActions.append(h('button', { class: 'run-btn', title: 'もう一度実行', 'aria-label': 'もう一度実行', onclick: () => this.rerun() }, icon('refresh', 16), h('span', null, 'もう一度')))
     this.runActions.append(btn('more', 'その他', e => menu([
       { label: '出力をコピー', icon: 'copy', run: () => copyText(this.outputText()).then(() => toast('出力をコピーしました', { icon: 'copy' })) },
       { label: 'クリア', icon: 'trash', run: () => this.clear(), disabled: !!running },
       { label: 'エラーと警告だけ表示', icon: 'filter', checked: this.filter !== 'all', run: () => { this.filter = this.filter === 'all' ? 'issues' : 'all'; this.outEl.classList.toggle('only-issues', this.filter !== 'all'); this.renderTabs() } },
       { label: 'Python を再起動', icon: 'refresh', run: () => this.restartPython() },
+      { label: 'ずっと動かす (エラーで止まったら自動で再実行)', icon: 'history', checked: !!getSettings().autoRestart, run: () => { const v = !getSettings().autoRestart; setSettings({ autoRestart: v }); toast(v ? 'エラーで止まったら、自動で再実行します' : '自動の再実行をやめました'); if (!v) this.cancelRestart() } },
+      { label: '画面を消さない (実行中)', icon: 'sun', checked: (getSettings().keepAwake || 'run') !== 'off', run: () => { const on = (getSettings().keepAwake || 'run') !== 'off'; setSettings({ keepAwake: on ? 'off' : 'run' }); toast(on ? '画面が自動で消えるようにしました' : '実行中は画面を消さないようにしました') } },
+      { label: 'クラウドで動かす (アプリを閉じても)', icon: 'cloud', run: () => runCommand('cloud') },
+      { label: 'ターミナル', icon: 'terminal', run: () => { this.exitFull(); this.openTerminal() } },
       '-',
       { label: '実行結果を下のパネルに出す (全画面にしない)', icon: 'terminal', run: () => { setSettings({ runView: 'panel' }); this.exitFull(); runCommand('togglePanel', true); toast('実行結果は下のパネルに出します (設定 → 実行 で戻せます)') } },
     ], e.currentTarget, { title: '実行' })))
@@ -847,11 +1260,15 @@ export class Runner {
     if (err.syntax && err.text && err.text.includes('^')) {
       el.append(h('pre', { class: 'oe-code' }, err.text.split('\n').slice(-4).join('\n')))
     }
-    const ex = s.explainErrors ? explainError(err) : null
-    if (ex) {
-      el.append(h('div', { class: 'oe-why' }, icon('info', 14), h('span', null, ex.why)))
-      if (ex.fixes.length) el.append(h('ul', { class: 'oe-fixes' }, ex.fixes.map(f => h('li', null, f))))
+    const why = h('div', { class: 'oe-explain' })
+    el.append(why)
+    const explain = m => {
+      const ex = m.explainError(err)
+      if (!ex) return
+      why.append(h('div', { class: 'oe-why' }, icon('info', 14), h('span', null, ex.why)))
+      if (ex.fixes.length) why.append(h('ul', { class: 'oe-fixes' }, ex.fixes.map(f => h('li', null, f))))
     }
+    if (s.explainErrors) { if (explainMod) explain(explainMod); else loadExplain().then(explain).catch(() => {}) }
     if (frames.length > 1 || (err.frames || []).length > frames.length) {
       const tb = h('details', { class: 'oe-trace' }, h('summary', null, `トレースバック (${(err.frames || []).length})`))
       const pre = h('div', { class: 'oe-tb' })
@@ -1020,7 +1437,16 @@ export class Runner {
 
 command('run', '実行', () => app.runner.run(), { icon: 'play' })
 command('runSelection', '選択範囲だけ実行', () => app.runner.run({ selection: true }), { icon: 'play' })
-command('stop', '停止', () => app.runner.stop(), { icon: 'stop' })
+command('stop', '停止', () => { if (!app.runner.running && app.runner.cancelRestart()) { app.runner.append([{ kind: 'meta', text: '自動の再実行をやめました' }]); return } app.runner.stop() }, { icon: 'stop' })
 command('restartPython', 'Python を再起動 (変数をすべて消す)', () => app.runner.restartPython(), { icon: 'refresh' })
 command('clearOutput', '出力をクリア', () => app.runner.clear(), { icon: 'trash' })
-command('openRunScreen', '実行画面を開く', () => { if (getSettings().runView === 'panel') runCommand('togglePanel', true); else app.runner.enterFull() }, { icon: 'terminal' })
+command('openRunScreen', '実行画面を開く', () => { if (getSettings().runView === 'panel') { runCommand('togglePanel', true); app.runner.show('output') } else app.runner.enterFull() }, { icon: 'play' })
+command('terminal', 'ターミナルを開く', opts => app.runner.openTerminal(opts && typeof opts === 'object' ? opts : {}), { icon: 'terminal', key: '⌃`' })
+command('toggleTerminal', 'ターミナルの表示切り替え', () => {
+  const r = app.runner
+  if (r.termFull || (app.wb && app.wb.panelOpen && r.tab === 'terminal')) r.closeTerminal()
+  else r.openTerminal()
+}, { icon: 'terminal', key: '⌃`' })
+command('terminalNew', '新しいターミナル', () => app.runner.newTerminal(), { icon: 'plus' })
+command('terminalKill', 'ターミナルを閉じる (このターミナル)', () => app.runner.killTerminal(), { icon: 'close' })
+command('terminalRun', 'ターミナルでコマンドを実行', line => app.runner.openTerminal({ run: String(line || '') }), { icon: 'terminal', hidden: true })

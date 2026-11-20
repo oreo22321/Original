@@ -134,6 +134,8 @@ export class EditorManager {
       let content = app.contents.get(path)
       if (content === undefined) content = await vfs.readFile(pid, path)
       if (content === null || content === undefined) { toast(`"${path}" を開けません`, { kind: 'error' }); return null }
+      // 画像・Excel などのバイナリは、エディタではなくプレビューで
+      if (content instanceof Uint8Array) { import('./file-preview.js').then(m => m.previewFile(path, content)); return null }
       doc = { path, lang: langOf(path), state: null, savedDoc: null, dirty: false, scroll: scroll || 0, saving: null, saveTimer: null, draftTimer: null, firstDirty: 0 }
       doc.ctx = this.ctxFor(doc)
       doc.state = createState(content, doc.ctx)

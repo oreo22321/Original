@@ -1,4 +1,4 @@
-import{a as l,b as v,c as b,d as w,e as N,f as x}from"../chunks/chunk-U4B2QAZV.js";import{loadPyodide as F}from"../../vendor/pyodide/pyodide.mjs";var C=String.raw`
+import{a as l,b as v,c as b,d as w,e as N,f as x}from"../chunks/chunk-A6S7RETE.js";import{loadPyodide as F}from"../../vendor/pyodide/pyodide.mjs";var C=String.raw`
 import ast as _ast, json as _json, builtins as _bi
 
 class _Src:

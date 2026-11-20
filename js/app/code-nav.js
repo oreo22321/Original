@@ -22,8 +22,8 @@ function lineOf(text, line) { return (text.split('\n')[line - 1] || '') }
 async function textOf(path) {
   const d = app.editors.docs.get(path)
   if (d) return d.state.doc.toString()
-  const c = app.contents.get(path)
-  return c !== undefined ? c : (await vfs.readFile(app.project.id, path)) || ''
+  const c = app.contents.has(path) ? app.contents.get(path) : await vfs.readFile(app.project.id, path)
+  return typeof c === 'string' ? c : ''
 }
 function offsetOf(text, line, col) {
   let off = 0

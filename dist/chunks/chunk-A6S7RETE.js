@@ -884,7 +884,387 @@ def _hook_urllib(ur):
 
 
 on_import("urllib.request", _hook_urllib)
-`,f=String.raw`"""ForgeCode の webbrowser: 出力にリンクを表示します (タップで開けます)"""
+
+
+# ============================================================
+# os.system / os.popen / subprocess: よく使うコマンドを、この中で再現する (_fcshell)
+# (cls・clear で画面を消す、pause、echo、python ほかのファイル.py など。ほかのプログラムは起動できない)
+# ============================================================
+def _system(cmd):
+    import _fcshell
+    code, out, err = _fcshell.run(cmd, shell=True, capture=False)
+    return code << 8 if code > 0 else code
+
+
+def _popen(cmd, mode="r", buffering=-1):
+    import _fcshell, io
+    code, out, err = _fcshell.run(cmd, shell=True, capture=True)
+    if "w" in mode:
+        return io.StringIO()
+    return io.StringIO(out)
+
+
+import os as _os_mod
+_os_mod.system = _system
+_os_mod.popen = _popen
+
+
+def _hook_subprocess(sp):
+    import _fcshell
+    _fcshell.install(sp)
+
+
+on_import("subprocess", _hook_subprocess)
+`,f=String.raw`"""ForgeCode の subprocess / os.system (よく使うコマンドを、この中で再現します)
+
+使えるもの: cls / clear (画面を消す)・pause・echo・python (ほかの .py)・ls / dir・cat / type・pwd / cd・
+mkdir・rm / del・sleep / timeout・date・whoami・exit・color / title / chcp (何もしない)
+ほかのプログラム (git など) は、ブラウザの中では起動できません
+"""
+import io, os, sys, shlex, time, runpy, contextlib
+
+CLEAR = "\x1b[2J\x1b[H"
+
+
+class _Exit(Exception):
+    def __init__(self, code):
+        self.code = code
+
+
+def _split(cmd, shell):
+    if isinstance(cmd, (list, tuple)):
+        args = [os.fspath(a) if not isinstance(a, str) else a for a in cmd]
+        if shell and len(args) == 1:
+            return _split(args[0], True)
+        return [args]
+    cmd = os.fspath(cmd) if not isinstance(cmd, str) else cmd
+    # && ; で区切った複数のコマンド (かんたんに)
+    out = []
+    for part in cmd.replace("&&", ";").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(shlex.split(part, posix=os.name != "nt"))
+        except ValueError:
+            out.append(part.split())
+    return out
+
+
+def _python(args, out, err, stdin):
+    # python ファイル.py 引数 / -c コード / -m モジュール を、この Python の中で実行
+    argv0 = sys.argv
+    saved_in = sys.stdin
+    try:
+        if stdin is not None:
+            sys.stdin = io.StringIO(stdin)
+        if not args:
+            raise _Exit(0)
+        if args[0] == "-c":
+            sys.argv = ["-c"] + args[2:]
+            g = {"__name__": "__main__"}
+            exec(compile(args[1] if len(args) > 1 else "", "<string>", "exec"), g)
+        elif args[0] == "-m":
+            sys.argv = [args[1]] + args[2:]
+            runpy.run_module(args[1], run_name="__main__", alter_sys=True)
+        elif args[0] in ("-V", "--version"):
+            print("Python " + sys.version.split()[0])
+        else:
+            sys.argv = list(args)
+            runpy.run_path(args[0], run_name="__main__")
+        return 0
+    except SystemExit as e:
+        c = e.code
+        if c is None:
+            return 0
+        if isinstance(c, int):
+            return c
+        print(c, file=sys.stderr)
+        return 1
+    except _Exit as e:
+        return e.code
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return 1
+    finally:
+        sys.argv = argv0
+        sys.stdin = saved_in
+
+
+def _one(args, shell, stdin):
+    name = os.path.basename(args[0]).lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    rest = args[1:]
+    if name in ("cls", "clear"):
+        sys.stdout.write(CLEAR)
+        return 0
+    if name == "pause":
+        try:
+            input("続行するには Enter キーを押してください . . . ")
+        except EOFError:
+            pass
+        return 0
+    if name == "echo":
+        if rest == ["."] or rest == []:
+            print()
+        else:
+            print(" ".join(rest))
+        return 0
+    if name in ("python", "python3", "py") or args[0] == sys.executable:
+        return _python(rest, None, None, stdin)
+    if name in ("pip", "pip3"):
+        print("pip はターミナルで使ってください (例: pip install 名前)。import するだけでも自動で入ります", file=sys.stderr)
+        return 1
+    if name in ("ls", "dir"):
+        path = next((a for a in rest if not a.startswith("-") and not a.startswith("/")), ".")
+        try:
+            names = sorted(n for n in os.listdir(path) if not n.startswith(".") and n != "__pycache__")
+        except OSError as e:
+            print(e, file=sys.stderr)
+            return 1
+        print("\n".join(names))
+        return 0
+    if name in ("cat", "type"):
+        code = 0
+        for f in rest:
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    sys.stdout.write(fh.read())
+            except OSError as e:
+                print(e, file=sys.stderr)
+                code = 1
+        return code
+    if name == "pwd" or (name == "cd" and not rest):
+        print(os.getcwd())
+        return 0
+    if name == "cd":
+        try:
+            os.chdir(rest[0])
+            return 0
+        except OSError as e:
+            print(e, file=sys.stderr)
+            return 1
+    if name in ("mkdir", "md"):
+        for d in rest:
+            if not d.startswith("-"):
+                os.makedirs(d, exist_ok=True)
+        return 0
+    if name in ("rm", "del", "erase"):
+        code = 0
+        for f in rest:
+            if f.startswith("-") or f.startswith("/"):
+                continue
+            try:
+                if os.path.isdir(f):
+                    import shutil
+                    shutil.rmtree(f)
+                else:
+                    os.remove(f)
+            except OSError as e:
+                print(e, file=sys.stderr)
+                code = 1
+        return code
+    if name in ("sleep", "timeout"):
+        nums = [a for a in rest if a.replace(".", "", 1).isdigit()]
+        time.sleep(float(nums[0]) if nums else 1)
+        return 0
+    if name == "date":
+        import datetime
+        print(datetime.datetime.now().strftime("%Y年 %m月 %d日 %H:%M:%S"))
+        return 0
+    if name == "whoami":
+        print("forge")
+        return 0
+    if name == "exit":
+        raise _Exit(int(rest[0]) if rest and rest[0].lstrip("-").isdigit() else 0)
+    if name in ("color", "title", "chcp", "mode", "true", "rem", ":"):
+        return 0
+    if name == "false":
+        return 1
+    if shell:
+        print("'%s' はこの環境では使えません (ブラウザの中では、ほかのプログラムを起動できません)" % args[0], file=sys.stderr)
+        return 127
+    raise FileNotFoundError(2, "No such file or directory: '%s' (ブラウザの中では、ほかのプログラムを起動できません)" % args[0], args[0])
+
+
+def run(cmd, shell=False, capture=False, input=None, cwd=None, text=True):
+    """戻り値: (終了コード, 出力, エラー出力)"""
+    out, err = io.StringIO(), io.StringIO()
+    old = os.getcwd()
+    code = 0
+    try:
+        if cwd is not None:
+            os.chdir(cwd)
+        ctx_out = contextlib.redirect_stdout(out) if capture else contextlib.nullcontext()
+        ctx_err = contextlib.redirect_stderr(err) if capture else contextlib.nullcontext()
+        with ctx_out, ctx_err:
+            for args in _split(cmd, shell):
+                if not args:
+                    continue
+                try:
+                    code = _one(args, shell, input)
+                except _Exit as e:
+                    code = e.code
+                    break
+    finally:
+        if cwd is not None:
+            os.chdir(old)
+    return code, out.getvalue(), err.getvalue()
+
+
+def install(sp):
+    """subprocess の run / call / check_output などを置き換える"""
+    def _data(v, text):
+        if v is None:
+            return None
+        return v if text else v.encode()
+
+    def _run(args, *, stdin=None, input=None, stdout=None, stderr=None, capture_output=False, shell=False, cwd=None,
+             timeout=None, check=False, text=None, universal_newlines=None, encoding=None, errors=None, env=None, **kw):
+        txt = bool(text or universal_newlines or encoding or errors)
+        cap_out = capture_output or stdout in (sp.PIPE, sp.DEVNULL)
+        cap_err = capture_output or stderr in (sp.PIPE, sp.DEVNULL, sp.STDOUT)
+        if isinstance(input, bytes):
+            input = input.decode("utf-8", "replace")
+        code, out, err = run(args, shell=shell, capture=cap_out or cap_err, input=input, cwd=cwd)
+        if stderr == sp.STDOUT and cap_out:
+            out, err = out + err, ""
+        # 受け取らないものは、そのまま画面へ
+        if not cap_out:
+            if out:
+                sys.stdout.write(out)
+            out = None
+        elif stdout == sp.DEVNULL:
+            out = None
+        if not cap_err:
+            if err:
+                sys.stderr.write(err)
+            err = None
+        elif stderr in (sp.DEVNULL, sp.STDOUT):
+            err = None
+        cp = sp.CompletedProcess(args, code, _data(out, txt), _data(err, txt))
+        if check and code:
+            raise sp.CalledProcessError(code, args, cp.stdout, cp.stderr)
+        return cp
+
+    def _call(args, **kw):
+        kw.pop("check", None)
+        return _run(args, **kw).returncode
+
+    def _check_call(args, **kw):
+        kw["check"] = True
+        _run(args, **kw)
+        return 0
+
+    def _check_output(args, **kw):
+        kw.setdefault("stdout", sp.PIPE)
+        kw["check"] = True
+        return _run(args, **kw).stdout
+
+    def _getstatusoutput(cmd, **kw):
+        code, out, err = run(cmd, shell=True, capture=True)
+        data = (out + err)
+        if data.endswith("\n"):
+            data = data[:-1]
+        return code, data
+
+    def _getoutput(cmd, **kw):
+        return _getstatusoutput(cmd)[1]
+
+    class Popen:
+        """かんたんな Popen (作った時点で最後まで実行します)"""
+        def __init__(self, args, stdin=None, stdout=None, stderr=None, shell=False, cwd=None, text=None, universal_newlines=None, encoding=None, **kw):
+            self.args = args
+            self._txt = bool(text or universal_newlines or encoding)
+            self._kw = dict(stdout=stdout, stderr=stderr, shell=shell, cwd=cwd)
+            self._done = None
+            self.stdin = None
+            self.pid = 2
+            if stdin != sp.PIPE:
+                self._finish(None)
+
+        def _finish(self, input):
+            if self._done is None:
+                self._done = _run(self.args, input=input, text=self._txt, **self._kw)
+                self.returncode = self._done.returncode
+                self.stdout = io.StringIO(self._done.stdout) if isinstance(self._done.stdout, str) else io.BytesIO(self._done.stdout) if self._done.stdout is not None else None
+                self.stderr = io.StringIO(self._done.stderr) if isinstance(self._done.stderr, str) else io.BytesIO(self._done.stderr) if self._done.stderr is not None else None
+            return self._done
+
+        def communicate(self, input=None, timeout=None):
+            d = self._finish(input)
+            return d.stdout, d.stderr
+
+        def wait(self, timeout=None):
+            self._finish(None)
+            return self.returncode
+
+        def poll(self):
+            return self.returncode if self._done is not None else None
+
+        def kill(self):
+            pass
+
+        terminate = kill
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.wait()
+
+    sp.run = _run
+    sp.call = _call
+    sp.check_call = _check_call
+    sp.check_output = _check_output
+    sp.getoutput = _getoutput
+    sp.getstatusoutput = _getstatusoutput
+    sp.Popen = Popen
+`,o=String.raw`"""msvcrt (ForgeCode 互換版: キーを押す代わりに、入力欄に入れて Enter)"""
+_buf = []
+
+
+def _line():
+    if not _buf:
+        try:
+            s = input()
+        except EOFError:
+            s = ""
+        _buf.extend(list(s) or ["\r"])
+    return _buf.pop(0)
+
+
+def getwch():
+    return _line()
+
+
+def getwche():
+    c = _line()
+    print(c, end="")
+    return c
+
+
+def getch():
+    return getwch().encode("utf-8")[:1] or b"\r"
+
+
+def getche():
+    return getwche().encode("utf-8")[:1] or b"\r"
+
+
+def kbhit():
+    return bool(_buf)
+
+
+def putch(c):
+    print(c.decode() if isinstance(c, bytes) else c, end="")
+
+
+def putwch(c):
+    print(c, end="")
+`,a=String.raw`"""ForgeCode の webbrowser: 出力にリンクを表示します (タップで開けます)"""
 import js
 
 __all__ = ["Error", "open", "open_new", "open_new_tab", "get", "register"]
@@ -926,7 +1306,7 @@ def get(using=None):
 
 def register(name, klass, instance=None, *, preferred=False):
     pass
-`,o=String.raw`"""ForgeCode の multiprocessing
+`,_=String.raw`"""ForgeCode の multiprocessing
 ブラウザではプロセスを作れないため、同じ Python の中で順番に実行します (結果はふつうと同じになります)
 """
 import os as _os
@@ -1250,7 +1630,7 @@ class _Context:
 
 def get_context(method=None):
     return _Context()
-`,a=String.raw`"""ForgeCode の multiprocessing.pool (順番に実行します)"""
+`,d=String.raw`"""ForgeCode の multiprocessing.pool (順番に実行します)"""
 import itertools as _it
 
 __all__ = ["Pool", "ThreadPool", "AsyncResult", "ApplyResult", "MapResult"]
@@ -1354,13 +1734,13 @@ class Pool:
 
 
 ThreadPool = Pool
-`,_=String.raw`"""ForgeCode の multiprocessing.dummy (順番に実行します)"""
+`,c=String.raw`"""ForgeCode の multiprocessing.dummy (順番に実行します)"""
 from multiprocessing import (Queue, JoinableQueue, Lock, RLock, Event, Semaphore, BoundedSemaphore, Condition, Barrier,
                              Value, Array, Manager, cpu_count, current_process, active_children, Pipe)
 from multiprocessing.pool import ThreadPool as Pool
 from threading import Thread as Process
-`,d=String.raw`from multiprocessing import Queue, JoinableQueue, SimpleQueue
-`,c=String.raw`"""winsound (ForgeCode 互換版: 画面で音を鳴らします)"""
+`,u=String.raw`from multiprocessing import Queue, JoinableQueue, SimpleQueue
+`,p=String.raw`"""winsound (ForgeCode 互換版: 画面で音を鳴らします)"""
 import json as _json
 import js as _js
 
@@ -1404,7 +1784,7 @@ def PlaySound(sound, flags):
     from pyodide.ffi import to_js
     _n[0] += 1
     _js.__fc_sound(_json.dumps({"op": "play", "id": "ws%d" % _n[0], "channel": "winsound", "loops": -1 if flags & SND_LOOP else 0}), to_js(data))
-`,u=String.raw`"""playsound (ForgeCode 互換版: 画面で音を鳴らします)"""
+`,m=String.raw`"""playsound (ForgeCode 互換版: 画面で音を鳴らします)"""
 import json as _json
 import js as _js
 
@@ -1428,7 +1808,7 @@ def playsound(sound, block=True):
     from pyodide.ffi import to_js
     _n[0] += 1
     _js.__fc_sound(_json.dumps({"op": "play", "id": "ps%d" % _n[0]}), to_js(data))
-`;function e(l){return{"winsound.py":c,"playsound.py":u,"_forgecode.py":n,"webbrowser.py":f,"multiprocessing/__init__.py":o,"multiprocessing/pool.py":a,"multiprocessing/dummy/__init__.py":_,"multiprocessing/queues.py":d,"turtle.py":l}}var s=String.raw`"""ForgeCode の turtle (タートルグラフィックス)
+`;function e(l){return{"winsound.py":p,"_fcshell.py":f,"msvcrt.py":o,"playsound.py":m,"_forgecode.py":n,"webbrowser.py":a,"multiprocessing/__init__.py":_,"multiprocessing/pool.py":d,"multiprocessing/dummy/__init__.py":c,"multiprocessing/queues.py":u,"turtle.py":l}}var s=String.raw`"""ForgeCode の turtle (タートルグラフィックス)
 
 ブラウザ用に作り直したもので、ふつうの turtle とほぼ同じように使えます。
 描いた絵は出力パネルに表示されます。キー操作 (onkey)・クリック (onclick)・タイマー (ontimer) も使えます。
@@ -2614,7 +2994,7 @@ ScrolledCanvas = None
 
 def write_docstringdict(filename="turtle_docstringdict"):
     pass
-`;var p=String.raw`"""pygame (ForgeCode 互換版)
+`;var g=String.raw`"""pygame (ForgeCode 互換版)
 ブラウザの中で動くように作り直した pygame です。ゲームの画面は出力に表示され、キー・タップで操作できます。
 """
 import sys as _sys
@@ -2632,7 +3012,7 @@ ver = __version__
 vernum = (2, 5, 2)
 version = _sys.modules[__name__]
 SDL = (2, 30, 0)
-`,m=String.raw`"""pygame の土台 (初期化・エラー・画面とのやりとり)"""
+`,y=String.raw`"""pygame の土台 (初期化・エラー・画面とのやりとり)"""
 import json as _json
 import js as _js
 import _forgecode as _fc
@@ -2743,7 +3123,7 @@ def _reset_all():
         _cv("reset")()
     except Exception:
         pass
-`,g=String.raw`"""pygame の定数"""
+`,h=String.raw`"""pygame の定数"""
 NOEVENT = 0
 QUIT = 256
 ACTIVEEVENT = 32768
@@ -2984,11 +3364,11 @@ K_MENU = 1073741942
 K_POWER = 1073741926
 K_EURO = 1073741876
 K_AC_BACK = 1073742094
-`,y=String.raw`"""from pygame.locals import * で使う定数"""
+`,w=String.raw`"""from pygame.locals import * で使う定数"""
 from pygame.constants import *
 from pygame.rect import Rect, FRect
 from pygame.color import Color
-`,h=String.raw`"""pygame.Rect (長方形)"""
+`,x=String.raw`"""pygame.Rect (長方形)"""
 
 
 def _parse(args):
@@ -3311,7 +3691,7 @@ class FRect(Rect):
 
 
 RectType = Rect
-`,w=String.raw`"""pygame.Color (色)"""
+`,v=String.raw`"""pygame.Color (色)"""
 THECOLORS = {
     "aliceblue": (240, 248, 255), "antiquewhite": (250, 235, 215), "aqua": (0, 255, 255), "aquamarine": (127, 255, 212),
     "azure": (240, 255, 255), "beige": (245, 245, 220), "bisque": (255, 228, 196), "black": (0, 0, 0),
@@ -3520,7 +3900,7 @@ def css(c, alpha=True):
     if not alpha or a >= 255:
         return "rgb(%d,%d,%d)" % (r, g, b)
     return "rgba(%d,%d,%d,%.4f)" % (r, g, b, a / 255.0)
-`,x=String.raw`"""pygame.Surface (絵を描く板)"""
+`,k=String.raw`"""pygame.Surface (絵を描く板)"""
 import math as _m
 import pygame._base as _b
 from pygame._base import _q, _flush, _cv, error
@@ -3788,7 +4168,7 @@ def _adopt(canvas, alpha=True):
     s._clip = None
     s._display = False
     return s
-`,v=String.raw`"""pygame.display (ゲームの画面)"""
+`,b=String.raw`"""pygame.display (ゲームの画面)"""
 import os as _os
 import re as _re
 import sys as _sys
@@ -3979,7 +4359,7 @@ def Info():
 
 def _reset():
     _st.update(surf=None, caption="pygame", key=None, init=False, sent_keys=False)
-`,k=String.raw`"""pygame.draw (図形を描く)"""
+`,N=String.raw`"""pygame.draw (図形を描く)"""
 import math as _m
 from pygame._base import _q
 from pygame.rect import Rect
@@ -4064,7 +4444,7 @@ def polygon(surface, color, points, width=0):
     _q(["poly", surface._sid, surface._css(color), flat, width])
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
     return _bound(surface, min(xs), min(ys), max(xs), max(ys))
-`,b=String.raw`"""pygame.gfxdraw (よく使うものだけ)"""
+`,E=String.raw`"""pygame.gfxdraw (よく使うものだけ)"""
 from pygame import draw as _d
 from pygame.rect import Rect
 
@@ -4164,7 +4544,7 @@ def bezier(surface, points, steps, color):
         y = sum(comb(n, k) * (1 - t) ** (n - k) * t ** k * points[k][1] for k in range(n + 1))
         pts.append((x, y))
     _d.lines(surface, color, False, pts)
-`,N=String.raw`"""pygame.event (キー・マウスなどの出来事)"""
+`,S=String.raw`"""pygame.event (キー・マウスなどの出来事)"""
 import time as _t
 import heapq as _hq
 import _forgecode as _fc
@@ -4419,7 +4799,7 @@ def _set_timer(ev, millis, loops=0):
 def _reset():
     _queue.clear()
     _st.update(blocked=set(), allowed=None, grab=False, custom=USEREVENT, timers=[], seq=0, last_pump=0.0)
-`,E=String.raw`"""ブラウザのキー → pygame のキー"""
+`,T=String.raw`"""ブラウザのキー → pygame のキー"""
 from pygame.constants import *
 
 PRESSED = set()
@@ -4490,7 +4870,7 @@ for _n, _v in list(globals().items()):
         NAMES.setdefault(_v, _n[2:].lower())
 NAMES.update({K_UP: "up", K_DOWN: "down", K_LEFT: "left", K_RIGHT: "right", K_SPACE: "space", K_RETURN: "return", K_ESCAPE: "escape",
               K_LSHIFT: "left shift", K_RSHIFT: "right shift", K_LCTRL: "left ctrl", K_RCTRL: "right ctrl"})
-`,S=String.raw`"""pygame.key (キーボード)"""
+`,O=String.raw`"""pygame.key (キーボード)"""
 from pygame.constants import *
 from pygame import _keys
 
@@ -4587,7 +4967,7 @@ def _reset():
     _keys.JUST_UP.clear()
     _keys.MOD[0] = 0
     _keys.REPEAT[0] = _keys.REPEAT[1] = 0
-`,T=String.raw`"""pygame.mouse (マウス・タップ)"""
+`,R=String.raw`"""pygame.mouse (マウス・タップ)"""
 _st = {"pos": (0, 0), "rel": (0, 0), "buttons": set(), "just_down": set(), "just_up": set(), "visible": True, "focused": True}
 
 
@@ -4666,7 +5046,7 @@ def set_system_cursor(*a):
 
 def _reset():
     _st.update(pos=(0, 0), rel=(0, 0), buttons=set(), just_down=set(), just_up=set(), visible=True)
-`,O=String.raw`"""pygame.time (時間)"""
+`,K=String.raw`"""pygame.time (時間)"""
 import time as _t
 import _forgecode as _fc
 
@@ -4735,7 +5115,7 @@ class Clock:
 
 def _reset():
     _start[0] = _t.monotonic()
-`,K=String.raw`"""pygame.font (文字)"""
+`,F=String.raw`"""pygame.font (文字)"""
 import os as _os
 import math as _m
 import pygame._base as _b
@@ -4971,7 +5351,7 @@ def SysFont(name, size, bold=False, italic=False, constructor=None):
     f._bold = bool(bold)
     f._italic = bool(italic)
     return f
-`,R=String.raw`"""pygame.image (画像の読み込み・保存)"""
+`,A=String.raw`"""pygame.image (画像の読み込み・保存)"""
 import os as _os
 import io as _io
 import zlib as _zlib
@@ -5079,7 +5459,7 @@ fromstring = frombytes
 
 def frombuffer(data, size, format="RGBA", pitch=-1):
     return frombytes(data, size, format)
-`,A=String.raw`"""pygame.transform (拡大・回転・反転)"""
+`,L=String.raw`"""pygame.transform (拡大・回転・反転)"""
 import math as _m
 from pygame._base import _q
 from pygame.surface import Surface
@@ -5180,7 +5560,7 @@ def average_color(surface, rect=None, consider_alpha=False):
 
 def threshold(*a, **k):
     return 0
-`,F=String.raw`"""pygame.mixer (音): 画面側の Web Audio で鳴らします"""
+`,I=String.raw`"""pygame.mixer (音): 画面側の Web Audio で鳴らします"""
 import os as _os
 import json as _json
 import js as _js
@@ -5424,7 +5804,7 @@ class _Music:
 
 
 music = _Music()
-`,L=String.raw`"""pygame.math (ベクトル)"""
+`,P=String.raw`"""pygame.math (ベクトル)"""
 import math as _m
 
 
@@ -5838,7 +6218,7 @@ class Vector3(_Vec):
         r, t, p = s
         t, p = _m.radians(t), _m.radians(p)
         self.x, self.y, self.z = r * _m.sin(t) * _m.cos(p), r * _m.sin(t) * _m.sin(p), r * _m.cos(t)
-`,I=String.raw`"""pygame.sprite (スプライトとグループ)"""
+`,C=String.raw`"""pygame.sprite (スプライトとグループ)"""
 import math as _m
 from pygame.rect import Rect
 
@@ -6311,7 +6691,7 @@ def spritecollideany(sprite, group, collided=None):
         if test(sprite, s):
             return s
     return None
-`,P=String.raw`"""pygame.mask (画素単位の当たり判定)"""
+`,z=String.raw`"""pygame.mask (画素単位の当たり判定)"""
 from pygame.rect import Rect
 
 
@@ -6489,7 +6869,7 @@ def from_threshold(surface, color, threshold=(0, 0, 0, 255), othersurface=None, 
                 row |= 1 << x
         m._rows[y] = row
     return m
-`,C=String.raw`"""pygame.surfarray (numpy の配列とのやりとり)"""
+`,D=String.raw`"""pygame.surfarray (numpy の配列とのやりとり)"""
 from pygame._base import _cv, _flush
 from pygame.surface import Surface
 
@@ -6560,7 +6940,7 @@ def get_arraytypes():
 
 def use_arraytype(t):
     pass
-`,z={"pygame/joystick.py":String.raw`"""pygame.joystick (この環境ではつながりません)"""
+`,M={"pygame/joystick.py":String.raw`"""pygame.joystick (この環境ではつながりません)"""
 
 
 def init():
@@ -6709,7 +7089,7 @@ class Font:
 
 
 SysFont = lambda name, size, bold=False, italic=False: Font(None, size)
-`};function t(){return{"pygame/__init__.py":p,"pygame/_base.py":m,"pygame/constants.py":g,"pygame/locals.py":y,"pygame/rect.py":h,"pygame/color.py":w,"pygame/surface.py":x,"pygame/display.py":v,"pygame/draw.py":k,"pygame/gfxdraw.py":b,"pygame/event.py":N,"pygame/_keys.py":E,"pygame/key.py":S,"pygame/mouse.py":T,"pygame/time.py":O,"pygame/font.py":K,"pygame/image.py":R,"pygame/transform.py":A,"pygame/mixer.py":F,"pygame/math.py":L,"pygame/sprite.py":I,"pygame/mask.py":P,"pygame/surfarray.py":C,...z}}var D=String.raw`"""tkinter の定数"""
+`};function t(){return{"pygame/__init__.py":g,"pygame/_base.py":y,"pygame/constants.py":h,"pygame/locals.py":w,"pygame/rect.py":x,"pygame/color.py":v,"pygame/surface.py":k,"pygame/display.py":b,"pygame/draw.py":N,"pygame/gfxdraw.py":E,"pygame/event.py":S,"pygame/_keys.py":T,"pygame/key.py":O,"pygame/mouse.py":R,"pygame/time.py":K,"pygame/font.py":F,"pygame/image.py":A,"pygame/transform.py":L,"pygame/mixer.py":I,"pygame/math.py":P,"pygame/sprite.py":C,"pygame/mask.py":z,"pygame/surfarray.py":D,...M}}var q=String.raw`"""tkinter の定数"""
 NO = FALSE = OFF = 0
 YES = TRUE = ON = 1
 N = "n"
@@ -6786,7 +7166,7 @@ PAGES = "pages"
 READABLE = 2
 WRITABLE = 4
 EXCEPTION = 8
-`,M=String.raw`"""tkinter (ForgeCode 互換版)
+`,B=String.raw`"""tkinter (ForgeCode 互換版)
 ブラウザの中で動くように作り直した tkinter です。ウィンドウは出力の中に表示され、ボタン・入力欄・キャンバスが使えます。
 """
 import sys as _sys
@@ -9700,7 +10080,7 @@ def _test():
 
 
 __all__ = [n for n in dir() if not n.startswith("_") and n not in ("TYPE_CHECKING",)]
-`,q=String.raw`"""tkinter.ttk (ForgeCode 互換版)"""
+`,U=String.raw`"""tkinter.ttk (ForgeCode 互換版)"""
 import tkinter as _tk
 from tkinter import (Widget, Frame as _F, LabelFrame as _LF, Label as _L, Button as _B, Entry as _E, Checkbutton as _C, Radiobutton as _R,
                      Scale as _S, Scrollbar as _SB, Spinbox as _SP, Menubutton as _MB, OptionMenu as _OM, PanedWindow as _PW, Misc, Variable,
@@ -10185,7 +10565,7 @@ def tclobjs_to_py(adict):
 
 def setup_master(master=None):
     return master or _tk._get_root()
-`,B={"tkinter/messagebox.py":String.raw`"""tkinter.messagebox (画面にダイアログを出します)"""
+`,j={"tkinter/messagebox.py":String.raw`"""tkinter.messagebox (画面にダイアログを出します)"""
 import _forgecode as _fc
 
 ERROR = "error"
@@ -10556,4 +10936,4 @@ class TclError(Exception):
 
 def create(*a, **k):
     raise TclError("この環境では Tcl は使えません")
-`};function r(){return{"tkinter/__init__.py":M,"tkinter/constants.py":D,"tkinter/ttk.py":q,...B}}var X=new Set(["pygame","tkinter","_tkinter","turtle","webbrowser","multiprocessing","winsound","playsound"]);function Z(){return{...e(s),...t(),...r()}}var ee={bs4:"beautifulsoup4",dotenv:"python-dotenv",jwt:"PyJWT",docx:"python-docx",pptx:"python-pptx",serial:"pyserial",slugify:"python-slugify",dateutil:"python-dateutil",yaml:"pyyaml",PIL:"pillow",sklearn:"scikit-learn",skimage:"scikit-image",cv2:"opencv-python",Crypto:"pycryptodome",Cryptodome:"pycryptodomex",OpenSSL:"pyopenssl",attr:"attrs",magic:"python-magic",jose:"python-jose",multipart:"python-multipart",fitz:"pymupdf",websocket:"websocket-client",pkg_resources:"setuptools",sentence_transformers:"sentence-transformers",Levenshtein:"levenshtein",github:"PyGithub",googletrans:"googletrans",wikipedia:"wikipedia",emoji:"emoji",termcolor:"termcolor",colorama:"colorama",tabulate:"tabulate",faker:"Faker",markdown:"markdown",toml:"toml",ujson:"ujson",simplejson:"simplejson",more_itertools:"more-itertools",typing_extensions:"typing-extensions"},se={PyQt5:"PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PyQt6:"PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PySide2:"PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PySide6:"PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",wx:"wxPython (ウィンドウを出す GUI) はブラウザでは使えません",kivy:"kivy (アプリの画面) はブラウザでは使えません",pyautogui:"pyautogui (パソコンの操作) はブラウザでは使えません",pynput:"pynput (キーボード・マウスの操作) はブラウザでは使えません",keyboard:"keyboard (キーボードの操作) はブラウザでは使えません",mouse:"mouse (マウスの操作) はブラウザでは使えません",selenium:"selenium (ブラウザの自動操作) はこの環境では使えません",discord:"discord.py (常時接続の通信) はブラウザでは使えません",telegram:"Telegram のボット (常時接続の通信) はブラウザでは使えません",torch:"PyTorch はブラウザでは使えません",tensorflow:"TensorFlow はブラウザでは使えません"},j="314.0.8",te=`https://cdn.jsdelivr.net/pyodide/v${j}/full/`;export{i as a,X as b,Z as c,ee as d,se as e,te as f};
+`};function r(){return{"tkinter/__init__.py":B,"tkinter/constants.py":q,"tkinter/ttk.py":U,...j}}var $=new Set(["pygame","tkinter","_tkinter","turtle","webbrowser","multiprocessing","winsound","playsound","msvcrt","_fcshell"]);function ee(){return{...e(s),...t(),...r()}}var te={bs4:"beautifulsoup4",dotenv:"python-dotenv",jwt:"PyJWT",docx:"python-docx",pptx:"python-pptx",serial:"pyserial",slugify:"python-slugify",dateutil:"python-dateutil",yaml:"pyyaml",PIL:"pillow",sklearn:"scikit-learn",skimage:"scikit-image",cv2:"opencv-python",Crypto:"pycryptodome",Cryptodome:"pycryptodomex",OpenSSL:"pyopenssl",attr:"attrs",magic:"python-magic",jose:"python-jose",multipart:"python-multipart",fitz:"pymupdf",websocket:"websocket-client",pkg_resources:"setuptools",sentence_transformers:"sentence-transformers",Levenshtein:"levenshtein",github:"PyGithub",googletrans:"googletrans",wikipedia:"wikipedia",emoji:"emoji",termcolor:"termcolor",colorama:"colorama",tabulate:"tabulate",faker:"Faker",markdown:"markdown",toml:"toml",ujson:"ujson",simplejson:"simplejson",more_itertools:"more-itertools",typing_extensions:"typing-extensions"},re={PyQt5:"PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PyQt6:"PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PySide2:"PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PySide6:"PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",wx:"wxPython (ウィンドウを出す GUI) はブラウザでは使えません",kivy:"kivy (アプリの画面) はブラウザでは使えません",pyautogui:"pyautogui (パソコンの操作) はブラウザでは使えません",pynput:"pynput (キーボード・マウスの操作) はブラウザでは使えません",keyboard:"keyboard (キーボードの操作) はブラウザでは使えません",mouse:"mouse (マウスの操作) はブラウザでは使えません",selenium:"selenium (ブラウザの自動操作) はこの環境では使えません",discord:"discord.py (常時接続の通信) はブラウザでは使えません",telegram:"Telegram のボット (常時接続の通信) はブラウザでは使えません",torch:"PyTorch はブラウザでは使えません",tensorflow:"TensorFlow はブラウザでは使えません"},V="314.0.8",le=`https://cdn.jsdelivr.net/pyodide/v${V}/full/`;export{i as a,$ as b,ee as c,te as d,re as e,le as f};

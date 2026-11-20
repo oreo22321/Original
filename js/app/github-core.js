@@ -2,6 +2,7 @@
 // ・GitHub の Git Data API で、プロジェクトのファイルを 1 回の同期につき 1 つのコミットにまとめて保存します
 // ・前回同期したときの各ファイルの版 (blob の SHA) を覚えておき、3 者 (この端末・GitHub・前回) を比べて
 //   どちらの変更か判断します。両方で変わっていたら「衝突」として、勝手に上書きしません
+import { bytesToContent } from './bin.js'
 const DEFAULT_API = 'https://api.github.com'
 
 export class GitHubError extends Error {
@@ -12,21 +13,22 @@ export class GitHubError extends Error {
 const enc = new TextEncoder()
 const dec = new TextDecoder()
 export function toBase64(text) {
-  const bytes = enc.encode(text)
+  const bytes = text instanceof Uint8Array ? text : enc.encode(text)
   let bin = ''
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
   return btoa(bin)
 }
-export function fromBase64(b64) {
+export function base64Bytes(b64) {
   const bin = atob(String(b64).replace(/\s+/g, ''))
   const bytes = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-  return dec.decode(bytes)
+  return bytes
 }
+export function fromBase64(b64) { return dec.decode(base64Bytes(b64)) }
 
 // Git の blob の SHA-1 (内容が同じなら GitHub と同じ値になる)
 export async function blobSha(text) {
-  const body = enc.encode(text)
+  const body = text instanceof Uint8Array ? text : enc.encode(text)
   const head = enc.encode(`blob ${body.length}\0`)
   const all = new Uint8Array(head.length + body.length)
   all.set(head)
@@ -104,6 +106,27 @@ export class GitHubClient {
     const b = await this.req('GET', `/git/blobs/${sha}`)
     return b.encoding === 'base64' ? fromBase64(b.content) : String(b.content || '')
   }
+  // 文字のファイルは文字列、画像などは Uint8Array で
+  async readContent(sha, path = '') {
+    const b = await this.req('GET', `/git/blobs/${sha}`)
+    if (b.encoding !== 'base64') return String(b.content || '')
+    return bytesToContent(base64Bytes(b.content), path)
+  }
+  async createBlob(bytes) {
+    return (await this.req('POST', '/git/blobs', { content: toBase64(bytes), encoding: 'base64' })).sha
+  }
+  // ほかのブランチのファイル (クラウド実行の記録など)。無ければ null
+  async readFileAt(branch, path) {
+    // matching-refs は、無いときも 404 にならない (ブラウザのコンソールにエラーが出ない)
+    let refs
+    try { refs = await this.req('GET', `/git/matching-refs/heads/${encodeURIComponent(branch)}`) } catch (e) { if (e.status === 404 || e.status === 409) return null; throw e }
+    const ref = (refs || []).find(r => r.ref === `refs/heads/${branch}`)
+    if (!ref) return null
+    const commit = await this.req('GET', `/git/commits/${ref.object.sha}`)
+    const t = await this.req('GET', `/git/trees/${commit.tree.sha}?recursive=1`)
+    const e = (t.tree || []).find(x => x.path === path && x.type === 'blob')
+    return e ? this.readBlob(e.sha) : null
+  }
   // ファイルの変更を 1 つのコミットにして、ブランチを進める (他の誰かが先に進めていたら失敗: 422)
   async commit(head, entries, message) {
     const tree = await this.req('POST', '/git/trees', { base_tree: head.tree, tree: entries })
@@ -149,6 +172,7 @@ export async function pushProject(client, { dir, files, state = null, message = 
       if (kind === 'same') { if (L !== undefined) next[p] = L }
       else if (kind === 'local') {
         if (L === undefined) entries.push({ path: full, mode: '100644', type: 'blob', sha: null })
+        else if (files[p] instanceof Uint8Array) { entries.push({ path: full, mode: '100644', type: 'blob', sha: await client.createBlob(files[p]) }); next[p] = L }
         else { entries.push({ path: full, mode: '100644', type: 'blob', content: files[p] }); next[p] = L }
       } else if (kind === 'remote') { remoteNewer.push(p); if (B !== undefined) next[p] = B }
       else { conflicts.push(p); if (B !== undefined) next[p] = B }
@@ -184,7 +208,7 @@ export async function pullProject(client, { dir, files, state = null, force = fa
     if (kind === 'same') { if (L !== undefined) next[p] = L }
     else if (kind === 'remote') {
       if (R === undefined) changes[p] = null
-      else { changes[p] = await client.readBlob(R); next[p] = R }
+      else { changes[p] = await client.readContent(R, p); next[p] = R }
     } else if (kind === 'local') { localNewer.push(p); if (B !== undefined) next[p] = B }
     else { conflicts.push(p); if (B !== undefined) next[p] = B }
   }

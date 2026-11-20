@@ -7,7 +7,7 @@ import { bpStore } from './debug-panel.js'
 const bpStoreCount = () => Object.keys(bpStore.forRun()).length
 import { EditorManager } from './editors.js'
 import { Explorer } from './explorer.js'
-import { Runner } from './runner.js'
+import { Runner, fmtElapsed } from './runner.js'
 import { KeyBar } from './keybar.js'
 import { SearchView, OutlineView } from './views.js'
 import { SettingsView } from './settings-ui.js'
@@ -41,6 +41,7 @@ export class Workbench {
     on('problems', () => this.updateStatus())
     on('running', () => { this.updateTop(); this.updateStatus() })
     on('python', () => this.updateStatus())
+    on('runTick', () => this.updateStatus())
     on('breakpoints', () => { if (!(app.runner && app.runner.running)) this.updateTop() })
     on('project', () => { this.updateTop(); this.updateStatus() })
     on('saveState', () => this.updateStatus())
@@ -156,7 +157,8 @@ export class Workbench {
 
   applyPanel() {
     this.panelRoot.classList.toggle('hidden', !this.panelOpen)
-    this.panelResize.classList.toggle('hidden', !this.panelOpen)
+    this.panelResize.classList.toggle('hidden', !this.panelOpen || this.panelMax)
+    this.center.classList.toggle('panel-max', !!(this.panelOpen && this.panelMax))
     const total = this.center.clientHeight || innerHeight
     const def = this.layout === 'mobile' ? Math.round(total * 0.42) : Math.round(total * 0.34)
     const hgt = Math.max(120, Math.min(total - 140, this.panelHeight || def))
@@ -166,8 +168,19 @@ export class Workbench {
 
   togglePanel(force) {
     this.panelOpen = force === undefined ? !this.panelOpen : force
+    if (!this.panelOpen) this.panelMax = false
     this.applyPanel()
     this.updateTop()
+    if (app.runner) app.runner.renderTabs()
+  }
+
+  // パネルを最大化 (エディタを隠して、ターミナル・出力を広く)
+  togglePanelMax(force) {
+    this.panelMax = force === undefined ? !this.panelMax : force
+    if (this.panelMax && !this.panelOpen) this.panelOpen = true
+    this.applyPanel()
+    this.updateTop()
+    if (app.runner) app.runner.renderTabs()
   }
 
   setupResizers() {
@@ -222,7 +235,9 @@ export class Workbench {
     const btn = (ic, title, fn, on) => h('button', { class: 'icon-btn' + (on ? ' on' : ''), title, 'aria-label': title, onclick: fn }, icon(ic, 20))
     if (doc && doc.lang === 'markdown') a.append(btn('eye', 'プレビュー', () => { app.editors.togglePreview(); this.updateTop() }, app.editors.preview))
     if (this.layout === 'desktop' && app.editors.order.length > 1) a.append(btn('split', 'エディタを分割', () => { app.editors.toggleSplit(); this.updateTop() }, app.editors.split))
-    a.append(btn('terminal', '出力パネル', () => this.togglePanel(), this.panelOpen))
+    // スマホ: ターミナル (全画面) / PC・タブレット: 下のパネル (出力・ターミナル・問題・デバッグ)
+    if (this.layout === 'mobile') a.append(btn('terminal', 'ターミナル', () => runCommand('terminal')))
+    else a.append(btn('terminal', 'パネル (出力・ターミナル)', () => this.togglePanel(), this.panelOpen))
     if (running) {
       const paused = runner.debug && runner.debug.paused
       if (paused) a.append(h('button', { class: 'run-btn cont', title: '続行 (F5)', 'aria-label': '続行', onclick: () => runCommand('debugContinue') }, icon('debugContinue', 18), h('span', { class: 'hide-narrow' }, '続行')))
@@ -236,6 +251,7 @@ export class Workbench {
     a.append(btn('more', 'その他', e => this.moreMenu(e.currentTarget)))
   }
 
+  // 「その他」メニュー: よく使うものを、種類ごとにまとめる (ほかはコマンドパレットの「すべての機能」から)
   moreMenu(anchor) {
     const doc = app.editors.activeDoc()
     const s = getSettings()
@@ -243,26 +259,28 @@ export class Workbench {
     const v = app.editors.activeView()
     const hasSel = v && !v.state.selection.main.empty
     menu([
+      { section: '編集' },
       { label: '保存', icon: 'save', hint: '⌘S', run: () => runCommand('save'), disabled: !doc },
       { label: '整形', icon: 'format', hint: '⇧⌥F', run: () => runCommand('format'), disabled: !doc },
       { label: 'この行のエラーを修正', icon: 'bulb', hint: '⌘.', run: () => runCommand('quickFix'), disabled: !py },
-      { label: '誤字・全角記号をまとめて直す', icon: 'wand', run: () => runCommand('fixAllTypos'), disabled: !py },
-      '-',
+      { label: '検索・置換', icon: 'search', hint: '⌘F', run: () => runCommand('find'), disabled: !doc },
+      { section: '実行' },
       hasSel && py ? { label: '選択範囲だけ実行', icon: 'play', run: () => runCommand('runSelection') } : null,
-      { label: 'コードをコピー', icon: 'copy', run: () => runCommand('copyCode'), disabled: !doc },
+      { label: 'ターミナル', icon: 'terminal', hint: '⌃`', run: () => runCommand('terminal') },
+      { label: '実行画面を開く', icon: 'play', run: () => runCommand('openRunScreen') },
+      { label: 'Python を再起動', icon: 'refresh', run: () => runCommand('restartPython') },
+      { label: 'クラウドで動かす (24 時間)', icon: 'cloud', run: () => runCommand('cloud') },
+      { section: 'コード' },
       py ? { label: '定義へ移動', icon: 'target', hint: 'F12', run: () => runCommand('gotoDefinition') } : null,
       py ? { label: '名前を変更 (すべての場所)', icon: 'rename', hint: 'F2', run: () => runCommand('renameSymbol') } : null,
-      { label: 'Python を再起動', icon: 'refresh', run: () => runCommand('restartPython') },
-      { label: '共有 / ファイルに保存', icon: 'share', run: () => runCommand('shareFile'), disabled: !doc },
-      '-',
-      { label: '検索・置換', icon: 'search', hint: '⌘F', run: () => runCommand('find'), disabled: !doc },
-      { label: '全ファイルから検索', icon: 'search', hint: '⇧⌘F', run: () => runCommand('findInFiles') },
       { label: '関数・変数へ移動', icon: 'outline', run: () => runCommand('gotoSymbol'), disabled: !doc },
       { label: '変更履歴', icon: 'history', run: () => runCommand('history'), disabled: !doc },
+      { label: 'コードをコピー', icon: 'copy', run: () => runCommand('copyCode'), disabled: !doc },
+      { label: '共有 / ファイルに保存', icon: 'share', run: () => runCommand('shareFile'), disabled: !doc },
       { label: '長い行を折り返す', icon: 'wrap', checked: s.wordWrap, run: () => setSettings({ wordWrap: !s.wordWrap }) },
-      '-',
+      { section: 'アプリ' },
       { label: 'AI に頼む', icon: 'sparkle', run: () => runCommand('aiChat') },
-      { label: 'コマンドパレット', icon: 'command', hint: '⇧⌘P', run: () => runCommand('palette') },
+      { label: 'すべての機能 (コマンド)', icon: 'command', hint: '⇧⌘P', run: () => runCommand('palette') },
       { label: 'プロジェクト一覧', icon: 'folder', run: () => runCommand('projects') },
       { label: '設定', icon: 'gear', run: () => runCommand('settings') },
       { label: '使い方', icon: 'book', run: () => runCommand('help') },
@@ -318,9 +336,12 @@ export class Workbench {
     this.sb.run.classList.toggle('hidden', !running)
     const dbg = running && runner.debug ? runner.debug.paused : null
     this.sb.run.classList.toggle('paused', !!dbg)
-    this.sbSet('run', running ? (dbg ? 'p' + dbg.line : runner.waiting ? 'w' : running.debug ? 'd' : 'r') : '', () => (!running ? null
+    // 長く動いているときは、経過時間も出す (24 時間動かすとき用)
+    const ms = running && runner.t0 ? performance.now() - runner.t0 : 0
+    const el = ms > 10000 ? ' ' + fmtElapsed(ms) : ''
+    this.sbSet('run', running ? (dbg ? 'p' + dbg.line : runner.waiting ? 'w' : running.debug ? 'd' : 'r') + el : '', () => (!running ? null
       : dbg ? [icon('pause', 12), `停止中 ${dbg.line} 行目`]
-      : [h('span', { class: 'spinner' }), runner.waiting ? '操作待ち' : running.debug ? 'デバッグ中' : '実行中']))
+      : [h('span', { class: 'spinner' }), (runner.waiting ? '操作待ち' : running.debug ? 'デバッグ中' : running.term ? 'ターミナルで実行中' : '実行中') + el]))
     this.sb.indent.classList.toggle('none', !doc)
     this.sb.cursor.classList.toggle('none', !doc)
     this.sb.kind.classList.toggle('none', !doc)
@@ -362,6 +383,7 @@ export class Workbench {
 // ---- コマンド ----
 command('toggleSidebar', 'サイドバーの表示切り替え', f => app.wb.toggleSidebar(typeof f === 'boolean' ? f : undefined), { key: '⌘B' })
 command('togglePanel', 'パネルの表示切り替え', f => app.wb.togglePanel(typeof f === 'boolean' ? f : undefined), { icon: 'terminal', key: '⌘J' })
+command('togglePanelMax', 'パネルの最大化の切り替え', () => app.wb.togglePanelMax(), { icon: 'expand' })
 command('findInFiles', '全ファイルから検索', () => app.wb.showView('search'), { icon: 'search', key: '⇧⌘F' })
 command('outline', 'アウトラインを表示', () => app.wb.showView('outline'), { icon: 'outline' })
 command('explorer', 'エクスプローラーを表示', () => app.wb.showView('files'), { icon: 'files' })

@@ -1,5 +1,6 @@
 // エクスプローラー (ファイルツリー) とプロジェクト管理
 import * as vfs from './vfs.js'
+import { bytesToContent } from './bin.js'
 import { app, refreshFiles, newFile, newFolder, deletePath, renamePath, openProject, runCommand, command, setRunTarget } from './app.js'
 import { on, getSettings, emit } from './store.js'
 import { h, icon, fileIcon, menu, onLongPress, promptDialog, confirmDialog, toast, modal, download, shareFile, copyText, relTime } from './ui.js'
@@ -43,15 +44,18 @@ export class Explorer {
 
   moreMenu(anchor) {
     menu([
+      { section: '読み込み・書き出し' },
       { label: '端末からファイルを読み込む', icon: 'upload', run: () => runCommand('importFiles') },
       { label: 'ZIP を読み込む', icon: 'zip', run: () => runCommand('importZip') },
       { label: 'プロジェクトを ZIP で保存', icon: 'download', run: () => runCommand('exportZip') },
+      { section: 'GitHub' },
       { label: 'GitHub に保存', icon: 'github', run: () => runCommand('githubPush') },
       { label: 'GitHub から取り込む', icon: 'github', run: () => runCommand('githubPull') },
       { label: 'GitHub と同期の設定', icon: 'github', run: () => runCommand('githubSync') },
-      '-',
-      { label: 'すべて折りたたむ', run: () => { this.expanded.clear(); this.saveExpanded(); this.render() } },
-      { label: '再読み込み', run: () => refreshFiles() },
+      { section: '表示' },
+      { label: 'ターミナルで開く', icon: 'terminal', run: () => runCommand('terminal', { cwd: '' }) },
+      { label: 'すべて折りたたむ', icon: 'outline', run: () => { this.expanded.clear(); this.saveExpanded(); this.render() } },
+      { label: '再読み込み', icon: 'refresh', run: () => refreshFiles() },
       { label: 'プロジェクト一覧', icon: 'folder', run: () => runCommand('projects') },
     ], anchor)
   }
@@ -142,6 +146,9 @@ export class Explorer {
     menu([
       runnable ? { label: '開いて実行', icon: 'play', run: async () => { await app.editors.open(f.path); if (app.project.runTarget && !pinned) await setRunTarget(null); runCommand('run') } } : null,
       runnable ? { label: pinned ? '実行ファイルの固定を解除' : '▶ で常にこのファイルを実行', icon: 'pin', checked: pinned, run: () => setRunTarget(pinned ? null : f.path).then(() => toast(pinned ? '固定を解除しました。開いているファイルを実行します' : `▶ で "${vfs.basename(f.path)}" を実行します`, { icon: 'pin' })) } : null,
+      runnable ? { label: 'ターミナルで実行', icon: 'terminal', run: () => runCommand('terminal', { cwd: dir, run: 'python ' + vfs.basename(f.path).replace(/([\s'"\\$`&|;<>()*?])/g, '\\$1') }) } : null,
+      { label: 'ターミナルで開く', icon: 'terminal', run: () => runCommand('terminal', { cwd: dir }) },
+      '-',
       { label: '新しいファイル', icon: 'newFile', run: () => runCommand('newFile', dir) },
       { label: '新しいフォルダ', icon: 'newFolder', run: () => runCommand('newFolder', dir) },
       '-',
@@ -191,8 +198,9 @@ export async function importFileList(fileList, dir = '') {
   let n = 0
   for (const file of fileList) {
     if (/\.zip$/i.test(file.name)) { await importZipFile(file); continue }
-    if (file.size > 5 * 1024 * 1024) { toast(`${file.name} は大きすぎます (5MB まで)`, { kind: 'error' }); continue }
-    const text = await file.text()
+    if (file.size > 20 * 1024 * 1024) { toast(`${file.name} は大きすぎます (20MB まで)`, { kind: 'error' }); continue }
+    // 画像・Excel・SQLite などはバイナリのまま (Python から open(..., "rb") で読めます)
+    const text = bytesToContent(new Uint8Array(await file.arrayBuffer()), file.name)
     const path = (dir ? dir + '/' : '') + (file.webkitRelativePath || file.name)
     await vfs.writeFile(app.project.id, path, text)
     n++
@@ -212,7 +220,7 @@ export function pickFiles(opts = {}) {
 }
 
 async function importZipFile(file) {
-  const { unzipSync, strFromU8 } = await import('../../vendor/fflate.js')
+  const { unzipSync } = await import('../../vendor/fflate.js')
   const data = new Uint8Array(await file.arrayBuffer())
   let entries
   try { entries = unzipSync(data) } catch { toast('ZIP を開けませんでした', { kind: 'error' }); return }
@@ -224,7 +232,7 @@ async function importZipFile(file) {
   for (const p of paths) {
     const rel = p.slice(strip.length)
     if (!rel) continue
-    await vfs.writeFile(app.project.id, rel, strFromU8(entries[p]))
+    await vfs.writeFile(app.project.id, rel, bytesToContent(entries[p], rel))
     n++
   }
   await refreshFiles()
@@ -235,7 +243,7 @@ export async function exportZip() {
   const { zipSync, strToU8 } = await import('../../vendor/fflate.js')
   const all = await vfs.readAll(app.project.id)
   const obj = {}
-  for (const f of all) if (!f.dir) obj[app.project.name + '/' + f.path] = strToU8(f.content || '')
+  for (const f of all) if (!f.dir) obj[app.project.name + '/' + f.path] = f.content instanceof Uint8Array ? f.content : strToU8(f.content || '')
   const zip = zipSync(obj, { level: 6 })
   const name = app.project.name.replace(/[\\/:*?"<>|]/g, '_') + '.zip'
   await shareFile(name, new Blob([zip], { type: 'application/zip' }), 'application/zip')

@@ -10,6 +10,7 @@ import { loadPyodide } from '../../vendor/pyodide/pyodide.mjs'
 import { libFiles, FC_LIB, SHIMS } from './py-lib.js'
 import { PIP_NAMES, NO_PIP } from './py-packages.js'
 import { installPgCanvas } from './pg-canvas.js'
+import { bytesToContent, sameContent } from '../app/bin.js'
 
 const PROJECT = '/home/pyodide/project'
 const PYODIDE_VERSION = '314.0.8'
@@ -22,6 +23,7 @@ let loading = null
 let shared = null      // { interrupt, ctl, buf, dctl, dbuf, ectl, ebuf } 共有メモリ (input・停止・デバッガー・turtle の操作)
 let runId = 0
 let lastGlobals = null // 終わった実行の変数 (コンソールで続きを試せるように)
+let replGlobals = null // ターミナルの python (対話モード) の変数
 let snapshot = new Map()
 let passwordNext = false
 const local = rel => { const u = new URL(rel, import.meta.url); return u.protocol === 'file:' ? decodeURIComponent(u.pathname) : u.href }
@@ -30,28 +32,52 @@ const pipTried = new Map()   // 名前 → 'ok' | エラー
 const pipReqs = new Set()    // requirements.txt で入れたもの
 
 // ---- 出力 (まとめて送る) ----
+// 何時間動かしても止まらないよう、行数に上限は付けない。代わりに、短い時間にとても多い出力は省略する
+// (はじめに 20000 行まで、そのあとは 1 秒に 2000 行まで。省略した行の数は知らせる)
 let out = []
 let lastFlush = 0
 let lastWrite = 0
-let lines = 0
-const MAX_LINES = 20000
+const BURST = 20000, RATE = 2   // 行 / ミリ秒
+let budget = BURST, budgetAt = 0, dropped = 0
+const PARTIAL_MAX = 65536       // 改行のない出力がとても長いときは、ここで区切って送る
 const pending = { out: '', err: '' }
 const dec = { out: new TextDecoder(), err: new TextDecoder() }
+function resetBudget() { budget = BURST; budgetAt = performance.now(); dropped = 0; tail = [] }
+// 省略した行のうち、最後の 100 行は残して出す (最後の結果が見えるように)
+let tail = []
+function noteDropped() {
+  if (!dropped) return
+  const skipped = dropped - tail.length
+  if (skipped > 0) out.push({ kind: 'warn', text: `… 出力がとても多いため ${skipped.toLocaleString()} 行を省略しました` })
+  for (const it of tail) out.push(it)
+  budget -= tail.length
+  tail = []
+  dropped = 0
+}
 function flush(force = false) {
   for (const k of ['out', 'err']) {
     // 改行のない最後の行 (input の案内など) も、書き込みが少し止まったら出す
     if (pending[k] && (force || performance.now() - lastWrite > 150)) { push(k, pending[k], true); pending[k] = '' }
   }
+  if (dropped && (force || budget > 200)) noteDropped()
   if (out.length) { post({ type: 'output', items: out }); out = [] }
   lastFlush = performance.now()
 }
 function push(kind, text, partial = false) {
-  if (lines >= MAX_LINES) {
-    if (lines === MAX_LINES) { out.push({ kind: 'warn', text: `出力が ${MAX_LINES} 行を超えたため、以降は省略します` }); lines++ }
+  const now = performance.now()
+  budget = Math.min(BURST, budget + (now - budgetAt) * RATE)
+  budgetAt = now
+  const item = { kind: kind === 'err' ? 'error-text' : '', text, partial }
+  // 省略が始まったら、少し余裕ができるまで省略を続ける (省略と表示が細かく入れ替わらないように)
+  if (budget < 1 || (dropped && budget < 200)) {
+    dropped++
+    tail.push(item)
+    if (tail.length > 100) tail.shift()
     return
   }
-  lines++
-  out.push({ kind: kind === 'err' ? 'error-text' : '', text, partial })
+  budget--
+  if (dropped) noteDropped()
+  out.push(item)
   if (out.length > 200) flush()
 }
 function write(kind, bytes) {
@@ -59,6 +85,7 @@ function write(kind, bytes) {
   const parts = s.split('\n')
   pending[kind] = parts.pop()
   for (const p of parts) push(kind, p)
+  if (pending[kind].length > PARTIAL_MAX) { push(kind, pending[kind], true); pending[kind] = '' }
   lastWrite = performance.now()
   if (out.length && performance.now() - lastFlush > 60) { post({ type: 'output', items: out }); out = []; lastFlush = performance.now() }
   return bytes.length
@@ -170,16 +197,31 @@ def __fc_show_figures():
     _forgecode.show_figures()
 
 __fc_last = {"g": None, "err": None}
-def __fc_run(path, src, dbg=None):
-    g = {"__name__": "__main__", "__file__": __fc_project + "/" + path, "__builtins__": builtins}
+def __fc_chdir(cwd):
+    d = os.path.join(__fc_project, cwd) if cwd else __fc_project
+    os.chdir(d if os.path.isdir(d) else __fc_project)
+
+def __fc_run(path, src, dbg=None, argv=None):
+    # path が <string> / <module> / <stdin> のときは、ファイルではないコード (ターミナルの python -c / -m)
+    virtual = path.startswith("<")
+    fn = path if virtual else __fc_project + "/" + path
+    g = {"__name__": "__main__", "__builtins__": builtins}
+    if not virtual:
+        g["__file__"] = fn
+    # スクリプトのあるフォルダ (python sub/x.py なら sub) を import の場所の先頭に (ふつうの Python と同じ)
+    here = os.getcwd() if virtual else os.path.dirname(fn)
+    added = None
+    if here != __fc_project and here not in sys.path:
+        sys.path.insert(0, here)
+        added = here
     __fc_last["g"] = g
     __fc_last["err"] = None
     opt = json.loads(dbg) if dbg else None
     __fc_dbg["opt"] = opt
     d = None
-    _forgecode.begin([path])
+    _forgecode.begin(json.loads(argv) if argv else [path])
     try:
-        code = compile(src, __fc_project + "/" + path, "exec")
+        code = compile(src, fn, "exec")
         # ブレークポイントがあるときだけデバッガーを付けて実行 (ないときは breakpoint() / 一時停止で途中から付ける)
         if opt and opt.get("bps"):
             d = __fc_dbg_start(opt)
@@ -193,6 +235,11 @@ def __fc_run(path, src, dbg=None):
         else:
             __fc_last["err"] = __fc_error(e)
     finally:
+        if added is not None:
+            try:
+                sys.path.remove(added)
+            except ValueError:
+                pass
         try:
             _forgecode.end()
         except BaseException:
@@ -243,6 +290,42 @@ def __fc_eval(code, g):
         return json.dumps(__fc_eval_in(code, g))
     finally:
         _forgecode.end()
+
+# ---- ターミナルの python (対話モード) ----
+def __fc_repl_complete(code):
+    # 続きが要るか (if の後など)。書き間違いは「完結」として実行し、エラーを見せる
+    import codeop
+    try:
+        return codeop.compile_command(code, "<stdin>", "single") is not None
+    except (SyntaxError, ValueError, OverflowError):
+        return True
+
+def __fc_repl_names(text, g, line=""):
+    # Tab で名前を補う (import / from の後はモジュールの名前)
+    import rlcompleter, re
+    m = re.match(r"\s*(?:import|from)\s+([\w.]*)$", line or "")
+    if m and "." not in m.group(1):
+        import pkgutil
+        names = set(sys.builtin_module_names) | set(sys.stdlib_module_names)
+        try:
+            names |= {mi.name for mi in pkgutil.iter_modules()}
+        except Exception:
+            pass
+        return json.dumps(sorted(n for n in names if n.startswith(text) and not n.startswith("_"))[:200])
+    c = rlcompleter.Completer(g)
+    out = []
+    for i in range(200):
+        try:
+            m = c.complete(text, i)
+        except Exception:
+            break
+        if m is None:
+            break
+        out.append(m)
+    return json.dumps(out)
+
+def __fc_new_ns():
+    return {"__name__": "__main__", "__builtins__": builtins}
 
 # ---- import しているライブラリ ----
 def __fc_imports(files_json):
@@ -768,11 +851,16 @@ self.__fc_dbg_wait = () => {
 self.__fc_dbg_poll = () => (shared && Atomics.load(shared.dctl, 0) === 1 ? takeCmd() : '')
 
 // ---- プロジェクトのファイル ----
-function writeProject(files) {
+// keep: 前の実行から変わっていないので送られてこなかったファイル (そのまま残す)
+function writeProject(files, keep = null) {
   const FS = py.FS
+  const kept = keep ? new Set(keep) : null
   // 前回の実行で置いたファイルのうち、もう無いものは消す
-  for (const p of snapshot.keys()) if (!(p in files)) { try { FS.unlink(PROJECT + '/' + p) } catch {} }
-  snapshot = new Map()
+  for (const p of [...snapshot.keys()]) {
+    if (p in files || (kept && kept.has(p))) continue
+    try { FS.unlink(PROJECT + '/' + p) } catch {}
+    snapshot.delete(p)
+  }
   for (const [path, content] of Object.entries(files)) {
     const full = PROJECT + '/' + path
     FS.mkdirTree(full.slice(0, full.lastIndexOf('/')))
@@ -781,24 +869,30 @@ function writeProject(files) {
   }
 }
 // 実行で作られた・変わったファイル (画面のプロジェクトに反映する)
+// 文字のファイルは文字列、画像・Excel・SQLite などはバイト列 (Uint8Array) で返す
+const TEXT_MAX = 2_000_000, BIN_MAX = 20_000_000
 function changedFiles() {
   const FS = py.FS
   const out = {}
+  let total = 0
   const walk = (dir, rel) => {
     let names = []
     try { names = FS.readdir(dir) } catch { return }
     for (const n of names) {
-      if (n === '.' || n === '..' || n === '__pycache__') continue
+      if (n === '.' || n === '..' || n === '__pycache__' || /\.pyc$/.test(n)) continue
       const full = dir + '/' + n
       const r = rel ? rel + '/' + n : n
       let st
       try { st = FS.stat(full) } catch { continue }
-      if (FS.isDir(st.mode)) walk(full, r)
-      else if (st.size < 2_000_000 && /\.(py|txt|csv|json|md|tsv|log|html|xml|ya?ml|ini|cfg|toml)$/i.test(n)) {
-        let text
-        try { text = FS.readFile(full, { encoding: 'utf8' }) } catch { continue }
-        if (snapshot.get(r) !== text) out[r] = text
-      }
+      if (FS.isDir(st.mode)) { walk(full, r); continue }
+      if (st.size > BIN_MAX || total > 60_000_000) continue
+      let bytes
+      try { bytes = FS.readFile(full) } catch { continue }
+      const content = bytesToContent(bytes, n)
+      if (typeof content === 'string' && content.length > TEXT_MAX) continue
+      if (snapshot.has(r) && sameContent(snapshot.get(r), content)) continue
+      out[r] = typeof content === 'string' ? content : content.slice()
+      total += st.size
     }
   }
   walk(PROJECT, '')
@@ -810,7 +904,7 @@ function changedFiles() {
 async function run(m) {
   const id = m.id
   runId = id
-  lines = 0
+  resetBudget()
   const t0 = performance.now()
   try { await ensure() } catch (e) {
     flush(true)
@@ -819,21 +913,27 @@ async function run(m) {
   }
   if (shared) shared.interrupt[0] = 0
   presenters.clear()   // 前の実行のゲーム画面の入れ物を手放す
-  writeProject(m.files || {})
-  const src = m.files[m.entry] ?? ''
+  const virtual = String(m.entry).startsWith('<')   // ターミナルの python -c / -m (ファイルには書かない)
+  const projectFiles = { ...(m.files || {}) }
+  if (virtual) delete projectFiles[m.entry]
+  writeProject(projectFiles, Array.isArray(m.keep) ? m.keep : null)
+  const src = m.files[m.entry] ?? snapshot.get(m.entry) ?? ''
   // import しているライブラリを先に読み込む (numpy / pandas / matplotlib など。Pyodide にないものは PyPI から)
-  const pyFiles = Object.fromEntries(Object.entries(m.files).filter(([p]) => p.endsWith('.py')))
+  const pyFiles = Object.fromEntries([...snapshot].filter(([p, c]) => p.endsWith('.py') && typeof c === 'string'))
+  if (virtual) pyFiles['__fc_entry__.py'] = src
   await ensureImports(pyFiles, m.files['requirements.txt'])
   let ok = true, error = null, reason = 'done'
   try {
     py.globals.set('__fc_entry', m.entry)
     py.globals.set('__fc_src', src)
     py.globals.set('__fc_dbgopt', shared && m.debug ? JSON.stringify(m.debug) : null)
-    py.runPython('import os; os.chdir(__fc_project)')
+    py.globals.set('__fc_argv', Array.isArray(m.argv) && m.argv.length ? JSON.stringify(m.argv.map(String)) : null)
+    py.globals.set('__fc_cwd', m.cwd ? String(m.cwd) : null)
+    py.runPython('__fc_chdir(__fc_cwd)')
     // 共有メモリがない (画面を待てない) ときは、input() を分かるエラーにする
     py.runPython(shared ? 'builtins.input = __fc_builtin_input' : 'builtins.input = __fc_no_input')
     if (shared) { Atomics.store(shared.dctl, 0, 0) }
-    const errJson = py.runPython('__fc_run(__fc_entry, __fc_src, __fc_dbgopt)')
+    const errJson = py.runPython('__fc_run(__fc_entry, __fc_src, __fc_dbgopt, __fc_argv)')
     if (lastGlobals) { try { lastGlobals.destroy() } catch {} }
     lastGlobals = py.runPython('__fc_last["g"]')
     if (errJson) {
@@ -975,21 +1075,45 @@ async function pipCommand(code) {
 }
 
 // コンソール: 最後の実行の続きで、式や文を実行
+// ターミナルの python (対話モード) は、ns: 'repl' (続き) / 'repl-new' (新しく始める) / 'last' (python -i: 実行の続き)
+function namespace(ns) {
+  if (ns === 'repl-new' || (ns === 'repl' && !replGlobals)) {
+    if (replGlobals) { try { replGlobals.destroy() } catch {} }
+    replGlobals = py.runPython('__fc_new_ns()')
+  }
+  if (ns === 'repl' || ns === 'repl-new') return replGlobals
+  if (!lastGlobals) lastGlobals = py.runPython('__fc_new_ns()')
+  return lastGlobals
+}
 async function evalCode(m) {
   try { await ensure() } catch (e) { post({ type: 'evalResult', id: m.id, ok: false, error: String(e.message || e) }); return }
   if (shared) shared.interrupt[0] = 0
+  resetBudget()
   try {
+    // Tab の補完 (名前の候補)
+    if (typeof m.complete === 'string') {
+      py.globals.set('__fc_g', namespace(m.ns))
+      py.globals.set('__fc_code', m.complete)
+      py.globals.set('__fc_line', String(m.code || ''))
+      post({ type: 'evalResult', id: m.id, ok: true, names: JSON.parse(py.runPython('__fc_repl_names(__fc_code, __fc_g, __fc_line)')) })
+      return
+    }
+    // 対話モード: 続きが要る (if の後など) ときは、まだ実行しない
+    if (m.repl) {
+      py.globals.set('__fc_code', m.code)
+      if (!py.runPython('__fc_repl_complete(__fc_code)')) { post({ type: 'evalResult', id: m.id, ok: true, incomplete: true }); return }
+    }
     const pip = await pipCommand(m.code).catch(e => ({ ok: false, error: String(e && e.message || e).split('\n').slice(-1)[0] }))
-    if (pip) { post({ type: 'evalResult', id: m.id, ...pip }); return }
-    if (!lastGlobals) lastGlobals = py.runPython('{"__name__": "__main__", "__builtins__": __import__("builtins")}')
+    if (pip) { flush(true); post({ type: 'evalResult', id: m.id, ...pip }); return }
+    const g = namespace(m.ns)
     await ensureImports({ '<console>.py': m.code }).catch(() => {})
-    py.globals.set('__fc_g', lastGlobals)
+    py.globals.set('__fc_g', g)
     py.globals.set('__fc_code', m.code)
     const r = JSON.parse(py.runPython('__fc_eval(__fc_code, __fc_g)'))
     flush(true)
     try { py.runPython('__fc_show_figures()') } catch {}
     if (r.ok) post({ type: 'evalResult', id: m.id, ok: true, value: r.value, html: r.html || null })
-    else post({ type: 'evalResult', id: m.id, ok: false, error: r.type === 'KeyboardInterrupt' ? '停止しました' : r.error })
+    else post({ type: 'evalResult', id: m.id, ok: false, etype: r.type, error: r.type === 'KeyboardInterrupt' ? '停止しました' : r.error })
   } catch (e) {
     flush(true)
     post({ type: 'evalResult', id: m.id, ok: false, error: String(e && e.message || e) })
@@ -1008,4 +1132,6 @@ self.onmessage = e => {
     ensure().catch(err => post({ type: 'status', state: 'error', text: 'Python を読み込めませんでした: ' + (err && err.message || err) }))
   } else if (m.type === 'run') run(m)
   else if (m.type === 'eval') evalCode(m)
+  // 生きているかの確認 (長い間裏にあった後など)
+  else if (m.type === 'ping') post({ type: 'pong', id: m.id, ready: !!py })
 }

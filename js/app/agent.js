@@ -19,8 +19,8 @@ export const isFile = path => app.files.some(f => f.path === path && !f.dir)
 export async function fileText(path) {
   const doc = app.editors && app.editors.docs.get(path)
   if (doc) return doc.state.doc.toString()
-  if (app.contents.has(path)) return app.contents.get(path)
-  return app.project ? vfs.readFile(app.project.id, path) : null
+  const c = app.contents.has(path) ? app.contents.get(path) : app.project ? await vfs.readFile(app.project.id, path) : null
+  return typeof c === 'string' ? c : null   // バイナリは文字として扱わない
 }
 
 // old → next を 1 つの変更にする (前後の一致部分は触らない: カーソルや履歴が自然になる)
