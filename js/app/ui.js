@@ -234,9 +234,21 @@ export function menu(items, anchor, { title } = {}) {
   const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close() } }
   document.addEventListener('keydown', onKey, true)
   if (title) list.append(h('div', { class: 'menu-title' }, title))
-  for (const it of items) {
-    if (it === '-') { list.append(h('div', { class: 'menu-sep' })); continue }
+  // 見出し ({ section }) は、その下に項目があるときだけ出す
+  const shown = []
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k]
     if (!it) continue
+    if (it.section) {
+      let has = false
+      for (let j = k + 1; j < items.length; j++) { const x = items[j]; if (!x || x === '-') continue; has = !x.section; break }
+      if (!has) continue
+    }
+    shown.push(it)
+  }
+  for (const it of shown) {
+    if (it === '-') { list.append(h('div', { class: 'menu-sep' })); continue }
+    if (it.section) { list.append(h('div', { class: 'menu-section' }, it.section)); continue }
     // 説明文 (押せない行)
     if (it.note) { list.append(h('div', { class: 'menu-note ' + (it.kind || '') }, it.icon ? icon(it.icon, 16) : null, h('span', null, it.note))); continue }
     list.append(h('button', {

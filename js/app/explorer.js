@@ -43,15 +43,18 @@ export class Explorer {
 
   moreMenu(anchor) {
     menu([
+      { section: '読み込み・書き出し' },
       { label: '端末からファイルを読み込む', icon: 'upload', run: () => runCommand('importFiles') },
       { label: 'ZIP を読み込む', icon: 'zip', run: () => runCommand('importZip') },
       { label: 'プロジェクトを ZIP で保存', icon: 'download', run: () => runCommand('exportZip') },
+      { section: 'GitHub' },
       { label: 'GitHub に保存', icon: 'github', run: () => runCommand('githubPush') },
       { label: 'GitHub から取り込む', icon: 'github', run: () => runCommand('githubPull') },
       { label: 'GitHub と同期の設定', icon: 'github', run: () => runCommand('githubSync') },
-      '-',
-      { label: 'すべて折りたたむ', run: () => { this.expanded.clear(); this.saveExpanded(); this.render() } },
-      { label: '再読み込み', run: () => refreshFiles() },
+      { section: '表示' },
+      { label: 'ターミナルで開く', icon: 'terminal', run: () => runCommand('terminal', { cwd: '' }) },
+      { label: 'すべて折りたたむ', icon: 'outline', run: () => { this.expanded.clear(); this.saveExpanded(); this.render() } },
+      { label: '再読み込み', icon: 'refresh', run: () => refreshFiles() },
       { label: 'プロジェクト一覧', icon: 'folder', run: () => runCommand('projects') },
     ], anchor)
   }
@@ -142,6 +145,9 @@ export class Explorer {
     menu([
       runnable ? { label: '開いて実行', icon: 'play', run: async () => { await app.editors.open(f.path); if (app.project.runTarget && !pinned) await setRunTarget(null); runCommand('run') } } : null,
       runnable ? { label: pinned ? '実行ファイルの固定を解除' : '▶ で常にこのファイルを実行', icon: 'pin', checked: pinned, run: () => setRunTarget(pinned ? null : f.path).then(() => toast(pinned ? '固定を解除しました。開いているファイルを実行します' : `▶ で "${vfs.basename(f.path)}" を実行します`, { icon: 'pin' })) } : null,
+      runnable ? { label: 'ターミナルで実行', icon: 'terminal', run: () => runCommand('terminal', { cwd: dir, run: 'python ' + vfs.basename(f.path).replace(/([\s'"\\$`&|;<>()*?])/g, '\\$1') }) } : null,
+      { label: 'ターミナルで開く', icon: 'terminal', run: () => runCommand('terminal', { cwd: dir }) },
+      '-',
       { label: '新しいファイル', icon: 'newFile', run: () => runCommand('newFile', dir) },
       { label: '新しいフォルダ', icon: 'newFolder', run: () => runCommand('newFolder', dir) },
       '-',

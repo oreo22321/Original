@@ -2,6 +2,30 @@
 import { app, command, runCommand } from './app.js'
 import { h, icon, fileIcon, fuzzyScore, promptDialog } from './ui.js'
 
+// コマンドの分類 (コマンドパレットで、種類ごとにまとめて表示)
+const CATEGORIES = [
+  ['実行', /^(run|runSelection|stop|restartPython|clearOutput|openRunScreen|unpinRun)$/],
+  ['ターミナル', /^(terminal|toggleTerminal|terminalRun)$/],
+  ['ファイル', /^(save|saveAll|newFile|newFolder|importFiles|importZip|exportZip|shareFile|closeTab|closeAll|projects|history|revealInExplorer|explorer|quickOpen|copyCode)$/],
+  ['編集', /^(undo|redo|selectAll|format|find|toggleComment|copyLineDown|moveLineUp|moveLineDown|selectNextOccurrence|fixAllTypos|quickFix|foldAll|unfoldAll)$/],
+  ['移動・検索', /^(gotoLine|gotoSymbol|gotoDefinition|findReferences|renameSymbol|outline|findInFiles|codeMenu)$/],
+  ['デバッグ', /^(debug|toggleBreakpoint|clearBreakpoints|showDebug)/],
+  ['AI', /^ai/],
+  ['GitHub', /^github/],
+  ['表示', /^(toggleSidebar|togglePanel|togglePanelMax|toggleSplit|togglePreview|toggleWrap|zoomIn|zoomOut|palette)$/],
+  ['アプリ', /^(settings|help|whatsNew|onboarding|reload|showErrors)$/],
+]
+export function categoryOf(c) {
+  if (c.category) return c.category
+  for (const [name, re] of CATEGORIES) if (re.test(c.id)) return name
+  return 'そのほか'
+}
+const RECENT = 'forgecode.recentCommands'
+const recentIds = () => { try { return JSON.parse(localStorage.getItem(RECENT) || '[]') } catch { return [] } }
+function noteRecent(id) {
+  try { localStorage.setItem(RECENT, JSON.stringify([id, ...recentIds().filter(x => x !== id)].slice(0, 8))) } catch {}
+}
+
 function openPicker({ placeholder, items, onPick, prefix = '', render }) {
   const overlay = h('div', { class: 'palette-overlay' })
   const input = h('input', { class: 'palette-input', placeholder, autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', value: prefix })
@@ -17,26 +41,30 @@ function openPicker({ placeholder, items, onPick, prefix = '', render }) {
     const res = typeof items === 'function' ? items(q) : items.map(it => ({ it, score: fuzzyScore(q, it.label + ' ' + (it.detail || '')) })).filter(x => x.score >= 0).sort((a, b) => b.score - a.score).slice(0, 80).map(x => x.it)
     shown = res
     sel = Math.min(sel, Math.max(0, res.length - 1))
+    // 見出しの行は選べない
+    if (shown[sel] && shown[sel].header) sel = Math.max(0, shown.findIndex(x => !x.header))
     list.innerHTML = ''
     res.forEach((it, i) => {
+      if (it.header) { list.append(h('div', { class: 'palette-head', role: 'presentation' }, it.header)); return }
       const row = h('div', { class: 'palette-item' + (i === sel ? ' sel' : ''), role: 'option', onmousedown: e => { e.preventDefault(); pick(i) } },
         render ? render(it) : [it.icon ? (typeof it.icon === 'string' ? icon(it.icon, 16) : it.icon) : h('span', { class: 'ico-space' }), h('span', { class: 'pi-label' }, it.label), it.detail ? h('span', { class: 'pi-detail' }, it.detail) : null, it.key ? h('kbd', null, it.key) : null])
       list.append(row)
     })
     if (!res.length) list.append(h('div', { class: 'palette-empty' }, '見つかりません'))
-    const s = list.children[sel]
+    const s = list.querySelector('.palette-item.sel')
     if (s && s.scrollIntoView) s.scrollIntoView({ block: 'nearest' })
   }
   const pick = i => {
     const it = shown[i]
-    if (!it) return
+    if (!it || it.header) return
     close()
     onPick(it, input.value)
   }
   input.addEventListener('input', () => { sel = 0; update() })
   input.addEventListener('keydown', e => {
-    if (e.key === 'ArrowDown') { sel = Math.min(shown.length - 1, sel + 1); update(); e.preventDefault() }
-    else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); update(); e.preventDefault() }
+    const step = d => { let k = sel + d; while (k >= 0 && k < shown.length && shown[k].header) k += d; if (k >= 0 && k < shown.length) sel = k }
+    if (e.key === 'ArrowDown') { step(1); update(); e.preventDefault() }
+    else if (e.key === 'ArrowUp') { step(-1); update(); e.preventDefault() }
     else if (e.key === 'Enter') { pick(sel); e.preventDefault() }
     else if (e.key === 'Escape') { close(); e.preventDefault(); app.editors.focus() }
   })
@@ -66,16 +94,32 @@ export function quickOpen(prefix = '') {
     onPick: it => {
       if (it.path) app.editors.open(it.path)
       else if (it.line) app.editors.gotoLine(it.line)
-      else if (it.cmd) it.cmd.run()
+      else if (it.cmd) { noteRecent(it.cmd.id); it.cmd.run() }
       else if (it.pos !== undefined) { const v = app.editors.activeView(); if (v) { app.editors.gotoLine(v.state.doc.lineAt(it.pos).number) } }
     },
   })
 }
 
+// 何も入力していないとき: 最近使ったもの → 種類ごと / 入力したとき: 近い順 (種類も検索の対象)
 function commandItems(q) {
   const all = [...app.commands.values()].filter(c => !c.hidden)
-  return all.map(c => ({ c, s: fuzzyScore(q, c.title + ' ' + (c.category || '')) })).filter(x => x.s >= 0).sort((a, b) => b.s - a.s)
-    .map(({ c }) => ({ label: c.title, detail: c.category || '', key: c.key, icon: c.icon, cmd: c }))
+  const item = c => ({ label: c.title, detail: categoryOf(c), key: c.key, icon: c.icon, cmd: c })
+  // 見出しの下では、種類の名前は出さない
+  const plain = c => ({ ...item(c), detail: '' })
+  if (!q) {
+    const out = []
+    const recent = recentIds().map(id => app.commands.get(id)).filter(c => c && !c.hidden)
+    if (recent.length) { out.push({ header: '最近使ったもの' }); out.push(...recent.map(item)) }
+    const order = [...CATEGORIES.map(([n]) => n), 'そのほか']
+    for (const cat of order) {
+      const cs = all.filter(c => categoryOf(c) === cat).sort((a, b) => a.title.localeCompare(b.title, 'ja'))
+      if (!cs.length) continue
+      out.push({ header: cat })
+      out.push(...cs.map(plain))
+    }
+    return out
+  }
+  return all.map(c => ({ c, s: fuzzyScore(q, c.title + ' ' + categoryOf(c) + ' ' + c.id) })).filter(x => x.s >= 0).sort((a, b) => b.s - a.s).map(({ c }) => item(c))
 }
 
 export function symbolItems(q) {
@@ -88,9 +132,9 @@ export function symbolItems(q) {
 
 export function palette() {
   openPicker({
-    placeholder: 'コマンドを検索…',
+    placeholder: 'すべての機能から検索 (例: ターミナル・整形・GitHub)',
     items: q => commandItems(q),
-    onPick: it => it.cmd.run(),
+    onPick: it => { noteRecent(it.cmd.id); it.cmd.run() },
   })
 }
 
@@ -134,7 +178,7 @@ function indentDepth(line) {
   return Math.min(6, Math.floor(lead.replace(/\t/g, '    ').length / 4))
 }
 
-command('palette', 'コマンドパレットを開く', () => palette(), { icon: 'command', key: '⌘⇧P' })
+command('palette', 'すべての機能 (コマンドパレット)', () => palette(), { icon: 'command', key: '⌘⇧P' })
 command('quickOpen', 'ファイルを検索して開く', () => quickOpen(), { icon: 'search', key: '⌘P' })
 command('gotoLine', '行へ移動', () => gotoLineDialog(), { key: '⌘G' })
 command('gotoSymbol', 'シンボルへ移動 (関数・変数)', () => quickOpen('@'), { icon: 'outline', key: '⌘⇧O' })

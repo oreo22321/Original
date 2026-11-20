@@ -48,6 +48,8 @@ export const DEFAULTS = {
   runView: 'full',     // 実行結果の表示: full (全画面の実行画面) / panel (下のパネル)
   groupOutput: true,   // 同じ出力をまとめる (×3)
   explainErrors: true, // 実行エラーに日本語の解説を付ける
+  keepAwake: 'run',    // 画面を消さない: run (実行中だけ) / always (いつも) / off
+  autoRestart: false,  // ずっと動かす: エラーで止まったら自動で再実行
   // AI
   aiInline: true,      // 入力が止まったら AI (Forge AI) が続きを提案
   aiDelay: 700,

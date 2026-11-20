@@ -13,6 +13,17 @@ export const EN = {
   '未保存': 'Unsaved', '保存中…': 'Saving…', '保存済み': 'Saved', '実行中': 'Running', 'デバッグ中': 'Debugging', '操作待ち': 'Waiting for input',
   'たった今': 'just now', '行頭へ': 'Line start', '行末へ': 'Line end', 'プレビュー': 'Preview', '出力パネル': 'Output panel',
   '保存の状態': 'Save status', 'ドラッグで幅を変更': 'Drag to resize', 'ドラッグで高さを変更': 'Drag to resize',
+  // ---- ターミナル・24 時間動かす・整理 (v14) ----
+  'ターミナル': 'Terminal', 'ターミナルを開く': 'Open terminal', 'ターミナルの表示切り替え': 'Toggle terminal', 'ターミナルで開く': 'Open in terminal', 'ターミナルで実行': 'Run in terminal',
+  'ターミナルで実行中': 'Running in terminal', 'ターミナルの文字をコピー': 'Copy terminal text', 'ターミナルを消す (Ctrl+L)': 'Clear terminal (Ctrl+L)', '画面を消す': 'Clear screen',
+  '止める': 'Stop', '止める (Ctrl+C)': 'Stop (Ctrl+C)', 'Python の対話モード': 'Python REPL', 'コマンドの一覧 (help)': 'Command list (help)', 'ターミナルの使い方': 'Terminal help',
+  'パネル (出力・ターミナル)': 'Panel (output, terminal)', 'パネルを最大化': 'Maximize panel', 'パネルを元の大きさに': 'Restore panel', 'パネルの最大化の切り替え': 'Toggle maximized panel',
+  'コード': 'Code', 'アプリ': 'App', 'そのほか': 'Other', '移動・検索': 'Navigate & search', 'エラー対策': 'Error checks', '最近使ったもの': 'Recently used',
+  'すべての機能 (コマンド)': 'All features (commands)', 'すべての機能 (コマンドパレット)': 'All features (command palette)', '読み込み・書き出し': 'Import & export',
+  '24 時間動かす': 'Run 24/7', '画面を消さない': 'Keep screen on', '実行中だけ (おすすめ)': 'Only while running (recommended)', 'いつも (アプリを開いている間)': 'Always (while the app is open)',
+  '消えてもよい (端末の設定どおり)': 'Allow screen off (device setting)', 'エラーで止まったら自動で再実行': 'Restart automatically after an error',
+  'ずっと動かす (エラーで止まったら自動で再実行)': 'Keep running (restart after errors)', '画面を消さない (実行中)': 'Keep screen on (while running)',
+  '自動の再実行をやめる': 'Stop automatic restart', '自動の再実行をやめました': 'Stopped automatic restart', '長時間の実行について': 'About long runs',
   // ---- 実行画面 (v13) ----
   '戻る': 'Back', 'もう一度': 'Run again', 'もう一度実行': 'Run again', '入力待ち': 'Waiting for input', '画面を開く': 'Open', '大きく表示': 'Enlarge', '元の大きさに戻す': 'Restore size',
   '画像として保存': 'Save as image', 'ゲームを閉じる (QUIT)': 'Close game (QUIT)', '直して実行': 'Fix and run', '直すだけ': 'Fix only', 'AI の直し方にする': 'Apply AI fix',

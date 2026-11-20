@@ -3,7 +3,8 @@
 // ・コード・出力・ファイル名など、ユーザーの内容には触れません
 // ・辞書にない文言は日本語のまま表示します
 import { getSettings } from './store.js'
-import { EN, EN_PATTERNS } from './i18n-en.js'
+// 英語の辞書は、英語で表示するときだけ読み込む (日本語のときは起動を軽く)
+let EN = {}, EN_PATTERNS = []
 
 const JP = /[぀-ヿ㐀-鿿]/
 // 翻訳しない場所 (コード・出力・ユーザーが書いたもの)
@@ -64,10 +65,11 @@ function translateTree(root) {
   }
 }
 
-export function startI18n() {
+export async function startI18n() {
   lang = resolveLang(getSettings().language)
   document.documentElement.lang = lang
   if (lang === 'ja') return
+  try { ({ EN, EN_PATTERNS } = await import('./i18n-en.js')) } catch { lang = 'ja'; return }
   translateTree(document.body)
   new MutationObserver(list => {
     for (const m of list) {
