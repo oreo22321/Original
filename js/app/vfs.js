@@ -218,7 +218,8 @@ export async function writeFile(pid, path, content) {
   if (!path) throw new Error('ファイル名が空です')
   await retry(async () => {
     await ensureParents(pid, path)
-    await putRaw({ pid, path, content: String(content ?? ''), mtime: Date.now() })
+    // バイナリ (画像・Excel・SQLite など) は Uint8Array のまま保存する
+    await putRaw({ pid, path, content: content instanceof Uint8Array ? content : String(content ?? ''), mtime: Date.now() })
   })
   announce(pid, path, 'write')
 }

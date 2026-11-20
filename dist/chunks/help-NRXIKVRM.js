@@ -1,4 +1,4 @@
-import{a as c,g as l}from"./chunk-FI2VWVQ2.js";function t(d){let e=c("div",{class:"help"});e.innerHTML=`
+import{a as c,g as l}from"./chunk-MZT4OYFQ.js";function t(e){let d=c("div",{class:"help"});d.innerHTML=`
   <h3 id="help-start">はじめかた</h3>
   <ol>
     <li>左上の <b>☰</b> (iPad / PC では左端のアイコン) でファイル一覧を開き、<code>main.py</code> などのファイルをタップして開きます。</li>
@@ -23,10 +23,13 @@ import{a as c,g as l}from"./chunk-FI2VWVQ2.js";function t(d){let e=c("div",{clas
     <li><b>Python</b>: <code>python main.py 引数</code> で実行 (<code>sys.argv</code> に引数が入り、<code>input()</code> もターミナルで答えます)。<code>python</code> だけで対話モード (<code>&gt;&gt;&gt;</code>)、<code>python -c "コード"</code>、<code>python -m モジュール</code>、<code>pip install 名前</code> も使えます。図やゲームの画面は実行画面に出ます。</li>
     <li><b>つなぐ</b>: パイプ (<code>|</code>)・リダイレクト (<code>&gt;</code> <code>&gt;&gt;</code> <code>&lt;</code>)・<code>&amp;&amp;</code> <code>||</code> <code>;</code>・<code>$変数</code>・<code>$(コマンド)</code>・<code>*.py</code> が使えます。例: <code>python main.py | grep 合計 &gt; result.txt</code></li>
     <li><b>操作</b>: <b>Tab</b> で補完、<b>↑↓</b> で前のコマンド、<b>Ctrl+C</b> で止める、<b>Ctrl+L</b> で画面を消す、<b>Ctrl+D</b> で入力の終わり。スマホでは画面の下のボタンで Tab・^C・矢印・記号を入力できます。<code>help</code> でコマンドの一覧を表示します。</li>
+    <li><b>スクリプト</b>: <code>for f in *.py; do echo $f; done</code>・<code>while</code>・<code>if [ -f a.txt ]; then … fi</code>・関数 <code>名前() { … }</code>・<code>$((1 + 2))</code>・<code>read</code> が使えます。<code>sh run.sh</code> や <code>./run.sh</code> でシェルスクリプトも動きます。<code>do</code> や <code>then</code> の後で Enter を押すと、続きの行 (<code>&gt;</code>) を入力できます。</li>
+    <li><b>便利に</b>: 前に打ったコマンドの続きが薄い文字で出たら <b>→</b> で確定。<kbd>Ctrl + R</kbd> で履歴を検索。上のメニュー (PC はパネルの <b>+</b>) から<b>ターミナルを増やせ</b>ます (別々の場所で作業できます)。<code>xargs</code>・<code>watch</code>・<code>zip</code>/<code>unzip</code>・<code>base64</code>・<code>sha256sum</code>・<code>file</code> も使えます。</li>
     <li>閉じても、次に開いたときに前の続き (いた場所・最後の画面) から始まります。</li>
   </ul>
   <h3 id="help-always">24 時間動かす</h3>
   <ul>
+    <li><b>クラウドで動かす (アプリを閉じても・電源を切っても)</b>: 「その他」→「クラウドで動かす」(ターミナルでは <code>cloud setup</code>) から、GitHub のサーバーでプログラムを動かせます。5 分ごと・1 時間ごと・毎日 決まった時刻 などを選べ、スマホの電源を切っていても動きます。プログラムが書いたファイル (記録・データ) は GitHub に保存され、次の実行はその続きから。「結果を取り込む」(<code>cloud pull</code>) でアプリに入り、<code>cloud log</code> で最後の出力を見られます。<br>使うには「GitHub と同期」を設定し、トークンに <b>Workflows</b> と <b>Actions</b> の「Read and write」を足してください。公開リポジトリは無料・使い放題、非公開リポジトリは無料で月 2,000 分までです。<code>input()</code> にはプロジェクトの <code>input.txt</code> の中身が入ります (画面のある turtle・pygame・tkinter はクラウドでは表示できません)。</li>
     <li><b>画面を消さない</b>: 実行中は画面が自動で消えないようにします (設定 → 24 時間動かす で「いつも」にもできます)。電源につないでおくと安心です。</li>
     <li><b>ずっと動かす</b>: 設定 (または実行画面の「…」) の「エラーで止まったら自動で再実行」をオンにすると、エラーで止まったプログラムを少し待って自動で実行し直します。実行画面の上に、続けて動いている時間と再実行の回数が出ます。</li>
     <li><b>止まらない出力</b>: 実行時間に上限はなく (最大実行時間が 0 のとき)、出力がとても多くても止まりません (古い出力から省きます)。</li>
@@ -45,7 +48,9 @@ import{a as c,g as l}from"./chunk-FI2VWVQ2.js";function t(d){let e=c("div",{clas
     <li><b>tkinter</b>: ボタン・入力欄・リスト・キャンバスなどのウィンドウが出力の中に表示され、タップ・入力・キー操作が使えます (<code>pack</code>・<code>grid</code>・<code>place</code>・<code>after</code>・<code>bind</code>・<code>ttk</code>・<code>messagebox</code>・<code>simpledialog</code>・<code>filedialog</code> など)。</li>
     <li><b>pygame</b>: ゲームの画面が出力に出て、キーボード・タップで遊べます (スマホでは、プログラムが使うキーのボタンが出ます)。図形・文字・画像 (<code>pygame.image.load</code>)・スプライト・当たり判定・音 (<code>pygame.mixer</code>) に対応。</li>
     <li><b>音</b>: <code>pygame.mixer</code>・<code>winsound.Beep</code>・<code>playsound</code> で音が鳴ります。</li>
-    <li>使えないもの: <code>subprocess</code>、本当に同時に動くスレッド、<code>socket</code> での直接の通信、パソコンの操作 (<code>pyautogui</code> など)、PyQt などほかの GUI。</li>
+    <li><b>画像・Excel・データベースのファイル</b>: <code>plt.savefig("a.png")</code>・<code>img.save()</code>・<code>openpyxl</code> の <code>wb.save()</code>・<code>sqlite3</code> のデータベース・<code>pickle</code> など、プログラムが書いたバイナリのファイルもプロジェクトに入り、次の実行でも使えます。端末から読み込んだ写真なども <code>open("photo.jpg", "rb")</code> や PIL で読めます。ファイル一覧でタップすると画像はそのまま表示します。</li>
+    <li><b>os.system・subprocess</b>: <code>os.system("cls")</code> / <code>clear</code> で画面を消し、<code>pause</code>・<code>echo</code>・<code>python ほかのファイル.py</code> (<code>subprocess.run(["python", "x.py"])</code>) なども使えます。<code>print("\\033[2J")</code> でも画面を消せます。<code>msvcrt.getch()</code> は入力欄で 1 文字受け取ります。</li>
+    <li>使えないもの: ほかのプログラム (<code>git</code> など) の起動、本当に同時に動くスレッド、<code>socket</code> での直接の通信、パソコンの操作 (<code>pyautogui</code> など)、PyQt などほかの GUI。</li>
   </ul>
   <h3 id="help-console">コンソール</h3>
   <ul>
@@ -122,7 +127,14 @@ import{a as c,g as l}from"./chunk-FI2VWVQ2.js";function t(d){let e=c("div",{clas
     <tr><td><kbd>⌘/Ctrl + B</kbd> / <kbd>⌘/Ctrl + J</kbd></td><td>サイドバー / パネルの表示切り替え</td></tr>
     <tr><td><kbd>Ctrl + \`</kbd></td><td>ターミナル</td></tr>
     <tr><td><kbd>Tab</kbd> / <kbd>⌘/Ctrl + →</kbd></td><td>インライン候補を確定 / 1 単語だけ確定</td></tr>
-  </table>`;let i=c("div",{class:"help-toc"},[...e.querySelectorAll("h3[id]")].map(o=>c("button",{class:"chip",onclick:()=>o.scrollIntoView({block:"start",behavior:"smooth"})},o.textContent.replace(/\s*\(.*\)$/,""))));if(e.prepend(i),l({title:"使い方",body:e,wide:!0}),typeof d=="string"){let o=e.querySelector("#help-"+d.replace(/[^\w-]/g,""));o&&setTimeout(()=>o.scrollIntoView({block:"start"}),60)}}function r(){let d=c("div",{class:"help whats-new"});d.innerHTML=`
+  </table>`;let i=c("div",{class:"help-toc"},[...d.querySelectorAll("h3[id]")].map(o=>c("button",{class:"chip",onclick:()=>o.scrollIntoView({block:"start",behavior:"smooth"})},o.textContent.replace(/\s*\(.*\)$/,""))));if(d.prepend(i),l({title:"使い方",body:d,wide:!0}),typeof e=="string"){let o=d.querySelector("#help-"+e.replace(/[^\w-]/g,""));o&&setTimeout(()=>o.scrollIntoView({block:"start"}),60)}}function r(){let e=c("div",{class:"help whats-new"});e.innerHTML=`
+  <p>ForgeCode 14.1 — <b>アプリを閉じても動く</b>・ターミナルの進化</p>
+  <ul>
+    <li><b>クラウドで動かす</b> — GitHub のサーバーで、5 分ごと〜毎日 決まった時刻にプログラムを動かします。アプリを閉じても、スマホの電源を切っても動き続け、結果のファイルと出力は GitHub に残ります (「その他」→「クラウドで動かす」・ターミナルの <code>cloud</code>)。</li>
+    <li><b>ターミナル</b> — <code>for</code>・<code>while</code>・<code>if</code>・関数・<code>$((計算))</code>・<code>read</code>、シェルスクリプト (<code>sh run.sh</code>・<code>./run.sh</code>)、続きの行 (<code>&gt;</code>)、履歴からの提案 (→ で確定)・<kbd>Ctrl + R</kbd> の検索、ターミナルを増やす、<code>xargs</code>・<code>watch</code>・<code>zip</code>・<code>unzip</code>・<code>base64</code>・<code>sha256sum</code>・<code>file</code>。</li>
+    <li><b>Python</b> — 画像・Excel・SQLite・pickle などバイナリのファイルを保存して次の実行で使える (画像はタップで表示)。<code>os.system("cls")</code>・<code>subprocess.run(["python", "x.py"])</code>・<code>msvcrt.getch()</code>・<code>print("\\033[2J")</code> での画面の消去。</li>
+    <li><b>速く</b> — 実行のたびに、変わったファイルだけを Python に渡します (大きな画像やデータがあっても、すぐ始まります)。ターミナルの出力をまとめて描きます。</li>
+  </ul>
   <p>ForgeCode 14 — <b>ターミナル</b>と<b>24 時間動かす</b>機能</p>
   <ul>
     <li><b>ターミナル</b> — <code>ls</code>・<code>cd</code>・<code>cat</code>・<code>grep</code>・<code>mkdir</code>・<code>cp</code>・<code>mv</code>・<code>rm</code> などでプロジェクトのファイルを扱えます。<code>python main.py 引数</code>・<code>python</code> (対話モード)・<code>python -c</code>・<code>pip install</code> も。パイプ・リダイレクト・Tab の補完・↑↓ の履歴・色付きの出力に対応。上のバーの <b>&gt;_</b> か <kbd>Ctrl + \`</kbd> で開きます。</li>
@@ -166,4 +178,4 @@ import{a as c,g as l}from"./chunk-FI2VWVQ2.js";function t(d){let e=c("div",{clas
     <li><b>デバッガー</b> — ブレークポイント (条件付き・ログ)・ステップ・一時停止・変数とウォッチ・<code>breakpoint()</code>。止まった場所でコンソールも使えます。</li>
     <li><b>Forge AI も Python に</b> — 直す・説明・コメント・型ヒント・レビュー・コード生成・質問への回答。</li>
     <li>これまでの Luau / Roblox のプロジェクトはそのまま残ります (ファイルの編集・保存はできますが、実行はできません)。</li>
-  </ul>`,l({title:"新しくなりました",body:d,actions:[{label:"使い方を見る",run:()=>{setTimeout(t,200)}},{label:"OK",primary:!0}]})}export{t as showHelp,r as showWhatsNew};
+  </ul>`,l({title:"新しくなりました",body:e,actions:[{label:"使い方を見る",run:()=>{setTimeout(t,200)}},{label:"OK",primary:!0}]})}export{t as showHelp,r as showWhatsNew};

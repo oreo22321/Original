@@ -130,9 +130,13 @@ const FILE_KINDS = {
   csv: ['layers', '#8fae6f', 'CSV (表のデータ)'],
   md: ['book', '#8d9097', 'メモ (Markdown)'],
   text: ['text', '#8d9097', 'テキスト'],
+  image: ['image', '#c49a6c', '画像'],
+  binary: ['cube', '#8d9097', 'バイナリ (データ)'],
 }
 export function fileKind(path) {
   const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
+  if (/\.(png|jpe?g|gif|webp|bmp|ico|svg|avif)$/.test(name)) return 'image'
+  if (/\.(xlsx|xls|db|sqlite3?|pkl|pickle|npy|npz|zip|gz|pdf|mp3|wav|ogg|mp4|bin|parquet)$/.test(name)) return 'binary'
   const m = /\.(pyw?|pyi|json|md|markdown|csv|tsv|txt)$/.exec(name)
   if (!m) return 'text'
   const ext = m[1]

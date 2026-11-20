@@ -18,10 +18,11 @@ export function ghConfig() {
 function saveConfig(c) { try { localStorage.setItem(KEY, JSON.stringify(c)) } catch {} emit('github', status) }
 export const ghReady = () => { const c = ghConfig(); return !!(c.token && c.repo) }
 const client = () => { const c = ghConfig(); return new GitHubClient({ token: c.token, repo: c.repo, branch: c.branch, api: c.api || undefined }) }
+export const ghClient = client
 const safeName = n => String(n || 'Project').replace(/[\\/:*?"<>|#%]+/g, '_').trim().slice(0, 80) || 'Project'
 
 // プロジェクトごとの同期の状態 (プロジェクトの記録に保存)
-const projDir = p => (p.github && p.github.dir) || `${ghConfig().dir}/${safeName(p.name)}`
+export const projDir = p => (p.github && p.github.dir) || `${ghConfig().dir}/${safeName(p.name)}`
 async function saveState(p, st) {
   p.github = { ...(p.github || {}), dir: projDir(p), state: st, lastSync: Date.now() }
   if (app.project && app.project.id === p.id) app.project.github = p.github
@@ -98,14 +99,14 @@ async function applyChanges(p, changes) {
   if (!entries.length) return
   for (const [path, text] of entries) {
     const old = app.contents.get(path)
-    if (old !== undefined && old !== null && old !== '') { try { await vfs.addHistory(p.id, path, old) } catch {} }
+    if (typeof old === 'string' && old !== '') { try { await vfs.addHistory(p.id, path, old) } catch {} }
     if (text === null) {
       if (app.editors && app.editors.has(path)) { try { await app.editors.close(path, { force: true }) } catch {} }
       await vfs.remove(p.id, path)
     } else {
       await vfs.writeFile(p.id, path, text)
       app.contents.set(path, text)
-      if (app.editors && app.editors.has(path)) app.editors.externalChange(path, text)
+      if (typeof text === 'string' && app.editors && app.editors.has(path)) app.editors.externalChange(path, text)
     }
   }
   await refreshFiles()
@@ -145,7 +146,7 @@ on('project', () => {
 })
 
 // ---- 設定の画面 ----
-function settingsDialog() {
+export function settingsDialog() {
   const c = ghConfig()
   const field = (label, input, desc) => h('label', { class: 'gh-field' }, h('span', { class: 'label' }, label), input, desc ? h('span', { class: 'set-desc' }, desc) : null)
   const token = h('input', { class: 'input', type: 'password', value: c.token, placeholder: 'github_pat_…', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' })
@@ -218,6 +219,9 @@ async function importProject(name) {
 }
 
 command('githubSync', 'GitHub と同期 (設定)', () => settingsDialog(), { icon: 'github' })
+// クラウドで動かす (GitHub Actions)。画面は使うときに読み込む (cloud.js)
+command('cloud', 'クラウドで動かす (アプリを閉じても 24 時間)', () => import('./cloud.js').then(m => m.cloudDialog()), { icon: 'cloud' })
+command('cloudRunNow', 'クラウドで今すぐ実行', () => import('./cloud.js').then(m => m.cloudRunNow()).then(() => toast('クラウドでの実行を頼みました。1〜2 分で動き始めます', { icon: 'cloud' })).catch(e => toast(e.message, { kind: 'error' })), { icon: 'cloud' })
 command('githubPush', 'GitHub に保存', () => (ghReady() ? syncPush({}) : settingsDialog()), { icon: 'github' })
 command('githubPull', 'GitHub から取り込む', () => (ghReady() ? syncPull({}) : settingsDialog()), { icon: 'github' })
 command('githubOpen', 'GitHub から開く', () => (ghReady() ? openFromGitHub() : settingsDialog()), { icon: 'github' })

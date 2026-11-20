@@ -11,12 +11,15 @@
 //   pip(args, ctx) → 終了コード / pyVersion() / open(path, line) / runFile(path) / fetch(url, init)
 //   storage() → { usage, quota } / project() → 名前 / command(id) (アプリのコマンド)
 // }
+import { isBin, kindOf, humanSize, bytesToContent } from './bin.js'
 export const C = {
   reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', blue: '\x1b[34m',
   magenta: '\x1b[35m', cyan: '\x1b[36m', gray: '\x1b[90m', bred: '\x1b[1;31m', bgreen: '\x1b[1;32m', bblue: '\x1b[1;34m', byellow: '\x1b[1;33m',
 }
 const PY_ROOT = '/home/pyodide/project'
-export class ShellError extends Error {}
+// incomplete: 続きの行が要る (for … do の後・閉じていない引用符など)
+export class ShellError extends Error { constructor(msg, incomplete = false) { super(msg); this.incomplete = incomplete } }
+class Flow { constructor(kind, code = 0) { this.kind = kind; this.code = code } }   // break / continue / return / exit
 
 // ============================================================
 // パス
@@ -101,8 +104,11 @@ export function lex(line) {
         else if (d === '(') depth++
         else if (d === ')') depth--
       }
-      if (depth) throw new ShellError('$( が閉じられていません')
-      seg(quoted ? 'qsub' : 'sub', line.slice(i + 2, j - 1))
+      if (depth) throw new ShellError('$( が閉じられていません', true)
+      const inner = line.slice(i + 2, j - 1)
+      // $(( 式 )) は計算
+      if (inner.startsWith('(') && inner.endsWith(')')) seg('arith', inner.slice(1, -1))
+      else seg(quoted ? 'qsub' : 'sub', inner)
       i = j
       return
     }
@@ -113,23 +119,26 @@ export function lex(line) {
       i = j + 1
       return
     }
-    const m = /^(\?|\$|#|[0-9]|[A-Za-z_]\w*)/.exec(line.slice(i + 1))
+    const m = /^(\?|\$|#|@|\*|[0-9]|[A-Za-z_]\w*)/.exec(line.slice(i + 1))
     if (!m) { seg(quoted ? 'q' : 'lit', '$'); i++; return }
     seg(quoted ? 'qvar' : 'var', m[1])
     i += 1 + m[1].length
   }
   while (i < n) {
     const c = line[i]
-    if (c === ' ' || c === '\t' || c === '\n') { end(); i++; continue }
-    if (c === '#' && !word) break
+    if (c === ' ' || c === '\t' || c === '\r') { end(); i++; continue }
+    // 改行は ; と同じ (スクリプト・複数行)
+    if (c === '\n') { op(';'); i++; continue }
+    if (c === '#' && !word) { while (i < n && line[i] !== '\n') i++; continue }
     if (c === '\\') {
+      if (line[i + 1] === '\n') { i += 2; continue }   // 行の続き
       if (i + 1 < n) seg('q', line[i + 1])
       i += 2
       continue
     }
     if (c === "'") {
       const j = line.indexOf("'", i + 1)
-      if (j < 0) throw new ShellError("' が閉じられていません")
+      if (j < 0) throw new ShellError("' が閉じられていません", true)
       seg('q', line.slice(i + 1, j))
       i = j + 1
       continue
@@ -144,18 +153,18 @@ export function lex(line) {
         else if (d === '$') dollar(true)
         else if (d === '`') {
           const j = line.indexOf('`', i + 1)
-          if (j < 0) throw new ShellError('` が閉じられていません')
+          if (j < 0) throw new ShellError('` が閉じられていません', true)
           seg('qsub', line.slice(i + 1, j)); i = j + 1
         } else { seg('q', d); i++ }
       }
-      if (i >= n) throw new ShellError('" が閉じられていません')
+      if (i >= n) throw new ShellError('" が閉じられていません', true)
       i++
       continue
     }
     if (c === '$') { dollar(false); continue }
     if (c === '`') {
       const j = line.indexOf('`', i + 1)
-      if (j < 0) throw new ShellError('` が閉じられていません')
+      if (j < 0) throw new ShellError('` が閉じられていません', true)
       seg('sub', line.slice(i + 1, j)); i = j + 1
       continue
     }
@@ -182,47 +191,240 @@ export function lex(line) {
   return toks
 }
 
-// 構文: [{ pipe: [{ words, redirs, assigns }], then: ';' | '&&' | '||' | '&' }]
+// 構文: list = [{ pipe: [コマンド…], then: ';' | '&&' | '||' | '&' | null }]
+// コマンド: { words, redirs, assigns } / { compound: { type: 'for' | 'while' | 'until' | 'if' | 'group' | 'func', … }, redirs }
 const REDIR = new Set(['>', '>>', '<', '2>', '2>>', '2>&1', '&>', '&>>'])
+const KW = new Set(['for', 'in', 'do', 'done', 'while', 'until', 'if', 'then', 'elif', 'else', 'fi', '{', '}', 'function'])
+const kwOf = t => (t && t.word && t.word.length === 1 && t.word[0].t === 'lit' && KW.has(t.word[0].v) ? t.word[0].v : null)
+const litOf = t => (t && t.word && t.word.length === 1 && t.word[0].t === 'lit' ? t.word[0].v : null)
 export function parse(toks) {
-  const list = []
-  let pipe = []
-  let cmd = { words: [], redirs: [], assigns: [] }
-  const endCmd = () => {
-    if (cmd.words.length || cmd.redirs.length || cmd.assigns.length) pipe.push(cmd)
-    else if (pipe.length) throw new ShellError('| の後にコマンドがありません')
-    cmd = { words: [], redirs: [], assigns: [] }
+  let i = 0
+  const more = what => { throw new ShellError(`${what} がありません`, true) }
+  const expect = kw => {
+    while (toks[i] && toks[i].op === ';') i++
+    if (i >= toks.length) more(kw)
+    if (kwOf(toks[i]) !== kw) throw new ShellError(`${kw} が必要です (${litOf(toks[i]) || toks[i].op || ''} の前)`)
+    i++
   }
-  const endPipe = then => {
-    endCmd()
-    if (!pipe.length) { if (then === ';' && !list.length) return; throw new ShellError(`${then} の前にコマンドがありません`) }
-    list.push({ pipe, then })
-    pipe = []
+  const redirs = () => {
+    const out = []
+    while (toks[i] && toks[i].op && REDIR.has(toks[i].op)) {
+      const t = toks[i++]
+      if (t.op === '2>&1') { out.push({ op: t.op }); continue }
+      if (!toks[i] || !toks[i].word) throw new ShellError(`${t.op} の後にファイル名がありません`)
+      out.push({ op: t.op, word: toks[i++].word })
+    }
+    return out
   }
-  for (let k = 0; k < toks.length; k++) {
-    const t = toks[k]
-    if (t.op) {
-      if (t.op === '|') { endCmd(); if (!pipe.length) throw new ShellError('| の前にコマンドがありません'); continue }
-      if (REDIR.has(t.op)) {
-        if (t.op === '2>&1') { cmd.redirs.push({ op: t.op }); continue }
-        const w = toks[k + 1]
-        if (!w || !w.word) throw new ShellError(`${t.op} の後にファイル名がありません`)
-        cmd.redirs.push({ op: t.op, word: w.word })
-        k++
+  function list(stops) {
+    const out = []
+    for (;;) {
+      while (toks[i] && (toks[i].op === ';' || toks[i].op === '&')) i++
+      if (i >= toks.length) { if (stops) more(stops.join(' / ')); return out }
+      const kw = kwOf(toks[i])
+      if (stops && kw && stops.includes(kw)) return out
+      const pipe = [command()]
+      while (toks[i] && toks[i].op === '|') { i++; if (i >= toks.length) more('| の後のコマンド'); pipe.push(command()) }
+      let then = null
+      const t = toks[i]
+      if (t && t.op && [';', '&&', '||', '&'].includes(t.op)) { then = t.op; i++ }
+      else if (t && t.op) throw new ShellError(`${t.op} の使い方が正しくありません`)
+      if ((then === '&&' || then === '||') && i >= toks.length) more(`${then} の後のコマンド`)
+      out.push({ pipe, then })
+    }
+  }
+  function command() {
+    const t = toks[i]
+    const kw = kwOf(t)
+    if (kw === 'for') {
+      i++
+      const name = litOf(toks[i])
+      if (!name || !/^[A-Za-z_]\w*$/.test(name)) throw new ShellError('for の後に変数の名前を書いてください (例: for f in *.py; do …; done)')
+      i++
+      let items = null
+      if (kwOf(toks[i]) === 'in') { i++; items = []; while (toks[i] && toks[i].word && kwOf(toks[i]) !== 'do') items.push(toks[i++].word) }
+      expect('do')
+      const body = list(['done'])
+      expect('done')
+      return { compound: { type: 'for', name, items, body }, redirs: redirs() }
+    }
+    if (kw === 'while' || kw === 'until') {
+      i++
+      const cond = list(['do'])
+      expect('do')
+      const body = list(['done'])
+      expect('done')
+      return { compound: { type: kw, cond, body }, redirs: redirs() }
+    }
+    if (kw === 'if') {
+      i++
+      const branches = []
+      let otherwise = null
+      for (;;) {
+        const cond = list(['then'])
+        expect('then')
+        const body = list(['elif', 'else', 'fi'])
+        branches.push({ cond, body })
+        while (toks[i] && toks[i].op === ';') i++
+        const k = kwOf(toks[i])
+        if (k === 'elif') { i++; continue }
+        if (k === 'else') { i++; otherwise = list(['fi']) }
+        expect('fi')
+        break
+      }
+      return { compound: { type: 'if', branches, otherwise }, redirs: redirs() }
+    }
+    if (kw === '{') {
+      i++
+      const body = list(['}'])
+      expect('}')
+      return { compound: { type: 'group', body }, redirs: redirs() }
+    }
+    // 関数: name() { … } / function name { … }
+    const lit = litOf(t)
+    let fname = null
+    if (kw === 'function') { i++; fname = litOf(toks[i]); i++; if (litOf(toks[i]) === '()') i++ }
+    else if (lit && /^[A-Za-z_][\w-]*\(\)$/.test(lit)) { fname = lit.slice(0, -2); i++ }
+    else if (lit && /^[A-Za-z_][\w-]*$/.test(lit) && litOf(toks[i + 1]) === '()') { fname = lit; i += 2 }
+    if (fname) {
+      while (toks[i] && toks[i].op === ';') i++
+      if (i >= toks.length) more('関数の中身 { … }')
+      if (kwOf(toks[i]) !== '{') throw new ShellError('関数の中身は { … } で書いてください')
+      i++
+      const body = list(['}'])
+      expect('}')
+      return { compound: { type: 'func', name: fname, body }, redirs: [] }
+    }
+    if (kw && kw !== 'in') throw new ShellError(`${kw} の使い方が正しくありません`)
+    // ふつうのコマンド
+    const cmd = { words: [], redirs: [], assigns: [] }
+    while (i < toks.length) {
+      const tk = toks[i]
+      if (tk.op) {
+        if (!REDIR.has(tk.op)) break
+        cmd.redirs.push(...redirs())
         continue
       }
-      endPipe(t.op)
-      continue
+      const first = tk.word[0]
+      const m = !cmd.words.length && first.t === 'lit' && /^([A-Za-z_]\w*)=/.exec(first.v)
+      if (m) cmd.assigns.push({ name: m[1], word: [{ t: 'q', v: first.v.slice(m[0].length) }, ...tk.word.slice(1)] })
+      else cmd.words.push(tk.word)
+      i++
     }
-    // NAME=値 (コマンドの前)
-    const first = t.word[0]
-    const m = !cmd.words.length && first.t === 'lit' && /^([A-Za-z_]\w*)=/.exec(first.v)
-    if (m) { cmd.assigns.push({ name: m[1], word: [{ t: 'q', v: first.v.slice(m[0].length) }, ...t.word.slice(1)] }); continue }
-    cmd.words.push(t.word)
+    if (!cmd.words.length && !cmd.redirs.length && !cmd.assigns.length) throw new ShellError(toks[i] ? `${toks[i].op} の前にコマンドがありません` : 'コマンドがありません')
+    return cmd
   }
-  endCmd()
-  if (pipe.length) list.push({ pipe, then: null })
-  return list
+  return list(null)
+}
+
+// $(( 式 )) の計算 (整数。変数の名前は値に)
+export function arith(expr, getVar) {
+  const toks = String(expr).match(/\d+|[A-Za-z_]\w*|\*\*|<=|>=|==|!=|&&|\|\||<<|>>|[-+*/%()<>!~^&|?:]/g) || []
+  let i = 0
+  const peek = () => toks[i]
+  const num = v => { const n = parseInt(v, 10); return isNaN(n) ? 0 : n }
+  const bool = v => (v ? 1 : 0)
+  const LEVELS = [['||'], ['&&'], ['|'], ['^'], ['&'], ['==', '!='], ['<', '<=', '>', '>='], ['<<', '>>'], ['+', '-'], ['*', '/', '%']]
+  const apply = (op, a, b) => {
+    switch (op) {
+      case '||': return bool(a || b); case '&&': return bool(a && b)
+      case '|': return a | b; case '^': return a ^ b; case '&': return a & b
+      case '==': return bool(a === b); case '!=': return bool(a !== b)
+      case '<': return bool(a < b); case '<=': return bool(a <= b); case '>': return bool(a > b); case '>=': return bool(a >= b)
+      case '<<': return a << b; case '>>': return a >> b
+      case '+': return a + b; case '-': return a - b; case '*': return a * b
+      case '/': if (!b) throw new ShellError('0 で割ろうとしました'); return Math.trunc(a / b)
+      case '%': if (!b) throw new ShellError('0 で割ろうとしました'); return a % b
+    }
+    return 0
+  }
+  function level(k) {
+    if (k === LEVELS.length) return power()
+    let a = level(k + 1)
+    while (LEVELS[k].includes(peek())) { const op = toks[i++]; a = apply(op, a, level(k + 1)) }
+    return a
+  }
+  function power() { const a = unary(); if (peek() === '**') { i++; return a ** power() } return a }
+  function unary() {
+    const t = peek()
+    if (t === '-') { i++; return -unary() }
+    if (t === '+') { i++; return unary() }
+    if (t === '!') { i++; return bool(!unary()) }
+    if (t === '~') { i++; return ~unary() }
+    if (t === '(') { i++; const v = ternary(); if (toks[i++] !== ')') throw new ShellError(') がありません'); return v }
+    i++
+    if (t === undefined) throw new ShellError('式が途中で終わっています')
+    if (/^\d+$/.test(t)) return num(t)
+    if (/^[A-Za-z_]\w*$/.test(t)) return num(getVar(t))
+    throw new ShellError(`${t} は計算に使えません`)
+  }
+  function ternary() {
+    const c = level(0)
+    if (peek() === '?') { i++; const a = ternary(); if (toks[i++] !== ':') throw new ShellError(': がありません'); const b = ternary(); return c ? a : b }
+    return c
+  }
+  const v = ternary()
+  if (i < toks.length) throw new ShellError(`${toks[i]} の使い方が正しくありません`)
+  return v
+}
+
+// [ 条件 ] / test 条件
+function testExpr(args, sh) {
+  let i = 0
+  const fileTest = (op, f) => {
+    const p = sh.resolve(f)
+    const st = sh.stat(p)
+    if (op === '-e') return !!st
+    if (op === '-f') return !!st && !st.dir
+    if (op === '-d') return !!st && st.dir
+    if (op === '-s') return !!st && !st.dir && st.size > 0
+    return !!st
+  }
+  function prim() {
+    const a = args[i]
+    if (a === '!') { i++; return !prim() }
+    if (a === '(') { i++; const v = or(); if (args[i] === ')') i++; return v }
+    if (/^-[efdsrwx]$/.test(a) && i + 1 < args.length) { i += 2; return fileTest(a, args[i - 1]) }
+    if (a === '-z' && i + 1 < args.length) { i += 2; return args[i - 1] === '' }
+    if (a === '-n' && i + 1 < args.length) { i += 2; return args[i - 1] !== '' }
+    const op = args[i + 1]
+    if (op !== undefined && /^(=|==|!=|<|>|-eq|-ne|-lt|-le|-gt|-ge)$/.test(op) && i + 2 < args.length) {
+      const b = args[i + 2]
+      i += 3
+      const x = parseInt(a, 10) || 0, y = parseInt(b, 10) || 0
+      switch (op) {
+        case '=': case '==': return a === b
+        case '!=': return a !== b
+        case '<': return a < b
+        case '>': return a > b
+        case '-eq': return x === y
+        case '-ne': return x !== y
+        case '-lt': return x < y
+        case '-le': return x <= y
+        case '-gt': return x > y
+        case '-ge': return x >= y
+      }
+    }
+    i++
+    return a !== undefined && a !== ''
+  }
+  function and() { let v = prim(); while (args[i] === '-a' || args[i] === '&&') { i++; const w = prim(); v = v && w } return v }
+  function or() { let v = and(); while (args[i] === '-o' || args[i] === '||') { i++; const w = and(); v = v || w } return v }
+  if (!args.length) return false
+  return or()
+}
+
+// 標準入力 (パイプ・< ファイル)。read は 1 行ずつ、ほかのコマンドは残りすべてを読む
+class Stream {
+  constructor(text) { this.text = text ?? '' }
+  readLine() {
+    if (!this.text) return null
+    const k = this.text.indexOf('\n')
+    const line = k < 0 ? this.text : this.text.slice(0, k)
+    this.text = k < 0 ? '' : this.text.slice(k + 1)
+    return line
+  }
+  readAll() { const t = this.text; this.text = ''; return t }
 }
 
 // オプションの読み取り: spec = 'lah' (フラグ) / vals = 'n' (値を取るもの)。-n5 / -n 5 / -la / -- に対応
@@ -283,7 +485,23 @@ const HELP = [
     ['tee [-a] ファイル', '表示しながらファイルにも書く'],
     ['seq 1 10', '数の並び'],
   ]],
+  ['スクリプト', [
+    ['for f in *.py; do echo $f; done', 'くり返し (while 条件; do …; done も)'],
+    ['if [ -f a.txt ]; then …; else …; fi', '条件 ([ ] で -f ファイル・-d フォルダ・= 文字・-lt 数 など)'],
+    ['名前() { echo $1; }', '関数 ($1 $2 … $@ が引数)'],
+    ['sh ファイル.sh / ./ファイル.sh', 'シェルスクリプトを実行 (source で今のシェルで)'],
+    ['read 変数', '1 行読む (while read line; do …; done < ファイル)'],
+    ['echo $((1 + 2 * 3))', '計算'],
+  ]],
+  ['クラウド (24 時間)', [
+    ['cloud', 'クラウド (GitHub) で動かしている様子'],
+    ['cloud run / cloud log', '今すぐ実行 / 最後の出力'],
+    ['cloud setup / cloud stop', '設定の画面 / やめる'],
+  ]],
   ['そのほか', [
+    ['xargs / watch -n 秒 コマンド', '引数にして実行 / くり返し表示'],
+    ['zip -r a.zip フォルダ / unzip a.zip', 'ZIP を作る / 開く'],
+    ['base64 / sha256sum / file', '変換 / ハッシュ / 種類'],
     ['clear', '画面を消す (Ctrl+L)'],
     ['history', 'これまでのコマンド (↑↓ で呼び出し)'],
     ['date / sleep 秒 / time コマンド', '日時 / 待つ / かかった時間'],
@@ -309,6 +527,11 @@ export class Shell {
     this.aliases = { ll: 'ls -l', la: 'ls -a', l: 'ls', py: 'python', python3: 'python', pip3: 'pip', cls: 'clear', ...aliases }
     this.idxCache = null
     this.ov = new Map()
+    this.funcs = {}      // 関数
+    this.args = []       // 関数・スクリプトの引数 ($1 …)
+    this.locals = []     // local で作った変数
+    this.loops = 0
+    this.scriptName = null
   }
 
   // ---- ファイルの一覧 (コマンドごとに 1 度だけ作る) ----
@@ -384,7 +607,9 @@ export class Shell {
   async readText(p) {
     const path = this.resolve(p)
     if (!this.isFile(path)) return null
-    return this.host.read(path)
+    const t = await this.host.read(path)
+    if (isBin(t)) throw new ShellError(`${p}: バイナリファイルです (画像・データベースなど)`)
+    return t
   }
   async writeText(p, text) {
     const path = this.resolve(p)
@@ -423,14 +648,17 @@ export class Shell {
     return cur.map(([, shown]) => prefix + shown).sort()
   }
 
-  // ---- 単語の展開 ($変数・$(…)・ワイルドカード) ----
+  // ---- 単語の展開 ($変数・$(…)・$(( 式 ))・ワイルドカード) ----
   async expand(word, io) {
     let text = '', pat = '', split = false
     for (const s of word) {
       if (s.t === 'lit') { text += s.v; pat += s.v }
       else if (s.t === 'q') { text += s.v; pat += s.v.replace(/[*?[\]\\]/g, '\\$&') }
       else {
-        const v = s.t === 'var' || s.t === 'qvar' ? this.varValue(s.v) : await this.capture(s.v, io)
+        let v
+        if (s.t === 'var' || s.t === 'qvar') v = this.varValue(s.v)
+        else if (s.t === 'arith') v = String(arith(await this.expandText(s.v, io), n => this.varValue(n)))
+        else v = await this.capture(s.v, io)
         text += v
         pat += v.replace(/[*?[\]\\]/g, '\\$&')
         if (s.t === 'var' || s.t === 'sub') split = true
@@ -444,25 +672,42 @@ export class Shell {
     }
     return [text]
   }
+  // $(( )) の中の $変数
+  async expandText(src, io) {
+    return String(src).replace(/\$\{?([A-Za-z_]\w*|[0-9#?])\}?/g, (m, n) => this.varValue(n))
+  }
   varValue(name) {
+    const args = this.args[this.args.length - 1] || []
     if (name === '?') return String(this.status)
     if (name === '$') return '1'
-    if (name === '#') return '0'
+    if (name === '#') return String(args.length)
+    if (name === '@' || name === '*') return args.join(' ')
     if (name === 'PWD') return showPath(this.cwd)
     if (name === 'OLDPWD') return showPath(this.oldCwd)
     if (name === 'RANDOM') return String(Math.floor(Math.random() * 32768))
-    if (/^\d$/.test(name)) return ''
+    if (name === '0') return this.scriptName || 'forgesh'
+    if (/^\d$/.test(name)) return args[Number(name) - 1] ?? ''
+    for (let k = this.locals.length - 1; k >= 0; k--) if (name in this.locals[k]) return this.locals[k][name]
     return this.env[name] ?? ''
+  }
+  setVar(name, value) {
+    for (let k = this.locals.length - 1; k >= 0; k--) if (name in this.locals[k]) { this.locals[k][name] = value; return }
+    this.env[name] = value
   }
   async capture(cmd, io) {
     const buf = []
     await this.run(cmd, { ...io, out: s => buf.push(s), tty: false })
     return buf.join('').replace(/\n+$/, '')
   }
+  // 続きの行が要るか (for … do の後・閉じていない引用符など)
+  isIncomplete(text) {
+    try { parse(lex(text)); return false } catch (e) { return !!(e && e.incomplete) }
+  }
 
   // ---- 実行 ----
   async run(line, io) {
     this.idxCache = null
+    if (!this.args.length) this.loops = 0
     let list
     try {
       list = parse(lex(line))
@@ -471,6 +716,14 @@ export class Shell {
       this.status = 2
       return 2
     }
+    try {
+      return await this.runList(list, io)
+    } catch (e) {
+      if (e instanceof Flow) { this.status = e.code; return e.code }   // スクリプトの外での break / return
+      throw e
+    }
+  }
+  async runList(list, io) {
     let status = this.status
     for (let k = 0; k < list.length; k++) {
       const prev = k ? list[k - 1].then : null
@@ -482,6 +735,60 @@ export class Shell {
     }
     this.status = status
     return status
+  }
+  // 繰り返しの途中で画面を止めない・Ctrl+C で止める
+  async tick(io) {
+    if (io.signal && io.signal.aborted) throw Object.assign(new Error('止めました'), { name: 'AbortError' })
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+    if (now - (this.lastYield || 0) > 30) { this.lastYield = now; await new Promise(r => setTimeout(r, 0)) }
+    if (++this.loops > 1000000) throw new ShellError('繰り返しが多すぎるので止めました (100 万回)')
+  }
+  // for / while / if / { } / 関数
+  async runCompound(node, io) {
+    switch (node.type) {
+      case 'func':
+        this.funcs[node.name] = node.body
+        return 0
+      case 'group':
+        return this.runList(node.body, io)
+      case 'if': {
+        for (const b of node.branches) {
+          if ((await this.runList(b.cond, io)) === 0) return this.runList(b.body, io)
+        }
+        return node.otherwise ? this.runList(node.otherwise, io) : 0
+      }
+      case 'for': {
+        let items = []
+        if (node.items === null) items = [...(this.args[this.args.length - 1] || [])]
+        else for (const w of node.items) items.push(...await this.expand(w, io))
+        let status = 0
+        for (const v of items) {
+          await this.tick(io)
+          this.setVar(node.name, v)
+          try { status = await this.runList(node.body, io) } catch (e) {
+            if (e instanceof Flow && e.kind === 'break') break
+            if (e instanceof Flow && e.kind === 'continue') continue
+            throw e
+          }
+        }
+        return status
+      }
+      case 'while': case 'until': {
+        let status = 0
+        for (;;) {
+          await this.tick(io)
+          const c = await this.runList(node.cond, io)
+          if ((c === 0) !== (node.type === 'while')) break
+          try { status = await this.runList(node.body, io) } catch (e) {
+            if (e instanceof Flow && e.kind === 'break') break
+            if (e instanceof Flow && e.kind === 'continue') continue
+            throw e
+          }
+        }
+        return status
+      }
+    }
+    return 0
   }
 
   // 別名 (alias) を置き換える。同じ名前の別名を何度も展開しない (alias ls='ls -F' など)
@@ -501,23 +808,12 @@ export class Shell {
   }
 
   async runPipe(cmds, io) {
-    let input = null, status = 0
+    let input = io.stdin || null, status = 0
     for (let k = 0; k < cmds.length; k++) {
       const cmd = cmds[k]
       const last = k === cmds.length - 1
       const outBuf = last ? null : []
-      const argv = []
-      try {
-        for (const w of this.aliasWords(cmd.words)) argv.push(...await this.expand(w, io))
-      } catch (e) { io.err(`forgesh: ${e.message}\n`); return 1 }
-      if (!argv.length) {
-        for (const a of cmd.assigns) this.env[a.name] = (await this.expand(a.word, io)).join(' ')
-        input = ''
-        status = 0
-        continue
-      }
-      for (const a of cmd.assigns) this.env[a.name] = (await this.expand(a.word, io)).join(' ')
-      let stdin = k > 0 ? input : null
+      let stdin = input
       let out = last ? io.out : s => outBuf.push(String(s))
       let err = io.err
       let tty = last && io.tty !== false
@@ -525,11 +821,13 @@ export class Shell {
       let bad = false
       for (const r of cmd.redirs) {
         if (r.op === '2>&1') { err = out; continue }
-        const target = (await this.expand(r.word, io))[0] || ''
+        let target
+        try { target = (await this.expand(r.word, io))[0] || '' } catch (e) { io.err(`forgesh: ${e.message}\n`); bad = true; break }
         if (r.op === '<') {
-          const t = await this.readText(target)
+          let t = null
+          try { t = await this.readText(target) } catch (e) { io.err(`forgesh: ${e.message}\n`); bad = true; break }
           if (t === null) { io.err(`forgesh: ${target}: ファイルがありません\n`); bad = true; break }
-          stdin = t
+          stdin = new Stream(t)
           continue
         }
         const f = { name: target, append: r.op.endsWith('>>'), buf: [] }
@@ -539,8 +837,23 @@ export class Shell {
         else if (r.op === '2>' || r.op === '2>>') err = w
         else { out = w; err = w; tty = false }
       }
-      if (bad) { status = 1; input = ''; continue }
-      status = await this.exec(argv, { stdin, out, err, tty, piped: !last, signal: io.signal, io, cols: io.cols ? io.cols() : 80 })
+      if (bad) { status = 1; input = null; continue }
+      const sub = { ...io, out, err, tty, stdin }
+      if (cmd.compound) status = await this.runCompound(cmd.compound, sub)
+      else {
+        const argv = []
+        try {
+          for (const w of this.aliasWords(cmd.words)) argv.push(...await this.expand(w, io))
+          for (const a of cmd.assigns) this.setVar(a.name, (await this.expand(a.word, io)).join(' '))
+        } catch (e) { io.err(`forgesh: ${e.message}\n`); return 1 }
+        if (!argv.length) status = 0
+        else {
+          const ctx = { out, err, tty, piped: !last, signal: io.signal, io: sub, cols: io.cols ? io.cols() : 80, stdinStream: stdin }
+          // 標準入力は、読んだときに初めて取り出す (read で 1 行ずつ読む while ループのため)
+          Object.defineProperty(ctx, 'stdin', { get: () => (stdin ? stdin.readAll() : null), configurable: true })
+          status = await this.exec(argv, ctx)
+        }
+      }
       for (const f of files) {
         try {
           const before = f.append ? (await this.readText(f.name)) || '' : ''
@@ -548,21 +861,58 @@ export class Shell {
         } catch (e) { io.err(`forgesh: ${e.message}\n`); status = 1 }
       }
       await this.sync()
-      input = outBuf ? outBuf.join('') : null
+      input = outBuf ? new Stream(outBuf.join('')) : null
       if (io.signal && io.signal.aborted) return 130
     }
     return status
   }
 
+  // 関数・スクリプトを呼ぶ (引数は $1 $2 … $@)
+  async callBody(body, args, io, { name = null, subshell = false } = {}) {
+    if (this.args.length > 200) throw new ShellError('呼び出しが深すぎます (関数が自分を呼び続けていませんか?)')
+    const saved = subshell ? { cwd: this.cwd, env: { ...this.env } } : null
+    const savedName = this.scriptName
+    this.args.push(args)
+    this.locals.push({})
+    if (name) this.scriptName = name
+    try { return await this.runList(body, io) } catch (e) {
+      if (e instanceof Flow && (e.kind === 'return' || (e.kind === 'exit' && name))) return e.code
+      throw e
+    } finally {
+      this.args.pop()
+      this.locals.pop()
+      this.scriptName = savedName
+      if (saved) { this.cwd = saved.cwd; this.env = saved.env }
+    }
+  }
+  async runScript(path, args, ctx, { subshell = true } = {}) {
+    const text = await this.readText(path)
+    if (text === null) { ctx.err(`${path}: ファイルがありません\n`); return 127 }
+    let list
+    try { list = parse(lex(text)) } catch (e) { ctx.err(`${path}: ${e.message}\n`); return 2 }
+    return this.callBody(list, args, { ...ctx.io, out: ctx.out, err: ctx.err, stdin: ctx.stdinStream }, { name: path, subshell })
+  }
+
   async exec(argv, ctx) {
     const name = argv[0]
-    const fn = COMMANDS[name]
     ctx.sh = this
     ctx.term = ctx.io.term || null
     ctx.print = s => ctx.out(s + '\n')
+    // 関数
+    if (this.funcs[name]) return this.callBody(this.funcs[name], argv.slice(1), { ...ctx.io, out: ctx.out, err: ctx.err, stdin: ctx.stdinStream })
+    // ./script.sh・sub/x.py のようにファイルを指したとき
+    if (name.includes('/') && !COMMANDS[name]) {
+      const p = this.resolve(name)
+      if (this.isFile(p)) {
+        if (/\.pyw?$/.test(name)) return COMMANDS.python.call(this, argv, ctx)
+        return this.runScript(name, argv.slice(1), ctx)
+      }
+    }
+    const fn = COMMANDS[name]
     if (!fn) {
       const hint = this.isFile(this.resolve(name)) && /\.pyw?$/.test(name) ? ` (実行するなら: python ${name})`
-        : /^(apt|apt-get|brew|sudo|npm|node|yarn|java|gcc|make|docker|ssh|vi|top|htop)$/.test(name) ? ' (このターミナルでは使えません)' : ''
+        : this.isFile(this.resolve(name)) && /\.sh$/.test(name) ? ` (実行するなら: sh ${name} か ./${name})`
+          : /^(apt|apt-get|brew|sudo|npm|node|yarn|java|gcc|make|docker|ssh|top|htop)$/.test(name) ? ' (このターミナルでは使えません)' : ''
       ctx.err(`${name}: コマンドが見つかりません${hint}\n`)
       if (!hint) ctx.err(`${C.gray}使えるコマンドは help で表示します${C.reset}\n`)
       return 127
@@ -571,6 +921,7 @@ export class Shell {
       const r = await fn.call(this, argv.slice(1), ctx)
       return typeof r === 'number' ? r : 0
     } catch (e) {
+      if (e instanceof Flow) throw e
       if (e && e.name === 'AbortError') return 130
       ctx.err(`${name}: ${e && e.message || e}\n`)
       return 1
@@ -678,8 +1029,9 @@ async function inputs(sh, files, ctx, name) {
     if (f === '-') { out.push({ name: '-', text: ctx.stdin ?? '' }); continue }
     const p = sh.resolve(f)
     if (sh.isDir(p)) { ctx.err(`${name}: ${f}: フォルダです\n`); out.push(null); continue }
-    const t = await sh.readText(f)
+    const t = sh.isFile(p) ? await sh.host.read(p) : null
     if (t === null) { ctx.err(`${name}: ${f}: ファイルがありません\n`); out.push(null); continue }
+    if (isBin(t)) { ctx.err(`${name}: ${f}: バイナリファイルです (${humanSize(t.length)})\n`); out.push(null); continue }
     out.push({ name: f, text: t })
   }
   return out
@@ -1024,7 +1376,7 @@ const COMMANDS = {
     let found = false
     for (const it of list) {
       const text = it.text ?? (await this.host.read(it.path)) ?? ''
-      if (text.includes('\0')) continue
+      if (typeof text !== 'string' || text.includes('\0')) continue
       let count = 0
       const ls = lines(text)
       for (let k = 0; k < ls.length && count < max; k++) {
@@ -1500,6 +1852,17 @@ const COMMANDS = {
     }
     return status
   },
+  async file(args, ctx) {
+    let status = 0
+    for (const a of args) {
+      const p = this.resolve(a)
+      if (this.isDir(p)) { ctx.print(`${a}: フォルダ`); continue }
+      if (!this.isFile(p)) { ctx.err(`file: ${a}: ありません\n`); status = 1; continue }
+      const c = await this.host.read(p)
+      ctx.print(`${a}: ${kindOf(a, c)}${isBin(c) ? ` (${humanSize(c.length)})` : `, ${(c.match(/\n/g) || []).length} 行`}`)
+    }
+    return status
+  },
   basename(args, ctx) { if (!args[0]) return 1; let b = baseName(args[0].replace(/\/+$/, '')); if (args[1] && b.endsWith(args[1])) b = b.slice(0, -args[1].length); ctx.print(b); return 0 },
   dirname(args, ctx) { if (!args[0]) return 1; ctx.print(dirName(args[0].replace(/\/+$/, '')) || '.'); return 0 },
   realpath(args, ctx) { for (const a of args) ctx.print(PY_ROOT + (this.resolve(a) ? '/' + this.resolve(a) : '')); return 0 },
@@ -1513,7 +1876,12 @@ const COMMANDS = {
   },
   clear(args, ctx) { if (ctx.term) ctx.term.clear(); return 0 },
   reset(args, ctx) { if (ctx.term) ctx.term.clear(); return 0 },
-  exit(args, ctx) { if (ctx.term) ctx.term.exit(); return Number(args[0]) || 0 },
+  exit(args, ctx) {
+    const code = Number(args[0]) || 0
+    if (this.args.length) throw new Flow('exit', code)   // スクリプトの中: スクリプトだけ終える
+    if (ctx.term) ctx.term.exit()
+    return code
+  },
   logout(args, ctx) { return COMMANDS.exit.call(this, args, ctx) },
 
   // ---- アプリ ----
@@ -1594,9 +1962,211 @@ const COMMANDS = {
     return COMMANDS.curl.call(this, [url, '-o', name, ...(o.q ? ['-s'] : [])], ctx)
   },
 
+  // ---- スクリプト・制御 ----
+  test(args) { return testExpr(args, this) ? 0 : 1 },
+  '['(args, ctx) {
+    if (args[args.length - 1] !== ']') { ctx.err('[: ] がありません\n'); return 2 }
+    return testExpr(args.slice(0, -1), this) ? 0 : 1
+  },
+  '[['(args, ctx) {
+    if (args[args.length - 1] !== ']]') { ctx.err('[[: ]] がありません\n'); return 2 }
+    return testExpr(args.slice(0, -1), this) ? 0 : 1
+  },
+  async read(args, ctx) {
+    const { o, rest } = getopts(args, 'rs', 'pn')
+    let line
+    if (ctx.stdinStream) line = ctx.stdinStream.readLine()
+    else if (ctx.term && ctx.term.readLine) { if (o.p) ctx.out(o.p); line = await ctx.term.readLine({ password: !!o.s }) }
+    else line = null
+    if (line === null || line === undefined) return 1
+    if (!o.r) line = line.replace(/\\(.)/g, '$1')
+    const names = rest.length ? rest : ['REPLY']
+    const parts = line.trim().split(/\s+/)
+    names.forEach((n, k) => this.setVar(n, k === names.length - 1 ? parts.slice(k).join(' ') : parts[k] ?? ''))
+    return 0
+  },
+  break() { throw new Flow('break') },
+  continue() { throw new Flow('continue') },
+  return(args) { throw new Flow('return', Number(args[0]) || 0) },
+  local(args) {
+    const scope = this.locals[this.locals.length - 1]
+    for (const a of args) { const m = /^([A-Za-z_]\w*)(?:=(.*))?$/s.exec(a); if (m) { if (scope) scope[m[1]] = m[2] ?? ''; else this.env[m[1]] = m[2] ?? '' } }
+    return 0
+  },
+  shift(args) {
+    const top = this.args[this.args.length - 1]
+    if (top) top.splice(0, Number(args[0]) || 1)
+    return 0
+  },
+  expr(args, ctx) {
+    const v = arith(args.join(' '), n => this.varValue(n))
+    ctx.print(String(v))
+    return v === 0 ? 1 : 0
+  },
+  let(args) {
+    let v = 0
+    for (const a of args) {
+      const m = /^([A-Za-z_]\w*)\s*([-+*/%]?)=(.*)$/s.exec(a)
+      if (m) { const cur = Number(this.varValue(m[1])) || 0; const val = arith(m[3], n => this.varValue(n)); v = m[2] ? arith(`${cur} ${m[2]} ${val}`, () => 0) : val; this.setVar(m[1], String(v)) }
+      else v = arith(a, n => this.varValue(n))
+    }
+    return v === 0 ? 1 : 0
+  },
+  async source(args, ctx) {
+    if (!args[0]) { ctx.err('source: ファイル名を書いてください\n'); return 2 }
+    return this.runScript(args[0], args.slice(1), ctx, { subshell: false })
+  },
+  '.'(args, ctx) { return COMMANDS.source.call(this, args, ctx) },
+  async sh(args, ctx) {
+    if (args[0] === '-c') {
+      const saved = { cwd: this.cwd, env: { ...this.env } }
+      try { return await this.run(args[1] || '', { ...ctx.io, out: ctx.out, err: ctx.err, stdin: ctx.stdinStream }) } finally { this.cwd = saved.cwd; this.env = saved.env }
+    }
+    if (!args[0]) { ctx.err('sh: スクリプトのファイル名を書いてください (例: sh run.sh)\n'); return 2 }
+    return this.runScript(args[0], args.slice(1), ctx)
+  },
+  bash(args, ctx) { return COMMANDS.sh.call(this, args, ctx) },
+  // ---- 便利なコマンド ----
+  async xargs(args, ctx) {
+    // オプションは、実行するコマンドの前だけ
+    const o = {}
+    let k0 = 0
+    for (; k0 < args.length && args[k0].startsWith('-'); k0++) {
+      const a = args[k0]
+      if (a === '-n' || a === '-I') o[a[1]] = args[++k0]
+      else if (/^-n\d+$/.test(a)) o.n = a.slice(2)
+      else for (const f of a.slice(1)) o[f] = true
+    }
+    const rest = args.slice(k0)
+    const cmd = rest.length ? rest : ['echo']
+    const text = ctx.stdin ?? ''
+    if (o.I !== undefined) {
+      let status = 0
+      for (const line of lines(text)) {
+        if (!line && o.r) continue
+        const argv = cmd.map(a => a.split(o.I).join(line))
+        if (o.t) ctx.err(argv.join(' ') + '\n')
+        status = await this.exec(argv, { ...ctx }) || status
+      }
+      return status
+    }
+    const items = text.split(o['0'] ? '\0' : /\s+/).filter(Boolean)
+    if (!items.length && o.r) return 0
+    const n = o.n ? Math.max(1, Number(o.n)) : items.length || 1
+    let status = 0
+    for (let k = 0; k < Math.max(items.length, 1); k += n) {
+      const argv = [...cmd, ...items.slice(k, k + n)]
+      if (o.t) ctx.err(argv.join(' ') + '\n')
+      status = await this.exec(argv, { ...ctx }) || status
+    }
+    return status
+  },
+  async watch(args, ctx) {
+    const { o, rest } = getopts(args, 't', 'n')
+    if (!rest.length) { ctx.err('watch: 繰り返すコマンドを書いてください (例: watch -n 5 ls -l)\n'); return 1 }
+    const sec = Math.max(0.5, Number(o.n) || 2)
+    const line = rest.join(' ')
+    for (;;) {
+      if (ctx.term) ctx.term.clear()
+      if (!o.t) ctx.print(`${C.gray}${sec} 秒ごと: ${line}    ${strftime('%T', new Date())}  (Ctrl+C で止める)${C.reset}\n`)
+      await this.run(line, { ...ctx.io, out: ctx.out, err: ctx.err })
+      await sleep(sec * 1000, ctx.signal)
+    }
+  },
+  async zip(args, ctx) {
+    const { o, rest } = getopts(args, 'rq')
+    if (rest.length < 2) { ctx.err('zip: 作る ZIP と入れるファイルを書いてください (例: zip -r out.zip src)\n'); return 1 }
+    const [name, ...srcs] = rest
+    const { zipSync } = await import('../../vendor/fflate.js')
+    const obj = {}
+    for (const sname of srcs) {
+      const p = this.resolve(sname)
+      const st = this.stat(p)
+      if (!st) { ctx.err(`zip: ${sname}: ありません\n`); continue }
+      const add = async (path, rel) => { const c = await this.host.read(path); obj[rel] = isBin(c) ? c : new TextEncoder().encode(c ?? '') }
+      if (st.dir) {
+        if (!o.r) { ctx.err(`zip: ${sname}: フォルダです (-r を付けてください)\n`); continue }
+        for (const [k, info] of this.index()) if (!info.dir && k.startsWith(p ? p + '/' : '')) await add(k, (sname.replace(/\/+$/, '') + '/' + k.slice(p ? p.length + 1 : 0)).replace(/^\.\//, ''))
+      } else await add(p, baseName(p))
+      if (!o.q) ctx.print(`  追加: ${sname}`)
+    }
+    await this.fsWrite(this.resolve(name), zipSync(obj, { level: 6 }))
+    return 0
+  },
+  async unzip(args, ctx) {
+    const { o, rest } = getopts(args, 'lqo', 'd')
+    const name = rest[0]
+    if (!name) { ctx.err('unzip: ZIP のファイル名を書いてください\n'); return 1 }
+    const data = this.isFile(this.resolve(name)) ? await this.host.read(this.resolve(name)) : null
+    if (!isBin(data)) { ctx.err(`unzip: ${name}: ZIP ファイルがありません\n`); return 1 }
+    const { unzipSync } = await import('../../vendor/fflate.js')
+    let entries
+    try { entries = unzipSync(data) } catch { ctx.err(`unzip: ${name}: ZIP として読めません\n`); return 1 }
+    const dest = o.d ? this.resolve(o.d) : this.cwd
+    for (const [rel, bytes] of Object.entries(entries)) {
+      if (rel.endsWith('/') || rel.startsWith('__MACOSX') || rel.split('/').includes('..')) continue
+      if (o.l) { ctx.print(`${String(bytes.length).padStart(9)}  ${rel}`); continue }
+      const target = resolvePath(dest, rel)
+      if (dirName(target) && !this.isDir(dirName(target))) await this.fsMkdir(dirName(target))
+      await this.fsWrite(target, bytesToContent(bytes, rel))
+      if (!o.q) ctx.print(`  展開: ${rel}`)
+    }
+    return 0
+  },
+  async base64(args, ctx) {
+    const { o, rest } = getopts(args, 'dw', '')
+    let data
+    if (rest[0]) { const p = this.resolve(rest[0]); data = this.isFile(p) ? await this.host.read(p) : null; if (data === null) { ctx.err(`base64: ${rest[0]}: ありません\n`); return 1 } } else data = ctx.stdin ?? ''
+    if (o.d) {
+      const bin = atob(String(data).replace(/\s+/g, ''))
+      const bytes = Uint8Array.from(bin, c => c.charCodeAt(0))
+      ctx.out(new TextDecoder().decode(bytes))
+      return 0
+    }
+    const bytes = isBin(data) ? data : new TextEncoder().encode(data)
+    let bin = ''
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+    ctx.print(btoa(bin).replace(/(.{76})/g, '$1\n').replace(/\n$/, ''))
+    return 0
+  },
+  async sha256sum(args, ctx) {
+    const list = args.length ? args : ['-']
+    for (const f of list) {
+      let data
+      if (f === '-') data = ctx.stdin ?? ''
+      else { const p = this.resolve(f); data = this.isFile(p) ? await this.host.read(p) : null; if (data === null) { ctx.err(`sha256sum: ${f}: ありません\n`); continue } }
+      const d = new Uint8Array(await crypto.subtle.digest('SHA-256', isBin(data) ? data : new TextEncoder().encode(data)))
+      ctx.print(`${[...d].map(b => b.toString(16).padStart(2, '0')).join('')}  ${f}`)
+    }
+    return 0
+  },
+  async nl(args, ctx) {
+    const it = (await inputs(this, args.filter(a => !a.startsWith('-')), ctx, 'nl'))[0]
+    if (!it) return 1
+    let n = 0
+    ctx.out(lines(it.text).map(l => (l.trim() ? String(++n).padStart(6) + '\t' + l : '')).join('\n') + '\n')
+    return 0
+  },
+  async rev(args, ctx) {
+    const it = (await inputs(this, args, ctx, 'rev'))[0]
+    if (!it) return 1
+    ctx.out(lines(it.text).map(l => [...l].reverse().join('')).join('\n') + '\n')
+    return 0
+  },
+  async yes(args, ctx) {
+    const text = (args.join(' ') || 'y') + '\n'
+    for (let k = 0; k < 10000; k++) { ctx.out(text); if (k % 200 === 0) await this.tick(ctx.io) }
+    return 0
+  },
+  async cloud(args, ctx) {
+    if (!this.host.cloud) { ctx.err('cloud: この環境では使えません\n'); return 1 }
+    return this.host.cloud(args[0] || 'status', args.slice(1), ctx)
+  },
+
   // ---- Python ----
   async python(args, ctx) {
     const argv = [...args]
+    let stdinText = ctx.stdin   // パイプ・< の中身 (1 度だけ読む)
     let mode = null, payload = null, interactive = false
     while (argv.length && argv[0].startsWith('-') && argv[0] !== '-') {
       const a = argv.shift()
@@ -1627,18 +2197,18 @@ const COMMANDS = {
       } else if (!this.isFile(p)) { ctx.err(`python: '${file}' を開けません: ファイルがありません\n`); return 2 }
       else entry = p
       sysArgv = [file, ...argv.slice(1)]
-    } else if (ctx.stdin !== null && ctx.stdin !== undefined && !interactive) {
+    } else if (stdinText !== null && stdinText !== undefined && !interactive) {
       // echo 'print(1)' | python
-      source = ctx.stdin
+      source = stdinText
       entry = '<stdin>'
       sysArgv = ['-', ...argv.slice(1)]
-      ctx = { ...ctx, stdin: '' }
+      stdinText = ''
     } else {
       if (!ctx.term) { ctx.err('python: 対話モードはターミナルで使えます\n'); return 1 }
       ctx.term.startRepl({ ns: 'repl-new' })
       return 0
     }
-    const code = await this.host.python({ entry, source, argv: sysArgv, cwd: this.cwd, stdin: ctx.stdin, out: ctx.out, err: ctx.err, tty: ctx.tty, signal: ctx.signal, term: ctx.term })
+    const code = await this.host.python({ entry, source, argv: sysArgv, cwd: this.cwd, stdin: stdinText, out: ctx.out, err: ctx.err, tty: ctx.tty, signal: ctx.signal, term: ctx.term })
     if (interactive && ctx.term) ctx.term.startRepl({ ns: 'last' })
     return code
   },

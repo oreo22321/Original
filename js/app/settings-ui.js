@@ -7,7 +7,7 @@ import { h, icon, toast, modal, confirmDialog, download } from './ui.js'
 import * as vfs from './vfs.js'
 import { app, command, runCommand } from './app.js'
 
-export const APP_VERSION = '14.0.0'
+export const APP_VERSION = '14.1.0'
 
 const FONTS = [
   ['ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", Consolas, "Noto Sans Mono CJK JP", "Hiragino Sans", monospace', '標準 (端末の等幅フォント)'],
@@ -78,6 +78,7 @@ const SCHEMA = [
   ] },
   { group: '24 時間動かす', icon: 'history', items: [
     { key: 'keepAwake', type: 'select', col: true, label: '画面を消さない', options: [['run', '実行中だけ (おすすめ)'], ['always', 'いつも (アプリを開いている間)'], ['off', '消えてもよい (端末の設定どおり)']], desc: '画面が消えると、iPhone などはアプリを止めてしまいます。プログラムを長く動かすときは画面をつけたままにします (電源につないでおくと安心です)' },
+    { key: 'cloudRun', type: 'action', label: 'クラウドで動かす (アプリを閉じても・電源を切っても)', desc: 'GitHub のサーバーで、決めた間隔 (5 分ごと〜毎日) でプログラムを動かします。「GitHub と同期」の設定が必要です', button: '設定', run: () => runCommand('cloud') },
     { key: 'autoRestart', type: 'bool', label: 'エラーで止まったら自動で再実行', desc: 'ずっと動かしたいプログラム (定期的に調べる・記録するなど) 向け。止まると 3 秒後にもう一度実行し、すぐ止まるのが続くと間を延ばします (最大 60 秒)。■ でやめられます' },
     { key: 'keepAliveInfo', type: 'custom', label: '長時間の実行について', render: () => h('div', { class: 'set-row col' }, h('div', { class: 'set-desc' }, '実行時間に上限はありません (最大実行時間が 0 のとき)。出力がとても多くても止まらず、古い出力から省きます。長い間使っていない (アプリが裏にあって何も動いていない) ときは、Python を休ませてメモリを空け、戻るとすぐ準備し直します。アプリが裏に回っている間は、端末によってはプログラムが止まります。')) },
   ] },
@@ -229,7 +230,7 @@ async function backupAll() {
   const obj = {}
   for (const p of projects) {
     const files = await vfs.readAll(p.id)
-    for (const f of files) if (!f.dir) obj[p.name.replace(/[\\/:*?"<>|]/g, '_') + '/' + f.path] = strToU8(f.content || '')
+    for (const f of files) if (!f.dir) obj[p.name.replace(/[\\/:*?"<>|]/g, '_') + '/' + f.path] = f.content instanceof Uint8Array ? f.content : strToU8(f.content || '')
   }
   const zip = zipSync(obj, { level: 6 })
   download(`forgecode-backup-${new Date().toISOString().slice(0, 10)}.zip`, new Blob([zip], { type: 'application/zip' }))

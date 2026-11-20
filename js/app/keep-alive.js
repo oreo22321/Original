@@ -27,8 +27,7 @@ function release() {
 function update() {
   const mode = getSettings().keepAwake || 'run'
   const r = app.runner
-  const t = r && r.terminal
-  const busy = !!(r && (r.running || r.evalBusy || (t && (t.busy || t.pending))))
+  const busy = !!(r && (r.running || r.evalBusy || (r.terminals || []).some(t => t.busy || t.pending)))
   const next = mode === 'always' || (mode === 'run' && busy)
   if (next === want) { if (want && !lock) acquire(); return }
   want = next
@@ -52,8 +51,7 @@ export function startKeepAlive() {
       clearTimeout(restTimer)
       restTimer = setTimeout(() => {
         if (!document.hidden || !r || getSettings().keepAwake === 'always') return
-        const t = r.terminal
-        if (r.running || r.evalBusy || (t && (t.busy || t.pending)) || !r.worker) return
+        if (r.running || r.evalBusy || (r.terminals || []).some(t => t.busy || t.pending) || !r.worker) return
         r.rest()
       }, 20 * 60 * 1000)
       return

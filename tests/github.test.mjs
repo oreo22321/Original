@@ -96,6 +96,20 @@ const count = Object.keys(gh.remoteFiles()).length
 r = await pushProject(client(), { dir: DIR, files: {}, state: r.state })
 ok('empty local never wipes remote', r.skipped === 'empty' && Object.keys(gh.remoteFiles()).length === count)
 
+// バイナリ (画像・SQLite など) もそのまま同期
+const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 255, 254])
+let bst = null
+r = await pushProject(client(), { dir: 'forgecode/Bin', files: { 'a.py': 'x = 1\n', 'img/logo.png': png } })
+bst = r.state
+const rawRemote = gh.remoteFiles('main', { raw: true })['forgecode/Bin/img/logo.png']
+ok('binary pushed byte for byte', rawRemote && Buffer.compare(rawRemote, Buffer.from(png)) === 0, rawRemote && rawRemote.length)
+r = await pushProject(client(), { dir: 'forgecode/Bin', files: { 'a.py': 'x = 1\n', 'img/logo.png': png }, state: bst })
+ok('unchanged binary is not pushed again', r.pushed === 0, JSON.stringify(r))
+gh.remoteEdit({ 'forgecode/Bin/data.db': Buffer.from([0x53, 0x51, 0x4c, 0, 9, 8]) })
+r = await pullProject(client(), { dir: 'forgecode/Bin', files: { 'a.py': 'x = 1\n', 'img/logo.png': png }, state: bst })
+const db = r.changes['data.db']
+ok('binary pulled as bytes', db instanceof Uint8Array && db.length === 6 && db[3] === 0, String(db))
+
 gh.server.close()
 console.log(`github: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

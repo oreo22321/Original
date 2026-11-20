@@ -13,6 +13,12 @@ export const EN = {
   '未保存': 'Unsaved', '保存中…': 'Saving…', '保存済み': 'Saved', '実行中': 'Running', 'デバッグ中': 'Debugging', '操作待ち': 'Waiting for input',
   'たった今': 'just now', '行頭へ': 'Line start', '行末へ': 'Line end', 'プレビュー': 'Preview', '出力パネル': 'Output panel',
   '保存の状態': 'Save status', 'ドラッグで幅を変更': 'Drag to resize', 'ドラッグで高さを変更': 'Drag to resize',
+  // ---- クラウド実行・ターミナル・バイナリ (v14.1) ----
+  'クラウドで動かす (アプリを閉じても 24 時間)': 'Run in the cloud (24/7, even when the app is closed)', 'クラウドで動かす (24 時間)': 'Run in the cloud (24/7)', 'クラウドで動かす (アプリを閉じても)': 'Run in the cloud (even when closed)',
+  'クラウドで動かす': 'Run in the cloud', 'クラウドで今すぐ実行': 'Run in the cloud now', '今すぐ実行': 'Run now', '記録を更新': 'Refresh', '結果を取り込む': 'Pull results', '実行の記録': 'Run history',
+  '実行するファイル': 'File to run', 'いつ動かすか': 'When to run', '1 回に動かす最大の時間': 'Max time per run', 'プログラムが書いたファイルを保存': 'Save files written by the program',
+  '最後の出力を見る': 'Show last output', 'GitHub で見る': 'View on GitHub', 'はじめに: トークンの許可を足す': 'First: add token permissions', 'クラウド (24 時間)': 'Cloud (24/7)',
+  '新しいターミナル': 'New terminal', 'このターミナルを閉じる': 'Close this terminal', 'ターミナルを閉じる (このターミナル)': 'Close terminal', '共有 / 保存': 'Share / save',
   // ---- ターミナル・24 時間動かす・整理 (v14) ----
   'ターミナル': 'Terminal', 'ターミナルを開く': 'Open terminal', 'ターミナルの表示切り替え': 'Toggle terminal', 'ターミナルで開く': 'Open in terminal', 'ターミナルで実行': 'Run in terminal',
   'ターミナルで実行中': 'Running in terminal', 'ターミナルの文字をコピー': 'Copy terminal text', 'ターミナルを消す (Ctrl+L)': 'Clear terminal (Ctrl+L)', '画面を消す': 'Clear screen',

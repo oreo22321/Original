@@ -1249,3 +1249,48 @@ body[data-layout=mobile] .rh-series { display: none; }
 .help-toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
 .help-toc .chip { padding: 4px 10px; font-size: 12px; }
 .help h3[id] { scroll-margin-top: 8px; }
+
+/* バイナリファイルのプレビュー (画像・Excel・SQLite など) */
+.file-preview { display: flex; flex-direction: column; gap: 10px; }
+.fp-image { display: flex; justify-content: center; background: repeating-conic-gradient(var(--panel2) 0 25%, var(--bg) 0 50%) 0 0 / 16px 16px; border-radius: var(--r); padding: 8px; }
+.fp-image img { max-width: 100%; max-height: 60vh; object-fit: contain; }
+.fp-icon { color: var(--muted); display: flex; justify-content: center; padding: 10px; }
+.fp-meta { font-size: 13px; color: var(--muted); text-align: center; }
+.fp-code { font-family: var(--editor-font); font-size: 12.5px; background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px 10px; margin: 0; overflow-x: auto; }
+
+/* クラウドで動かす (GitHub Actions) */
+.cloud-need { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--r); background: var(--panel2); border: 1px solid var(--border); font-size: 13px; }
+.cloud-need span { flex: 1; }
+.cloud-help summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+.cloud-runs { display: flex; flex-direction: column; gap: 4px; }
+.cloud-run { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--r-sm); font-size: 13px; color: var(--fg); text-decoration: none; }
+.cloud-run:hover { background: var(--hover); }
+.cloud-run .rh-state { min-width: 64px; }
+.cr-ev { color: var(--muted); font-size: 12px; margin-left: auto; }
+.cloud-last { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 8px 8px; }
+.cloud-last.ok .ico { color: var(--ok); } .cloud-last.error .ico, .cloud-last.timeout .ico { color: var(--warn); }
+.cloud-log { max-height: 55vh; overflow: auto; white-space: pre-wrap; }
+
+/* ターミナル: 履歴からの提案・Ctrl+R の検索・複数のターミナル */
+.term-input-wrap { position: relative; flex: 1 1 60px; min-width: 60px; display: flex; overflow: hidden; }
+.term-input-wrap .term-input { flex: 1; min-width: 0; }
+.term-ghost { position: absolute; top: 0; left: 0; white-space: pre; color: var(--faint); pointer-events: auto; cursor: pointer; max-width: 100%; overflow: hidden; }
+.term-in.searching .term-ghost { color: var(--muted); }
+.term-tabs { flex: none; display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; background: var(--panel); }
+.term-tab { display: inline-flex; align-items: center; border-radius: var(--r-sm); background: transparent; flex: none; }
+.term-tab.active { background: var(--hover); }
+.tt-name { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 9px; font-size: 12px; font-family: var(--editor-font); color: var(--muted); }
+.term-tab.active .tt-name { color: var(--fg); }
+.tt-close { width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: var(--faint); border-radius: 4px; }
+.tt-close:hover { color: var(--fg); background: var(--panel2); }
+.tt-add { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); border-radius: var(--r-sm); flex: none; }
+.tt-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); }
+.term-view > .term.hidden { display: none !important; }
+
+/* 設定のダイアログの部品 (GitHub と同期・クラウドで動かす) */
+.lv-toggle { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.lv-toggle input { margin-top: 3px; width: 18px; height: 18px; flex: none; accent-color: var(--accent); }
+.lv-toggle-text { display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
+.lv-sub { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+.lv-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.lv-steps { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.6; color: var(--fg); }

@@ -72,6 +72,30 @@ send({ type: 'eval', id: 101, code: 'undefined_name' })
 ev = await until(m => m.type === 'evalResult' && m.id === 101)
 ok('console error', !ev.ok && /NameError/.test(ev.error), JSON.stringify(ev))
 
+// バイナリのファイル (画像・データベースなど): 書いたものはバイト列で戻り、次の実行で読める
+r = await run({ 'main.py': 'import zlib, struct\ndata = bytes([0, 1, 2, 255]) + zlib.compress(b"x" * 100)\nopen("blob.bin", "wb").write(data)\nopen("note.log", "w").write("ログ")\nprint(len(data))\n' })
+const blob = r.done.files['blob.bin']
+ok('binary file comes back as bytes', blob instanceof Uint8Array && blob[3] === 255 && r.done.files['note.log'] === 'ログ', JSON.stringify(Object.keys(r.done.files)) + String(blob))
+r = await run({ 'main.py': 'd = open("blob.bin", "rb").read()\nprint(d[:4].hex(), len(d))\n', 'blob.bin': blob })
+ok('binary file is readable in the next run', /000102ff/.test(r.out) && !('blob.bin' in r.done.files), r.out + JSON.stringify(Object.keys(r.done.files)))
+
+// 変わっていないファイルは送らない (keep): 前の実行のまま使える / 消えたファイルは消える
+msgs.length = 0
+send({ type: 'run', id: ++seq, files: { 'main.py': 'print(open("blob.bin", "rb").read()[:2].hex(), open("helper.py").read().strip())\n', 'helper.py': 'X = 1\n' }, keep: ['blob.bin'], entry: 'main.py' })
+let dk = await until(m => m.type === 'done' && m.id === seq)
+await new Promise(r => setTimeout(r, 100))
+ok('kept files stay without being resent', dk.ok && /0001 X = 1/.test(outputText()), outputText() + JSON.stringify(dk.error))
+msgs.length = 0
+send({ type: 'run', id: ++seq, files: {}, keep: ['main.py', 'helper.py'], entry: 'main.py' })
+dk = await until(m => m.type === 'done' && m.id === seq)
+ok('a file that is neither sent nor kept is removed', !dk.ok && /FileNotFoundError/.test(dk.error.text), JSON.stringify(dk.error && dk.error.text))
+
+// os.system / subprocess: cls・echo・python ほかのファイル・使えないコマンド
+r = await run({ 'main.py': 'import os, subprocess, sys\nos.system("cls")\nprint("after clear")\ncp = subprocess.run(["python", "sub.py", "x"], capture_output=True, text=True)\nprint("sub:", cp.stdout.strip(), cp.returncode)\nprint(subprocess.check_output("echo hello", shell=True, text=True).strip())\nprint(os.system("git status") >> 8)\ntry:\n    subprocess.run(["git", "status"])\nexcept FileNotFoundError:\n    print("not found ok")\nprint(subprocess.getoutput("ls"))\n', 'sub.py': 'import sys\nprint("argv", sys.argv[1:])\nsys.exit(3)\n' })
+ok('os.system("cls") clears the screen', /\x1b\[2J/.test(r.out) && /after clear/.test(r.out), JSON.stringify(r.out.slice(0, 80)))
+ok('subprocess runs another python file', /sub: argv \['x'\] 3/.test(r.out), r.out)
+ok('subprocess echo + unknown commands', /^hello$/m.test(r.out) && /^127$/m.test(r.out) && /not found ok/.test(r.out) && /main\.py/.test(r.out), r.out)
+
 // ターミナル: python main.py a b → sys.argv
 msgs.length = 0
 send({ type: 'run', id: ++seq, files: { 'main.py': 'import sys\nprint(sys.argv)\n' }, entry: 'main.py', argv: ['main.py', 'a', 'b c'] })

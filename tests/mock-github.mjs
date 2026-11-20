@@ -4,15 +4,17 @@ import http from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
 
 const sha1 = s => createHash('sha1').update(s).digest('hex')
-const blobSha = text => { const b = Buffer.from(text, 'utf8'); return sha1(Buffer.concat([Buffer.from(`blob ${b.length}\0`), b])) }
+const toBuf = v => (Buffer.isBuffer(v) ? v : v instanceof Uint8Array ? Buffer.from(v) : Buffer.from(String(v), 'utf8'))
+const blobSha = v => { const b = toBuf(v); return sha1(Buffer.concat([Buffer.from(`blob ${b.length}\0`), b])) }
 
 export function createMockGitHub({ owner = 'me', repo = 'proj', branch = 'main', token = 'tok' } = {}) {
-  const blobs = new Map()   // sha → text
+  const blobs = new Map()   // sha → Buffer
   const trees = new Map()   // sha → Map(path → blob sha)
   const commits = new Map() // sha → { tree, parents, message }
   const refs = new Map()    // branch → commit sha (空のリポジトリは何もない)
   const stats = { commits: 0, requests: 0 }
-  const putBlob = text => { const s = blobSha(text); blobs.set(s, text); return s }
+  const runs = []            // GitHub Actions の実行 (今すぐ実行の記録)
+  const putBlob = v => { const s = blobSha(v); blobs.set(s, toBuf(v)); return s }
   const newTree = map => { const s = randomBytes(20).toString('hex'); trees.set(s, map); return s }
   const newCommit = (tree, parents, message) => { const s = randomBytes(20).toString('hex'); commits.set(s, { tree, parents, message }); stats.commits++; return s }
 
@@ -23,11 +25,11 @@ export function createMockGitHub({ owner = 'me', repo = 'proj', branch = 'main',
     for (const [p, text] of Object.entries(changes)) { if (text === null) base.delete(p); else base.set(p, putBlob(text)) }
     refs.set(branch, newCommit(newTree(base), head ? [head] : [], message))
   }
-  function remoteFiles() {
-    const head = refs.get(branch)
+  function remoteFiles(br = branch, { raw = false } = {}) {
+    const head = refs.get(br)
     if (!head) return {}
     const out = {}
-    for (const [p, s] of trees.get(commits.get(head).tree)) out[p] = blobs.get(s)
+    for (const [p, s] of trees.get(commits.get(head).tree)) out[p] = raw ? blobs.get(s) : blobs.get(s).toString('utf8')
     return out
   }
 
@@ -52,6 +54,10 @@ export function createMockGitHub({ owner = 'me', repo = 'proj', branch = 'main',
         const sha = refs.get(decodeURIComponent(mm[1]))
         return sha ? send(res, 200, { object: { sha } }) : send(res, 404, { message: 'Not Found' })
       }
+      if ((mm = /^\/git\/matching-refs\/heads\/(.+)$/.exec(p)) && req.method === 'GET') {
+        const pre = decodeURIComponent(mm[1])
+        return send(res, 200, [...refs].filter(([b]) => b.startsWith(pre)).map(([b, sha]) => ({ ref: `refs/heads/${b}`, object: { sha } })))
+      }
       if ((mm = /^\/git\/commits\/(\w+)$/.exec(p)) && req.method === 'GET') {
         const c = commits.get(mm[1])
         return c ? send(res, 200, { sha: mm[1], tree: { sha: c.tree }, message: c.message }) : send(res, 404, { message: 'Not Found' })
@@ -63,8 +69,9 @@ export function createMockGitHub({ owner = 'me', repo = 'proj', branch = 'main',
       }
       if ((mm = /^\/git\/blobs\/(\w+)$/.exec(p)) && req.method === 'GET') {
         const t = blobs.get(mm[1])
-        return t === undefined ? send(res, 404, { message: 'Not Found' }) : send(res, 200, { sha: mm[1], encoding: 'base64', content: Buffer.from(t, 'utf8').toString('base64') })
+        return t === undefined ? send(res, 404, { message: 'Not Found' }) : send(res, 200, { sha: mm[1], encoding: 'base64', content: t.toString('base64') })
       }
+      if (p === '/git/blobs' && req.method === 'POST') return send(res, 201, { sha: putBlob(body.encoding === 'base64' ? Buffer.from(body.content, 'base64') : body.content) })
       if (p === '/git/trees' && req.method === 'POST') {
         const base = body.base_tree ? new Map(trees.get(body.base_tree)) : new Map()
         for (const e of body.tree) {
@@ -84,6 +91,23 @@ export function createMockGitHub({ owner = 'me', repo = 'proj', branch = 'main',
         refs.set(b, body.sha)
         return send(res, 200, { object: { sha: body.sha } })
       }
+      if (p === '/git/refs' && req.method === 'POST') {
+        const b = String(body.ref).replace(/^refs\/heads\//, '')
+        if (refs.has(b)) return send(res, 422, { message: 'Reference already exists' })
+        refs.set(b, body.sha)
+        return send(res, 201, { object: { sha: body.sha } })
+      }
+      if ((mm = /^\/actions\/workflows\/([^/]+)\/dispatches$/.exec(p)) && req.method === 'POST') {
+        const file = decodeURIComponent(mm[1])
+        const tree = refs.get(branch) && trees.get(commits.get(refs.get(branch)).tree)
+        if (!tree || !tree.has('.github/workflows/' + file)) return send(res, 404, { message: 'Not Found' })
+        runs.unshift({ id: runs.length + 1, file, status: 'queued', conclusion: null, event: 'workflow_dispatch', created_at: new Date().toISOString(), html_url: `https://github.com/${owner}/${repo}/actions/runs/${runs.length + 1}`, ref: body.ref })
+        return send(res, 204)
+      }
+      if ((mm = /^\/actions\/workflows\/([^/]+)\/runs$/.exec(p)) && req.method === 'GET') {
+        const file = decodeURIComponent(mm[1])
+        return send(res, 200, { total_count: runs.length, workflow_runs: runs.filter(r => r.file === file) })
+      }
       if ((mm = /^\/contents\/(.+)$/.exec(p)) && req.method === 'PUT') {
         remoteEdit({ [decodeURIComponent(mm[1])]: Buffer.from(body.content, 'base64').toString('utf8') }, body.message)
         return send(res, 201, { commit: { sha: refs.get(branch) } })
@@ -91,7 +115,7 @@ export function createMockGitHub({ owner = 'me', repo = 'proj', branch = 'main',
       send(res, 404, { message: 'Not Found' })
     })
   })
-  return { server, remoteEdit, remoteFiles, stats, owner, repo, token }
+  return { server, remoteEdit, remoteFiles, stats, owner, repo, token, runs }
 }
 
 // 直接実行したとき (ブラウザでの確認用): node tests/mock-github.mjs 8788

@@ -26,8 +26,12 @@ const KEYS = [
 ]
 
 export class Terminal {
-  constructor({ onState } = {}) {
+  // index: 何番目のターミナルか (2 つ目からは、状態を別に残す)
+  constructor({ onState, index = 0 } = {}) {
     this.onState = onState || (() => {})
+    this.index = index
+    this.stateKey = index ? `${STATE}.${index}` : STATE
+    this.shellBuf = []        // 続きの行 (for … do の後など)
     this.ansi = new AnsiState()
     this.cur = null           // まだ終わっていない行 (改行のない出力)
     this.crPending = false
@@ -40,7 +44,7 @@ export class Terminal {
     this.pyHistory = load(PYHIST, [])
     this.hi = -1
     this.draft = ''
-    const st = load(STATE, {})
+    const st = load(this.stateKey, {})
     const samePid = app.project && st.pid === app.project.id
     this.shell = new Shell(this.host(), { cwd: samePid ? st.cwd || '' : '', env: st.env || {}, aliases: st.aliases || {} })
     this.pid = app.project ? app.project.id : null
@@ -60,13 +64,19 @@ export class Terminal {
     this.screen = h('div', { class: 'term-screen', role: 'log', 'aria-live': 'polite' })
     this.promptEl = h('span', { class: 'term-prompt' })
     this.input = h('input', { class: 'term-input', type: 'text', autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': 'ターミナルの入力' })
-    this.inputLine = h('div', { class: 'tl term-in' }, this.promptEl, this.input)
+    // 履歴からの提案 (薄い文字。→ で確定) と、Ctrl+R の検索
+    this.ghost = h('span', { class: 'term-ghost', 'aria-hidden': 'true' })
+    this.inputWrap = h('span', { class: 'term-input-wrap' }, this.input, this.ghost)
+    this.inputLine = h('div', { class: 'tl term-in' }, this.promptEl, this.inputWrap)
     this.screen.append(this.inputLine)
     this.keys = h('div', { class: 'term-keys' }, KEYS.map(([label, act]) => this.keyButton(label, act)))
     this.el = h('div', { class: 'term', 'data-no-i18n': '' }, this.screen, this.keys)
     this.input.addEventListener('keydown', e => this.onKey(e))
     this.input.addEventListener('paste', e => this.onPaste(e))
-    this.input.addEventListener('input', () => { if (this.atEnd()) this.scrollEnd() })
+    this.input.addEventListener('input', () => { if (this.atEnd()) this.scrollEnd(); if (this.search) this.searchUpdate(); else this.suggest() })
+    this.input.addEventListener('scroll', () => this.suggest())
+    this.input.addEventListener('blur', () => { if (!this.search) this.ghost.textContent = '' })
+    this.ghost.addEventListener('pointerdown', e => { e.preventDefault(); this.acceptSuggestion() })
     // 文字を選んでいないときにタップしたら、入力欄へ
     this.screen.addEventListener('click', e => {
       if (e.target.closest('a, button, img, .term-html')) return
@@ -97,6 +107,7 @@ export class Terminal {
       else if (act === 'ctrl-l') this.clear()
       else if (act === 'up') this.histMove(1)
       else if (act === 'down') this.histMove(-1)
+      else if (act === 'right' && this.ghost.textContent && inp.selectionStart === inp.value.length) this.acceptSuggestion()
       else if (act === 'left' || act === 'right') {
         const p = Math.max(0, Math.min(inp.value.length, (inp.selectionStart ?? 0) + (act === 'left' ? -1 : 1)))
         inp.setSelectionRange(p, p)
@@ -218,12 +229,15 @@ export class Terminal {
       const cont = this.replBuf.length > 0
       this.setPrompt(`${C.bold}\x1b[35m${cont ? '...' : '>>>'}${C.reset} `)
       fill = cont ? this.indent || '' : ''
+    } else if (this.shellBuf.length) {
+      this.setPrompt(`${C.gray}>${C.reset} `)
     } else {
       const fail = this.shell.status !== 0 && this.shell.status !== 130
       this.setPrompt(`${fail ? C.red + '✗ ' + C.reset : ''}${C.bgreen}forge${C.reset}:${C.bblue}${showPath(this.shell.cwd)}${C.reset}$ `)
     }
     this.autoFill = fill
     this.input.value = typed ?? fill
+    this.ghost.textContent = ''
     this.input.type = 'text'
     this.inputLine.classList.remove('waiting')
     this.hi = -1
@@ -300,6 +314,14 @@ export class Terminal {
     }
     if (this.mode === 'python') { this.replLine(text); return }
     this.commit(text)
+    // for … do / if … then の後などは、続きの行を待つ (> )
+    if (text.trim() || this.shellBuf.length) {
+      const all = [...this.shellBuf, text].join('\n')
+      if (this.shell.isIncomplete(all)) { this.shellBuf.push(text); this.prompt(); return }
+      this.shellBuf = []
+      this.runLine(all)
+      return
+    }
     this.runLine(text)
   }
 
@@ -307,7 +329,13 @@ export class Terminal {
     if (e.isComposing || e.keyCode === 229) return
     const k = e.key
     const ctrl = e.ctrlKey && !e.metaKey && !e.altKey
+    if (this.search) {
+      if (k === 'Enter' || k === 'ArrowRight' || k === 'Tab') { e.preventDefault(); this.searchEnd(true, k === 'Enter'); return }
+      if (k === 'Escape' || (e.ctrlKey && (k === 'g' || k === 'c'))) { e.preventDefault(); this.searchEnd(false); return }
+      if (e.ctrlKey && k.toLowerCase() === 'r') { e.preventDefault(); this.searchUpdate(true); return }
+    }
     if (k === 'Enter') { e.preventDefault(); this.submit(); return }
+    if (k === 'ArrowRight' && this.ghost.textContent && this.input.selectionStart === this.input.value.length) { e.preventDefault(); this.acceptSuggestion(); return }
     if (k === 'Tab') { e.preventDefault(); this.tab(); return }
     if (k === 'ArrowUp') { e.preventDefault(); this.histMove(1); return }
     if (k === 'ArrowDown') { e.preventDefault(); this.histMove(-1); return }
@@ -320,6 +348,7 @@ export class Terminal {
       e.preventDefault(); this.interrupt()
     } else if (key === 'd') { e.preventDefault(); this.eof() }
     else if (key === 'l') { e.preventDefault(); this.clear() }
+    else if (key === 'r') { e.preventDefault(); this.searchStart() }
     else if (key === 'u') { e.preventDefault(); inp.value = inp.value.slice(inp.selectionStart); inp.setSelectionRange(0, 0) }
     else if (key === 'k') { e.preventDefault(); inp.value = inp.value.slice(0, inp.selectionStart) }
     else if (key === 'a') { e.preventDefault(); inp.setSelectionRange(0, 0) }
@@ -432,10 +461,70 @@ export class Terminal {
       if (this.pending) { const p = this.pending; this.pending = null; this.commit(this.input.value, '^C'); this.input.value = ''; this.inputLine.classList.remove('waiting'); p.resolve(null) }
       return
     }
+    if (this.search) this.searchEnd(false)
     this.commit(this.input.value, '^C')
     this.input.value = ''
+    this.shellBuf = []
     if (this.mode === 'python') { this.replBuf = []; this.write('KeyboardInterrupt\n', 't-err') }
     this.prompt()
+  }
+
+  // ---- 履歴からの提案 (fish のように薄い文字で。→ で確定) ----
+  suggest() {
+    const inp = this.input
+    const v = inp.value
+    let hint = ''
+    if (!this.pending && !this.busy && v && inp.selectionStart === v.length && document.activeElement === inp) {
+      const list = this.mode === 'python' ? this.pyHistory : this.history
+      for (let k = list.length - 1; k >= 0; k--) if (list[k].length > v.length && list[k].startsWith(v)) { hint = list[k].slice(v.length); break }
+    }
+    this.ghost.textContent = hint
+    if (hint) this.ghost.style.left = (this.textWidth(v) - inp.scrollLeft) + 'px'
+  }
+  acceptSuggestion() {
+    if (!this.ghost.textContent) return
+    this.input.value += this.ghost.textContent
+    const n = this.input.value.length
+    this.input.setSelectionRange(n, n)
+    this.ghost.textContent = ''
+    this.input.focus({ preventScroll: true })
+  }
+  textWidth(text) {
+    if (!this.measure) this.measure = document.createElement('canvas').getContext('2d')
+    const cs = getComputedStyle(this.input)
+    this.measure.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+    return this.measure.measureText(text).width
+  }
+
+  // ---- Ctrl+R: 履歴を検索 ----
+  searchStart() {
+    if (this.pending || this.busy) return
+    this.search = { draft: this.input.value, from: this.mode === 'python' ? this.pyHistory.length : this.history.length, hit: '' }
+    this.savedPrompt = [...this.promptEl.childNodes]
+    this.promptEl.replaceChildren(h('span', { class: 't-note' }, '(履歴を検索) '))
+    this.input.value = ''
+    this.inputLine.classList.add('searching')
+    this.searchUpdate()
+  }
+  searchUpdate(older = false) {
+    const s = this.search
+    const q = this.input.value
+    const list = this.mode === 'python' ? this.pyHistory : this.history
+    const start = older ? s.from - 1 : list.length - 1
+    s.hit = ''
+    for (let k = start; k >= 0; k--) if (!q || list[k].includes(q)) { s.hit = list[k]; s.from = k; break }
+    this.ghost.style.left = (this.textWidth(q) - this.input.scrollLeft) + 'px'
+    this.ghost.textContent = s.hit ? `  → ${s.hit}` : q ? '  (見つかりません)' : ''
+  }
+  searchEnd(accept, run = false) {
+    const s = this.search
+    if (!s) return
+    this.search = null
+    this.inputLine.classList.remove('searching')
+    this.promptEl.replaceChildren(...this.savedPrompt)
+    this.ghost.textContent = ''
+    this.input.value = accept && s.hit ? s.hit : s.draft
+    if (accept && run && s.hit) this.submit()
   }
   // Ctrl+D: 入力の終わり / 対話モードを終える
   eof() {
@@ -456,7 +545,7 @@ export class Terminal {
   // シェル
   // ============================================================
   async runLine(line) {
-    this.addHistory(line)
+    this.addHistory(line.replace(/\n/g, '; '))
     if (!line.trim()) { this.prompt(); return }
     this.setBusy(true)
     this.ac = new AbortController()
@@ -491,6 +580,7 @@ export class Terminal {
       historyList: () => this.history.slice(),
       clearHistory: () => { this.history = []; store(HIST, []) },
       saveState: () => this.saveStateSoon(),
+      readLine: ({ password = false } = {}) => this.requestInput({ password }),
     }
   }
 
@@ -519,7 +609,29 @@ export class Terminal {
       fetch: (url, init) => fetch(url, init),
       storage: () => vfs.storageEstimate(),
       running: () => (app.runner.running ? { name: vfs.basename(app.runner.runPath || ''), ms: performance.now() - app.runner.t0 } : null),
+      cloud: (sub, args, ctx) => this.cloud(sub, args, ctx),
     }
+  }
+
+  // cloud: クラウド (GitHub Actions) で動かしている様子・今すぐ実行・出力
+  async cloud(sub, args, ctx) {
+    const m = await import('./cloud.js')
+    const { ghReady } = await import('./github-sync.js')
+    if (sub === 'setup' || sub === 'open') { m.cloudDialog(); return 0 }
+    if (!ghReady()) { ctx.err('cloud: 先に「GitHub と同期」を設定してください (cloud setup で設定の画面を開きます)\n'); return 1 }
+    if (sub === 'run') { await m.cloudRunNow(); ctx.print('クラウドでの実行を頼みました (1〜2 分で動き始めます。cloud log で出力を見られます)'); return 0 }
+    if (sub === 'stop') { await m.cloudDisable(); ctx.print('クラウドで動かすのをやめました'); return 0 }
+    if (sub === 'pull') { const { syncPull } = await import('./github-sync.js'); await syncPull({ quiet: true }); ctx.print('結果のファイルを取り込みました'); return 0 }
+    const { cfg, runs, result } = await m.cloudStatus()
+    if (sub === 'log') { ctx.out(result.log ? result.log.replace(/\n?$/, '\n') : '(まだ出力はありません)\n'); return 0 }
+    if (sub !== 'status') { ctx.err(`cloud: ${sub} は使えません (status / run / log / pull / setup / stop)\n`); return 1 }
+    const { SCHEDULES } = await import('./cloud-core.js')
+    const when = (SCHEDULES.find(x => x[0] === cfg.schedule) || [])[1] || cfg.schedule
+    ctx.print(cfg.enabled ? `${C.bgreen}●${C.reset} クラウドで動かしています: ${cfg.entry} ・ ${when}${cfg.schedule === 'daily' ? ' ' + cfg.time : ''} ・ 1 回 ${cfg.timeout} 分まで` : `${C.gray}○ まだクラウドで動かしていません (cloud setup)${C.reset}`)
+    const st = result.status
+    if (st) ctx.print(`最後の実行: ${new Date(st.time).toLocaleString('ja-JP')} — ${{ ok: '完了', error: 'エラー', timeout: '時間切れ' }[st.state] || st.state} (${st.seconds} 秒)`)
+    for (const r of runs) ctx.print(`  ${r.status === 'completed' ? (r.conclusion === 'success' ? C.green + '✓' : C.red + '✗') : C.yellow + '…'}${C.reset} ${new Date(r.at).toLocaleString('ja-JP')}  ${r.event === 'schedule' ? '時間になって' : r.event === 'workflow_dispatch' ? '今すぐ実行' : r.event}`)
+    return 0
   }
 
   // python ファイル.py / -c / -m: 実行して、出力をここに (パイプの中なら次のコマンドへ)
@@ -543,13 +655,22 @@ export class Terminal {
     return {
       finished: false,
       output(items) {
-        for (const it of items) {
-          const t = it.text + (it.partial ? '' : '\n')
-          if (it.kind === 'meta' || it.kind === 'log') { if (it.partial) term.write(t, 't-note'); else term.note(it.text) }
-          else if (it.kind === 'warn') term.write(t, 't-warn')
-          else if (it.kind === 'error-text' || it.kind === 'error') opts.err(t)
-          else opts.out(t)
+        // 続けて同じ種類の行は、まとめて 1 回で書く (速い)
+        let buf = '', kind = null
+        const flush = () => {
+          if (!buf) return
+          if (kind === 'warn') term.write(buf, 't-warn')
+          else if (kind === 'err') opts.err(buf)
+          else opts.out(buf)
+          buf = ''
         }
+        for (const it of items) {
+          if (it.kind === 'meta' || it.kind === 'log') { flush(); if (it.partial) term.write(it.text, 't-note'); else term.note(it.text); continue }
+          const k = it.kind === 'warn' ? 'warn' : it.kind === 'error-text' || it.kind === 'error' ? 'err' : 'out'
+          if (k !== kind) { flush(); kind = k }
+          buf += it.text + (it.partial ? '' : '\n')
+        }
+        flush()
       },
       input(password) {
         if (stdinLines) {
@@ -644,7 +765,7 @@ export class Terminal {
     const aliases = Object.fromEntries(Object.entries(this.shell.aliases).filter(([k]) => !builtin.has(k)))
     const keep = ['USER', 'HOME', 'SHELL', 'LANG', 'TERM', 'PYTHON']
     const env = Object.fromEntries(Object.entries(this.shell.env).filter(([k]) => !keep.includes(k)))
-    store(STATE, { pid: app.project ? app.project.id : null, cwd: this.shell.cwd, env, aliases, lines: lines.slice(-200).map(l => l.slice(0, 2000)), t: Date.now() })
+    store(this.stateKey, { pid: app.project ? app.project.id : null, cwd: this.shell.cwd, env, aliases, lines: lines.slice(-200).map(l => l.slice(0, 2000)), t: Date.now() })
   }
   restore(st, samePid) {
     const lines = samePid && Array.isArray(st.lines) ? st.lines : []

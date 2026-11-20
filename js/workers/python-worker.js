@@ -10,6 +10,7 @@ import { loadPyodide } from '../../vendor/pyodide/pyodide.mjs'
 import { libFiles, FC_LIB, SHIMS } from './py-lib.js'
 import { PIP_NAMES, NO_PIP } from './py-packages.js'
 import { installPgCanvas } from './pg-canvas.js'
+import { bytesToContent, sameContent } from '../app/bin.js'
 
 const PROJECT = '/home/pyodide/project'
 const PYODIDE_VERSION = '314.0.8'
@@ -850,11 +851,16 @@ self.__fc_dbg_wait = () => {
 self.__fc_dbg_poll = () => (shared && Atomics.load(shared.dctl, 0) === 1 ? takeCmd() : '')
 
 // ---- プロジェクトのファイル ----
-function writeProject(files) {
+// keep: 前の実行から変わっていないので送られてこなかったファイル (そのまま残す)
+function writeProject(files, keep = null) {
   const FS = py.FS
+  const kept = keep ? new Set(keep) : null
   // 前回の実行で置いたファイルのうち、もう無いものは消す
-  for (const p of snapshot.keys()) if (!(p in files)) { try { FS.unlink(PROJECT + '/' + p) } catch {} }
-  snapshot = new Map()
+  for (const p of [...snapshot.keys()]) {
+    if (p in files || (kept && kept.has(p))) continue
+    try { FS.unlink(PROJECT + '/' + p) } catch {}
+    snapshot.delete(p)
+  }
   for (const [path, content] of Object.entries(files)) {
     const full = PROJECT + '/' + path
     FS.mkdirTree(full.slice(0, full.lastIndexOf('/')))
@@ -863,24 +869,30 @@ function writeProject(files) {
   }
 }
 // 実行で作られた・変わったファイル (画面のプロジェクトに反映する)
+// 文字のファイルは文字列、画像・Excel・SQLite などはバイト列 (Uint8Array) で返す
+const TEXT_MAX = 2_000_000, BIN_MAX = 20_000_000
 function changedFiles() {
   const FS = py.FS
   const out = {}
+  let total = 0
   const walk = (dir, rel) => {
     let names = []
     try { names = FS.readdir(dir) } catch { return }
     for (const n of names) {
-      if (n === '.' || n === '..' || n === '__pycache__') continue
+      if (n === '.' || n === '..' || n === '__pycache__' || /\.pyc$/.test(n)) continue
       const full = dir + '/' + n
       const r = rel ? rel + '/' + n : n
       let st
       try { st = FS.stat(full) } catch { continue }
-      if (FS.isDir(st.mode)) walk(full, r)
-      else if (st.size < 2_000_000 && /\.(py|txt|csv|json|md|tsv|log|html|xml|ya?ml|ini|cfg|toml)$/i.test(n)) {
-        let text
-        try { text = FS.readFile(full, { encoding: 'utf8' }) } catch { continue }
-        if (snapshot.get(r) !== text) out[r] = text
-      }
+      if (FS.isDir(st.mode)) { walk(full, r); continue }
+      if (st.size > BIN_MAX || total > 60_000_000) continue
+      let bytes
+      try { bytes = FS.readFile(full) } catch { continue }
+      const content = bytesToContent(bytes, n)
+      if (typeof content === 'string' && content.length > TEXT_MAX) continue
+      if (snapshot.has(r) && sameContent(snapshot.get(r), content)) continue
+      out[r] = typeof content === 'string' ? content : content.slice()
+      total += st.size
     }
   }
   walk(PROJECT, '')
@@ -904,10 +916,10 @@ async function run(m) {
   const virtual = String(m.entry).startsWith('<')   // ターミナルの python -c / -m (ファイルには書かない)
   const projectFiles = { ...(m.files || {}) }
   if (virtual) delete projectFiles[m.entry]
-  writeProject(projectFiles)
-  const src = m.files[m.entry] ?? ''
+  writeProject(projectFiles, Array.isArray(m.keep) ? m.keep : null)
+  const src = m.files[m.entry] ?? snapshot.get(m.entry) ?? ''
   // import しているライブラリを先に読み込む (numpy / pandas / matplotlib など。Pyodide にないものは PyPI から)
-  const pyFiles = Object.fromEntries(Object.entries(projectFiles).filter(([p]) => p.endsWith('.py')))
+  const pyFiles = Object.fromEntries([...snapshot].filter(([p, c]) => p.endsWith('.py') && typeof c === 'string'))
   if (virtual) pyFiles['__fc_entry__.py'] = src
   await ensureImports(pyFiles, m.files['requirements.txt'])
   let ok = true, error = null, reason = 'done'

@@ -14,7 +14,8 @@ import { busy, safeMode } from './crash-guard.js'
 import { AnsiState, appendAnsi, hasAnsi, stripAnsi } from './ansi.js'
 
 const MAX_DOM_LINES = 3000
-const MAX_LINE = 200000          // 改行のない出力をつなげるのは、この長さまで (それ以上は次の行に)
+const MAX_LINE = 200000
+const CLS = /\x1b\[[23]J|\x1bc/          // 改行のない出力をつなげるのは、この長さまで (それ以上は次の行に)
 const pad2 = n => String(n).padStart(2, '0')
 // エラーの解説 (日本語) は、はじめてエラーが出たときに読み込む (手が空いたときに先読みもする)
 let explainMod = null
@@ -70,6 +71,7 @@ export class Runner {
     this.sink = null              // ターミナルから実行したときの出力・入力の受け口
     this.evalBusy = 0
     this.pongs = new Map()
+    this.sent = new Map()
     this.surfaces = new Map()
     this.ansi = new AnsiState()
     this.sound = new SoundPlayer()
@@ -184,6 +186,7 @@ export class Runner {
     if (this.tab === 'terminal' && this.terminal) {
       const busy = this.terminal.busy || this.terminal.pending
       if (busy) this.actions.append(btn('stop', '止める (Ctrl+C)', () => this.terminal.interrupt()))
+      this.actions.append(btn('plus', '新しいターミナル', () => this.newTerminal()))
       this.actions.append(
         btn('copy', 'ターミナルの文字をコピー', () => copyText(this.terminal.text()).then(() => toast('コピーしました', { icon: 'copy' }))),
         btn('trash', 'ターミナルを消す (Ctrl+L)', () => this.terminal.clear()))
@@ -229,6 +232,13 @@ export class Runner {
     this.surfaces = new Map()
     if (this.tk) { this.tk.destroyAll(); this.tk = null }
     this.placeholder()
+  }
+
+  // 出力を消す (動いている図・ゲームの画面と入力欄は残す)
+  clearScreen() {
+    for (const el of [...this.outEl.children]) if (!el.classList.contains('sf-sticky') && el !== this.inputRow) el.remove()
+    this.last = null
+    this.lineCount = Math.max(1, this.outEl.childElementCount)
   }
 
   outputText() {
@@ -291,6 +301,14 @@ export class Runner {
     for (const raw of items) {
       const kind = raw.kind === 'error-text' ? 'stderr' : raw.kind
       let it = raw
+      // 画面を消す (print("\033[2J") / os.system("cls") など): それまでの出力を消して、続きを書く
+      if (it.text && it.text.includes('\x1b') && CLS.test(it.text)) {
+        const parts = it.text.split(CLS)
+        while (frag.firstChild) frag.firstChild.remove()
+        this.clearScreen()
+        it = { ...it, text: parts[parts.length - 1].replace(/^(?:\x1b\[[0-9;]*[Hf])+/, '') }
+        if (!it.text) continue
+      }
       const last = this.last
       // \r: その行を書き直す (進み具合の表示など)。行末の \r (Windows の改行) は取る
       let rewrite = false
@@ -351,6 +369,7 @@ export class Runner {
       this.shared = { interrupt: new SharedArrayBuffer(4), ctl: new SharedArrayBuffer(8), buf: new SharedArrayBuffer(64 * 1024), dctl: new SharedArrayBuffer(8), dbuf: new SharedArrayBuffer(256 * 1024), ectl: new SharedArrayBuffer(8), ebuf: new SharedArrayBuffer(64 * 1024), fack: new SharedArrayBuffer(8) }
     } else this.shared = null
     w.onmessage = e => { if (this.worker === w) this.onMessage(e.data) }
+    this.sent = new Map()   // このワーカーに送ったファイル (新しいワーカーは空)
     w.onerror = e => {
       if (e && e.preventDefault) e.preventDefault()
       if (this.worker !== w) return
@@ -381,7 +400,7 @@ export class Runner {
     if (this.running) this.stop(true)
     this.resetWorker()
     this.line('meta', 'Python を再起動しました (変数をすべて消しました)')
-    if (this.terminal) this.terminal.pythonRestarted('Python を再起動しました (変数をすべて消しました)')
+    for (const t of this.terminals || []) t.pythonRestarted('Python を再起動しました (変数をすべて消しました)')
   }
   // 長い間使っていない: Python を休ませてメモリを空ける (戻ったら準備し直す)
   rest() {
@@ -391,13 +410,13 @@ export class Runner {
     this.pyReady = false
     this.rested = true
     emit('python', { state: 'rest' })
-    if (this.terminal) this.terminal.pythonRestarted('長い間使っていなかったので、Python を休ませてメモリを空けました (変数は消えました)')
+    for (const t of this.terminals || []) t.pythonRestarted('長い間使っていなかったので、Python を休ませてメモリを空けました (変数は消えました)')
   }
   // Python が応えない: 立ち上げ直す
   recover(msg) {
     this.resetWorker()
     this.line('meta', msg)
-    if (this.terminal) this.terminal.pythonRestarted(msg)
+    for (const t of this.terminals || []) t.pythonRestarted(msg)
   }
 
   runTarget() {
@@ -406,14 +425,18 @@ export class Runner {
   }
 
   // 実行に渡すファイル (開いているファイルは編集中の内容)
+  // 前の実行から変わっていないファイルは送らず、名前だけ (keep) にする (大きな画像・データがあっても速く始まる)
   filesPayload() {
-    const files = {}
+    const files = {}, keep = []
     for (const f of app.files) {
       if (f.dir) continue
       const content = app.editors.docs.has(f.path) ? app.editors.docs.get(f.path).state.doc.toString() : app.contents.get(f.path)
-      if (content !== undefined && content !== null && content.length < 2_000_000) files[f.path] = content
+      // 文字のファイルは 2MB まで、画像・SQLite などのバイナリは 20MB まで
+      if (content === undefined || content === null || content.length >= (content instanceof Uint8Array ? 20_000_000 : 2_000_000)) continue
+      if (this.sent.get(f.path) === content) keep.push(f.path)
+      else files[f.path] = content
     }
-    return files
+    return { files, keep }
   }
 
   // term: ターミナルの受け口 (出力・input() をターミナルへ) / argv: sys.argv / cwd: ターミナルのいる場所 / name: source の名前 (<string> など)
@@ -465,8 +488,10 @@ export class Runner {
     if (!auto) this.series = { t0: performance.now(), restarts: 0, fails: 0 }
     this.autoOk = !agent && !term && !selection && !debug && forceSource === null
     app.editors.clearRunErrors()
-    const files = this.filesPayload()
+    const { files, keep } = this.filesPayload()
     files[path] = source
+    const ki = keep.indexOf(path)
+    if (ki >= 0) keep.splice(ki, 1)
     const w = this.ensureWorker()
     if (!w) return
     this.errors = 0
@@ -505,7 +530,8 @@ export class Runner {
     }
     this.renderTabs()
     if (this.shared) new Int32Array(this.shared.interrupt)[0] = 0
-    w.postMessage({ type: 'run', id, files, entry: path, argv: argv || null, cwd: cwd || null, debug: this.shared ? { bps, watches: this.debug.watches } : null })
+    w.postMessage({ type: 'run', id, files, keep, entry: path, argv: argv || null, cwd: cwd || null, debug: this.shared ? { bps, watches: this.debug.watches } : null })
+    for (const [p, c] of Object.entries(files)) this.sent.set(p, c)
   }
 
   // ============================================================
@@ -605,13 +631,61 @@ export class Runner {
   async ensureTerminal() {
     if (this.terminal) return this.terminal
     if (!this.termLoading) {
-      this.termLoading = import('./terminal.js').then(({ Terminal }) => {
-        this.terminal = new Terminal({ onState: () => this.termStateChanged() })
-        this.termEl.append(this.terminal.el)
-        return this.terminal
+      this.termLoading = import('./terminal.js').then(mod => {
+        this.TerminalClass = mod.Terminal
+        this.terminals = []
+        this.termTabs = h('div', { class: 'term-tabs hidden' })
+        this.termEl.append(this.termTabs)
+        return this.addTerminal(0)
       })
     }
     return this.termLoading
+  }
+  // ターミナルを 1 つ足す (それぞれ別の場所・履歴・画面。Python は 1 つを順番に使う)
+  addTerminal(index) {
+    const t = new this.TerminalClass({ index, onState: () => this.termStateChanged() })
+    this.terminals.push(t)
+    this.termEl.append(t.el)
+    this.switchTerminal(t)
+    return t
+  }
+  async newTerminal() {
+    await this.ensureTerminal()
+    const used = new Set(this.terminals.map(t => t.index))
+    let i = 1
+    while (used.has(i)) i++
+    try { localStorage.removeItem(`forgecode.term.state.${i}`) } catch {}
+    const t = this.addTerminal(i)
+    await this.openTerminal()
+    return t
+  }
+  switchTerminal(t) {
+    this.terminal = t
+    for (const x of this.terminals) x.el.classList.toggle('hidden', x !== t)
+    this.renderTermTabs()
+    this.termStateChanged()
+    if (this.tab === 'terminal') setTimeout(() => t.focus(), 30)
+  }
+  killTerminal(t = this.terminal) {
+    if (!t) return
+    if (t.busy || t.pending) t.interrupt()
+    t.el.remove()
+    this.terminals = this.terminals.filter(x => x !== t)
+    if (t.index) { try { localStorage.removeItem(`forgecode.term.state.${t.index}`) } catch {} } else t.saveState()
+    if (!this.terminals.length) { this.terminal = null; this.termLoading = null; this.termTabs.remove(); this.closeTerminal(); return }
+    this.switchTerminal(this.terminals[this.terminals.length - 1])
+  }
+  renderTermTabs() {
+    const bar = this.termTabs
+    if (!bar) return
+    bar.classList.toggle('hidden', this.terminals.length < 2)
+    bar.textContent = ''
+    this.terminals.forEach((t, k) => {
+      bar.append(h('div', { class: 'term-tab' + (t === this.terminal ? ' active' : '') },
+        h('button', { class: 'tt-name', onclick: () => this.switchTerminal(t) }, (t.busy || t.pending) ? h('span', { class: 'tt-dot' }) : null, `${k + 1}: ${t.mode === 'python' ? 'python' : t.shell.cwd ? t.shell.cwd.split('/').pop() : '~'}`),
+        h('button', { class: 'tt-close', 'aria-label': 'このターミナルを閉じる', onclick: () => this.killTerminal(t) }, icon('close', 13))))
+    })
+    bar.append(h('button', { class: 'tt-add', 'aria-label': '新しいターミナル', title: '新しいターミナル', onclick: () => this.newTerminal() }, icon('plus', 15)))
   }
   async openTerminal({ cwd = null, run = null } = {}) {
     const t = await this.ensureTerminal()
@@ -658,6 +732,7 @@ export class Runner {
     if (!t) return
     this.renderTabs()
     const busy = t.busy || t.pending
+    this.renderTermTabs()
     this.termState.className = 'rh-state' + (t.pending ? ' wait' : busy ? ' run' : '')
     this.termState.textContent = ''
     if (t.pending) this.termState.append(h('span', { class: 'spinner' }), '入力待ち')
@@ -670,6 +745,8 @@ export class Runner {
     this.termActions.append(btn('more', 'その他', e => menu([
       { label: 'ターミナルの文字をコピー', icon: 'copy', run: () => copyText(t.text()).then(() => toast('コピーしました', { icon: 'copy' })) },
       { label: '画面を消す', icon: 'trash', run: () => t.clear() },
+      { label: '新しいターミナル', icon: 'plus', run: () => this.newTerminal() },
+      this.terminals.length > 1 ? { label: 'このターミナルを閉じる', icon: 'close', run: () => this.killTerminal(t) } : null,
       { label: 'Python の対話モード', icon: 'python', disabled: busy || t.mode === 'python', run: () => { t.input.value = 'python'; t.submit() } },
       { label: '実行画面を開く', icon: 'play', run: () => this.enterFull() },
       { label: 'Python を再起動', icon: 'refresh', run: () => this.restartPython() },
@@ -883,6 +960,8 @@ export class Runner {
       }
       case 'done':
         if (m.id !== this.runId) break
+        // プログラムが変えたファイルは、次の実行で送り直す
+        for (const p of Object.keys(m.files || {})) this.sent.delete(p)
         if (m.id !== this.scratchId) this.applyFiles(m.files)
         if (this.sink) {
           // ターミナルから実行したもの: 結果はターミナルに (エラーの場所はエディタにも印を付ける)
@@ -919,7 +998,7 @@ export class Runner {
         if (text === null) { await vfs.remove(app.project.id, path); continue }
         await vfs.writeFile(app.project.id, path, text)
         app.contents.set(path, text)
-        if (app.editors.has(path)) app.editors.externalChange(path, text)
+        if (typeof text === 'string' && app.editors.has(path)) app.editors.externalChange(path, text)
         names.push(path)
       } catch {}
     }
@@ -1152,6 +1231,7 @@ export class Runner {
       { label: 'Python を再起動', icon: 'refresh', run: () => this.restartPython() },
       { label: 'ずっと動かす (エラーで止まったら自動で再実行)', icon: 'history', checked: !!getSettings().autoRestart, run: () => { const v = !getSettings().autoRestart; setSettings({ autoRestart: v }); toast(v ? 'エラーで止まったら、自動で再実行します' : '自動の再実行をやめました'); if (!v) this.cancelRestart() } },
       { label: '画面を消さない (実行中)', icon: 'sun', checked: (getSettings().keepAwake || 'run') !== 'off', run: () => { const on = (getSettings().keepAwake || 'run') !== 'off'; setSettings({ keepAwake: on ? 'off' : 'run' }); toast(on ? '画面が自動で消えるようにしました' : '実行中は画面を消さないようにしました') } },
+      { label: 'クラウドで動かす (アプリを閉じても)', icon: 'cloud', run: () => runCommand('cloud') },
       { label: 'ターミナル', icon: 'terminal', run: () => { this.exitFull(); this.openTerminal() } },
       '-',
       { label: '実行結果を下のパネルに出す (全画面にしない)', icon: 'terminal', run: () => { setSettings({ runView: 'panel' }); this.exitFull(); runCommand('togglePanel', true); toast('実行結果は下のパネルに出します (設定 → 実行 で戻せます)') } },
@@ -1367,4 +1447,6 @@ command('toggleTerminal', 'ターミナルの表示切り替え', () => {
   if (r.termFull || (app.wb && app.wb.panelOpen && r.tab === 'terminal')) r.closeTerminal()
   else r.openTerminal()
 }, { icon: 'terminal', key: '⌃`' })
+command('terminalNew', '新しいターミナル', () => app.runner.newTerminal(), { icon: 'plus' })
+command('terminalKill', 'ターミナルを閉じる (このターミナル)', () => app.runner.killTerminal(), { icon: 'close' })
 command('terminalRun', 'ターミナルでコマンドを実行', line => app.runner.openTerminal({ run: String(line || '') }), { icon: 'terminal', hidden: true })

@@ -61,6 +61,7 @@ export class SearchView {
       if (pats && !pats.some(p => p.test(f.path) || p.test(f.path.split('/').pop()) || f.path.startsWith(p.source.slice(1).replace(/\\/g, '')))) continue
       const doc = app.editors.docs.get(f.path)
       const text = doc ? doc.state.doc.toString() : (f.content || '')
+      if (typeof text !== 'string') continue
       const lines = text.split('\n')
       const hits = []
       lines.forEach((line, i) => {
@@ -103,6 +104,7 @@ export class SearchView {
       if (f.dir) continue
       const doc = app.editors.docs.get(f.path)
       const text = doc ? doc.state.doc.toString() : (f.content || '')
+      if (typeof text !== 'string') continue
       re.lastIndex = 0
       if (re.test(text)) targets.push({ f, text, doc })
     }

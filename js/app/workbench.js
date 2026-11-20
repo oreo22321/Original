@@ -269,6 +269,7 @@ export class Workbench {
       { label: 'ターミナル', icon: 'terminal', hint: '⌃`', run: () => runCommand('terminal') },
       { label: '実行画面を開く', icon: 'play', run: () => runCommand('openRunScreen') },
       { label: 'Python を再起動', icon: 'refresh', run: () => runCommand('restartPython') },
+      { label: 'クラウドで動かす (24 時間)', icon: 'cloud', run: () => runCommand('cloud') },
       { section: 'コード' },
       py ? { label: '定義へ移動', icon: 'target', hint: 'F12', run: () => runCommand('gotoDefinition') } : null,
       py ? { label: '名前を変更 (すべての場所)', icon: 'rename', hint: 'F2', run: () => runCommand('renameSymbol') } : null,

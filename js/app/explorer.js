@@ -1,5 +1,6 @@
 // エクスプローラー (ファイルツリー) とプロジェクト管理
 import * as vfs from './vfs.js'
+import { bytesToContent } from './bin.js'
 import { app, refreshFiles, newFile, newFolder, deletePath, renamePath, openProject, runCommand, command, setRunTarget } from './app.js'
 import { on, getSettings, emit } from './store.js'
 import { h, icon, fileIcon, menu, onLongPress, promptDialog, confirmDialog, toast, modal, download, shareFile, copyText, relTime } from './ui.js'
@@ -197,8 +198,9 @@ export async function importFileList(fileList, dir = '') {
   let n = 0
   for (const file of fileList) {
     if (/\.zip$/i.test(file.name)) { await importZipFile(file); continue }
-    if (file.size > 5 * 1024 * 1024) { toast(`${file.name} は大きすぎます (5MB まで)`, { kind: 'error' }); continue }
-    const text = await file.text()
+    if (file.size > 20 * 1024 * 1024) { toast(`${file.name} は大きすぎます (20MB まで)`, { kind: 'error' }); continue }
+    // 画像・Excel・SQLite などはバイナリのまま (Python から open(..., "rb") で読めます)
+    const text = bytesToContent(new Uint8Array(await file.arrayBuffer()), file.name)
     const path = (dir ? dir + '/' : '') + (file.webkitRelativePath || file.name)
     await vfs.writeFile(app.project.id, path, text)
     n++
@@ -218,7 +220,7 @@ export function pickFiles(opts = {}) {
 }
 
 async function importZipFile(file) {
-  const { unzipSync, strFromU8 } = await import('../../vendor/fflate.js')
+  const { unzipSync } = await import('../../vendor/fflate.js')
   const data = new Uint8Array(await file.arrayBuffer())
   let entries
   try { entries = unzipSync(data) } catch { toast('ZIP を開けませんでした', { kind: 'error' }); return }
@@ -230,7 +232,7 @@ async function importZipFile(file) {
   for (const p of paths) {
     const rel = p.slice(strip.length)
     if (!rel) continue
-    await vfs.writeFile(app.project.id, rel, strFromU8(entries[p]))
+    await vfs.writeFile(app.project.id, rel, bytesToContent(entries[p], rel))
     n++
   }
   await refreshFiles()
@@ -241,7 +243,7 @@ export async function exportZip() {
   const { zipSync, strToU8 } = await import('../../vendor/fflate.js')
   const all = await vfs.readAll(app.project.id)
   const obj = {}
-  for (const f of all) if (!f.dir) obj[app.project.name + '/' + f.path] = strToU8(f.content || '')
+  for (const f of all) if (!f.dir) obj[app.project.name + '/' + f.path] = f.content instanceof Uint8Array ? f.content : strToU8(f.content || '')
   const zip = zipSync(obj, { level: 6 })
   const name = app.project.name.replace(/[\\/:*?"<>|]/g, '_') + '.zip'
   await shareFile(name, new Blob([zip], { type: 'application/zip' }), 'application/zip')

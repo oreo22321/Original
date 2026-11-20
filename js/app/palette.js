@@ -12,6 +12,7 @@ const CATEGORIES = [
   ['デバッグ', /^(debug|toggleBreakpoint|clearBreakpoints|showDebug)/],
   ['AI', /^ai/],
   ['GitHub', /^github/],
+  ['クラウド (24 時間)', /^cloud/],
   ['表示', /^(toggleSidebar|togglePanel|togglePanelMax|toggleSplit|togglePreview|toggleWrap|zoomIn|zoomOut|palette)$/],
   ['アプリ', /^(settings|help|whatsNew|onboarding|reload|showErrors)$/],
 ]
