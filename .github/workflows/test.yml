@@ -53,3 +53,77 @@ jobs:
           name: e2e-screenshots
           path: tests/e2e/out/
           if-no-files-found: ignore
+
+  # BotHost (bothost/): ユニットテストと docker モードのテスト
+  bothost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: bothost
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: bot 用のイメージを取ってくる (docker モードのテスト用)
+        run: docker pull -q python:3.12-slim && docker pull -q node:22-slim
+      - name: テスト (docker モードを含む)
+        run: npm test
+
+  # BotHost を本物の環境で: Dockerfile のビルド・PyPI / npm / Discord への接続・GitHub からの復元・render.yaml
+  bothost-real:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: render.yaml が Render のスキーマに合っているか
+        run: |
+          curl -fsSL https://render.com/schema/render.yaml.json -o /tmp/render-schema.json
+          mkdir -p /tmp/v && npm i --prefix /tmp/v --no-audit --no-fund ajv@8 ajv-formats@3 yaml@2
+          NODE_PATH=/tmp/v/node_modules node bothost/test/validate-render-yaml.js /tmp/render-schema.json render.yaml
+
+      - name: Dockerfile をビルド
+        run: docker build -t bothost bothost
+
+      - name: コンテナで動かして、一通り確かめる (PyPI・npm・本物の Discord API)
+        run: |
+          docker run -d --name bh -p 3000:3000 -v bhdata:/data -e BOTHOST_SECURE_COOKIE=0 bothost
+          node bothost/test/smoke.js http://localhost:3000 --net
+
+      - name: コンテナを止めて (SIGTERM) また動かすと、bot が自動で再開する
+        run: |
+          docker stop -t 30 bh
+          docker logs bh 2>&1 | tail -n 3
+          docker start bh
+          node bothost/test/smoke.js http://localhost:3000 --resume
+
+      - name: いろいろな種類の bot を本当に動かす (.bat・Windows の .exe・.jar・.NET・TypeScript・Ruby・PHP・Lua・シェル・Web 公開・Bun・ffmpeg)
+        run: |
+          docker run -d --name bh3 -p 3002:3000 -e BOTHOST_SECURE_COOKIE=0 bothost
+          for i in $(seq 1 30); do curl -sf localhost:3002/api/health >/dev/null && break; sleep 1; done
+          node bothost/test/smoke-runtimes.js http://localhost:3002 --net
+          docker stats --no-stream bh3
+
+      - name: 空のサーバーが、本物の GitHub のバックアップから戻る
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          docker run -d --name bh2 -p 3001:3000 \
+            -e BOTHOST_BACKUP_REPO=${{ github.repository }} \
+            -e BOTHOST_BACKUP_BRANCH=${{ github.head_ref || github.ref_name }} \
+            -e BOTHOST_BACKUP_FILE=bothost/test/fixtures/sample-backup.json.gz \
+            -e BOTHOST_BACKUP_TOKEN="$GH_TOKEN" \
+            bothost
+          node bothost/test/smoke.js http://localhost:3001 --restored
+
+      - name: コンテナのログ
+        if: always()
+        run: |
+          echo '--- bh3'; docker logs bh3 2>&1 | tail -n 20 || true
+          echo '--- bh'; docker logs bh 2>&1 | tail -n 40 || true
+          echo '--- bh2'; docker logs bh2 2>&1 | tail -n 40 || true
