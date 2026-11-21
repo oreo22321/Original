@@ -1,7 +1,7 @@
 # BotHost を 1 つのコンテナで動かす (process モード。Python と Node.js の bot が動きます)
 FROM node:22-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates tini \
+ && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates tini git openssh-client \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .

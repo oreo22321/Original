@@ -46,11 +46,12 @@ function createApp(config = {}) {
     statsIntervalMs: config.statsIntervalMs,
     crashLimit: config.crashLimit,
     restartBackoffMs: config.restartBackoffMs,
+    restoreRetry: config.restoreRetry,
     discordApi: config.discordApi,
     trustProxy: config.trustProxy ?? (env.BOTHOST_TRUST_PROXY === '1' || !!env.RENDER),
     keepAwakeUrl: config.keepAwakeUrl ?? (env.BOTHOST_KEEP_AWAKE === '0' ? '' : (env.BOTHOST_KEEP_AWAKE_URL || env.RENDER_EXTERNAL_URL || '')),
     backup: config.backup || {
-      repo: env.BOTHOST_BACKUP_REPO, token: env.BOTHOST_BACKUP_TOKEN,
+      repo: env.BOTHOST_BACKUP_REPO, token: env.BOTHOST_BACKUP_TOKEN, sshKey: env.BOTHOST_BACKUP_SSH_KEY,
       branch: env.BOTHOST_BACKUP_BRANCH, file: env.BOTHOST_BACKUP_FILE,
     },
   };
@@ -203,10 +204,15 @@ function createApp(config = {}) {
     routes.push({ method, re, keys, handler, auth: opts.auth !== false, admin: !!opts.admin });
   };
 
-  route('GET', '/api/health', async () => ({
-    ok: true, version: VERSION, uptime: Math.round(process.uptime()),
-    running: [...runner.states.values()].filter((s) => s.status === 'running').length,
-  }), { auth: false });
+  route('GET', '/api/health', async () => {
+    const b = backup.info();
+    return {
+      ok: true, version: VERSION, uptime: Math.round(process.uptime()),
+      running: [...runner.states.values()].filter((s) => s.status === 'running').length,
+      // バックアップが動いているか (秘密は含めない)
+      backup: b.enabled ? { method: b.method, connected: b.connected, lastAt: b.lastAt, ok: !b.lastError && !b.blocked } : null,
+    };
+  }, { auth: false });
 
   route('GET', '/api/config', async () => ({
     version: VERSION,
@@ -232,6 +238,8 @@ function createApp(config = {}) {
     };
     store.users.push(user);
     const token = auth.createSession(store, user.id);
+    // 最初のアカウントはすぐにバックアップ (サーバーが再起動しても消えないように)
+    if (user.admin && backup.enabled && !backup.blocked) setTimeout(() => backup.run().catch(() => {}), 1000).unref();
     res.setHeader('Set-Cookie', sessionCookie(token, auth.SESSION_DAYS * 86400));
     return { user: publicUser(user) };
   }, { auth: false });
@@ -298,7 +306,7 @@ function createApp(config = {}) {
   }, { admin: true });
 
   route('POST', '/api/admin/backup', async () => {
-    try { await backup.run(); } catch (e) { fail(502, e.message); }
+    try { await backup.run({ force: true }); } catch (e) { fail(502, e.message); }
     return { backup: backup.info() };
   }, { admin: true });
 
@@ -653,12 +661,15 @@ function createApp(config = {}) {
   const init = async () => {
     if (backup.enabled) {
       try {
-        if (await backup.restoreIfEmpty(dbFile)) console.log(`GitHub (${backup.repo}) のバックアップから戻しました`);
+        if (await backup.restoreWithRetry(dbFile, cfg.restoreRetry)) console.log(`GitHub (${backup.repo || 'git'}) のバックアップから戻しました`);
       } catch (e) {
-        console.error(`バックアップから戻せませんでした: ${e.message}`);
-        backup.status.lastError = e.message;
+        console.error(`バックアップから戻せませんでした: ${backup.status.lastError}`);
       }
       backup.start();
+      // 繋がるかを確かめてログに出す (待たない)
+      backup.check().then((ok) => console.log(ok
+        ? `バックアップ: GitHub (${backup.repo || backup.gitUrl}) に繋がりました (${backup.method === 'git' ? 'デプロイキー' : 'トークン'})`
+        : `バックアップ: GitHub に繋がりません: ${backup.status.lastError}`));
     }
     resume();
   };
@@ -679,7 +690,7 @@ function createApp(config = {}) {
     runner.close();
     store.flush();
     backup.stop();
-    if (backup.enabled && backup.dirty) {
+    if (backup.enabled && backup.dirty && !backup.blocked) {
       await Promise.race([backup.run().catch(() => {}), new Promise((r) => setTimeout(r, 20e3))]);
     }
     for (const set of listeners.values()) for (const res of set) res.end();

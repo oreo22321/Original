@@ -1028,8 +1028,10 @@ async function renderAdmin() {
           h('h2', {}, 'バックアップ'),
           b.enabled
             ? [
-              h('p', { class: 'hint' }, `GitHub の ${b.repo} に、変更があれば 1 分ごとに保存しています。サーバーのファイルが消えても、次の起動で自動で戻します。`),
+              h('p', { class: 'hint' }, `GitHub の ${b.repo || 'リポジトリ'} に、変更があれば 1 分ごとに保存しています (${b.method === 'git' ? 'デプロイキー' : 'トークン'})。サーバーのファイルが消えても、次の起動で自動で戻します。`),
+              b.blocked && h('div', { class: 'banner warn' }, b.blocked),
               kv([
+                ['接続', b.connected === null ? '確認中' : b.connected ? '✓ 繋がっています' : '✗ 繋がりません', b.connected === false ? 'bad-text' : null],
                 ['最後に保存', b.lastAt ? `${ago(b.lastAt)} (${fmtSize(b.lastSize)})` : 'まだ'],
                 b.restoredAt && ['戻した', ago(b.restoredAt)],
                 b.lastError && ['エラー', b.lastError, 'bad-text'],

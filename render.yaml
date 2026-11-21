@@ -18,6 +18,7 @@ services:
       # 例: あなたの名前/bothost-data (先に空のプライベートリポジトリを作っておく)
       - key: BOTHOST_BACKUP_REPO
         sync: false
-      # GitHub の Fine-grained token (そのリポジトリの Contents: Read and write だけ)
-      - key: BOTHOST_BACKUP_TOKEN
+      # そのリポジトリの「デプロイキー」(書き込みを許可) の秘密鍵 (base64 か PEM)。
+      # 代わりに BOTHOST_BACKUP_TOKEN (Fine-grained token・Contents: Read and write) でもよい
+      - key: BOTHOST_BACKUP_SSH_KEY
         sync: false

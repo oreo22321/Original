@@ -107,7 +107,8 @@ docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless
 | `BOTHOST_TRUST_PROXY` | なし | `1` にするとリバースプロキシの `X-Forwarded-For` を信じる (Render では自動) |
 | `BOTHOST_PYTHON` | `python3` | process モードで使う Python |
 | `BOTHOST_BACKUP_REPO` | なし | バックアップ先の GitHub リポジトリ (`名前/リポジトリ`) |
-| `BOTHOST_BACKUP_TOKEN` | なし | そのリポジトリに書けるトークン (Contents: Read and write) |
+| `BOTHOST_BACKUP_SSH_KEY` | なし | そのリポジトリのデプロイキー (書き込み可) の秘密鍵。base64 か PEM |
+| `BOTHOST_BACKUP_TOKEN` | なし | 代わりに、そのリポジトリに書けるトークン (Contents: Read and write) |
 | `BOTHOST_BACKUP_BRANCH` | 既定のブランチ | バックアップを置くブランチ |
 | `BOTHOST_BACKUP_FILE` | `bothost-backup.json.gz` | バックアップのファイル名 |
 | `BOTHOST_KEEP_AWAKE_URL` | `RENDER_EXTERNAL_URL` | bot を動かしている間、10 分ごとにアクセスする自分の URL |
@@ -115,11 +116,17 @@ docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless
 
 ## GitHub にバックアップ
 
-`BOTHOST_BACKUP_REPO` と `BOTHOST_BACKUP_TOKEN` を設定すると:
+置き方は 2 つあります。どちらも `BOTHOST_BACKUP_REPO` (例: `あなたの名前/bothost-data`。**必ず Private**) と一緒に使います。
 
-- 変更があれば **1 分ごと** と **サーバーを止めるとき** に、アカウント・bot の設定・bot のファイルを 1 つのファイル (gzip した JSON) にして GitHub に保存します。ライブラリのフォルダー (`.deps`・`node_modules`) とログは入れません。
+- **デプロイキー (おすすめ)**: `BOTHOST_BACKUP_SSH_KEY` に SSH の秘密鍵 (base64 か PEM) を入れ、その公開鍵をリポジトリの **Settings → Deploy keys → Add deploy key** に **「Allow write access」にチェックして** 登録します。鍵はそのリポジトリにしか使えません。git で push し、いつも最新の 1 つだけを置くので、リポジトリが大きくなりません。
+- **トークン**: `BOTHOST_BACKUP_TOKEN` に Fine-grained token (そのリポジトリの Contents: Read and write) を入れます。
+
+どちらでも:
+
+- 変更があれば **1 分ごと**、**最初のアカウントを作ったとき**、**サーバーを止めるとき** に、アカウント・bot の設定・bot のファイルを 1 つのファイル (gzip した JSON) にして GitHub に保存します。ライブラリのフォルダー (`.deps`・`node_modules`) とログは入れません。
 - 起動したときに **データがなければ** (新しいサーバー・ファイルが消えた) GitHub から戻します。データがあるときは上書きしません。
-- バックアップには bot のトークン (環境変数) も入るので、**リポジトリは必ず Private** にしてください。
+- 起動のときに GitHub から **戻せなかった** (ネットワークなど) ときは、何度か試し、それでもだめなら **古いバックアップを空のデータで上書きしないように保存を止めます**。管理画面の「今すぐバックアップ」で再開できます。
+- 状態は管理画面と `/api/health` (`backup.ok`) で見られます。
 
 ## 安全のために (大事)
 
