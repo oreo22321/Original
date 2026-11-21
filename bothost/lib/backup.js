@@ -55,7 +55,7 @@ class Backup {
 
   url() {
     const ref = this.branch ? `?ref=${encodeURIComponent(this.branch)}` : '';
-    return `${this.api}/repos/${this.repo}/contents/${encodeURIComponent(this.file)}${ref}`;
+    return `${this.api}/repos/${this.repo}/contents/${this.file.split('/').map(encodeURIComponent).join('/')}${ref}`;
   }
 
   bundle() {

@@ -399,9 +399,14 @@ class Runner extends EventEmitter {
         '--cpus', String(bot.cpuLimit || 0.5),
         '--pids-limit', '256',
         '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+        // サーバーと同じユーザーで動かす (bot のフォルダーに書けるように。root にはしない)
+        ...(process.getuid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
+        // システムのファイルは読み取り専用。書けるのは bot のフォルダー (/app) と /tmp だけ
+        '--read-only', '--tmpfs', '/tmp:rw,size=64m',
         '-v', `${dir}:/app`, '-w', '/app',
       ];
-      for (const [k, v] of Object.entries(this.envFor(bot, true))) args.push('-e', `${k}=${v}`);
+      const env = { ...this.envFor(bot, true), HOME: '/app', PIP_NO_CACHE_DIR: '1' };
+      for (const [k, v] of Object.entries(env)) args.push('-e', `${k}=${v}`);
       args.push(rt.image, ...argv);
       return spawn('docker', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     }
@@ -439,7 +444,8 @@ class Runner extends EventEmitter {
       this.emit('exit', bot.id, { code, signal, manual: true });
       return;
     }
-    const reason = s.killReason;
+    // docker モードで 137 = 強制終了 (ほとんどはメモリの上限 --memory を超えたとき)
+    const reason = s.killReason || (this.mode === 'docker' && code === 137 ? 'memory' : null);
     s.killReason = null;
     if (reason === 'memory') this.sys(bot.id, 'メモリの上限を超えたので止めました。');
     else this.sys(bot.id, signal ? `終了しました (シグナル ${signal})` : `終了しました (終了コード ${code})`);
@@ -541,8 +547,40 @@ class Runner extends EventEmitter {
   }
 
   // ----- 使用量 (process モードは /proc から。プロセスグループ全体の合計) -----
+  // docker モード: docker stats で、動いているコンテナの CPU・メモリを取る
+  sampleDockerStats() {
+    if (this.dockerStatsBusy) return;
+    const running = [...this.states.entries()].filter(([, s]) => s.child && s.status === 'running');
+    if (!running.length) return;
+    this.dockerStatsBusy = true;
+    const names = running.map(([id]) => `bothost-${id}`);
+    const child = spawn('docker', ['stats', '--no-stream', '--format', '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}', ...names], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => { this.dockerStatsBusy = false; });
+    child.on('close', () => {
+      this.dockerStatsBusy = false;
+      const now = Date.now();
+      for (const line of out.split('\n')) {
+        const [name, cpu, mem] = line.split('\t');
+        if (!name || !mem) continue;
+        const id = name.replace(/^bothost-/, '');
+        const s = this.states.get(id);
+        if (!s || s.status !== 'running') continue;
+        const m = mem.split('/')[0].trim().match(/^([\d.]+)\s*([KMG]i?B|B)$/i);
+        if (!m) continue;
+        const unit = { b: 1 / 1048576, kib: 1 / 1024, kb: 1 / 1024, mib: 1, mb: 1, gib: 1024, gb: 1024 }[m[2].toLowerCase()] ?? 1;
+        s.stats = { memoryMB: Math.round(parseFloat(m[1]) * unit * 10) / 10, cpuPercent: Math.round(parseFloat(cpu) * 10) / 10 || 0 };
+        s.history.push([now, s.stats.memoryMB, s.stats.cpuPercent]);
+        if (s.history.length > HISTORY_MAX) s.history.shift();
+        this.emit('stats', id, s.stats);
+      }
+    });
+  }
+
   sampleStats() {
-    if (this.mode !== 'process' || process.platform !== 'linux') return;
+    if (this.mode === 'docker') { this.sampleDockerStats(); return; }
+    if (process.platform !== 'linux') return;
     const running = [...this.states.entries()].filter(([, s]) => s.child && s.status === 'running');
     if (!running.length) return;
     const groups = new Map();

@@ -132,10 +132,13 @@ docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless
 
 ```sh
 cd bothost
-npm test
+npm test                                   # 42 項目 (Docker が使えれば docker モードも)
+node test/smoke.js http://localhost:3000   # 動いているサーバーを外から一通り触る (--net で PyPI・npm・Discord も)
 ```
 
-実際にサーバーを立てて、37 項目を確かめます。登録と管理者、ほかの人の bot が見えないこと、フォルダーの外への拒否、起動 → ログ → 標準入力 → 停止、自動の再起動とあきらめ、Discord のトークン確認と招待リンク (偽物の Discord で)、落ちたときの通知、ZIP、GitHub へのバックアップと復元 (偽物の GitHub で)、ログの保存と間引き、取り残されたプロセスの片付けなどです。
+- `test/server.test.js` `test/features.test.js`: 実際にサーバーを立てて、登録と管理者、ほかの人の bot が見えないこと、フォルダーの外への拒否、起動 → ログ → 標準入力 → 停止、自動の再起動とあきらめ、Discord のトークン確認と招待リンク (偽物の Discord で)、落ちたときの通知、ZIP、GitHub へのバックアップと復元 (偽物の GitHub で)、ログの保存と間引き、取り残されたプロセスの片付けなど
+- `test/docker.test.js`: docker モードで、bot がコンテナで動くこと・フォルダーの外が見えないこと・システムのファイルが書けないこと・メモリの上限で止まること・残ったコンテナの片付け
+- GitHub Actions の `bothost-real`: 本物の Dockerfile をビルドしてコンテナで動かし、PyPI から discord.py・npm から discord.js を入れて動かす、本物の Discord API でトークンを見分ける、コンテナを止めて動かすと bot が再開する、空のサーバーが本物の GitHub のバックアップから戻る、render.yaml が Render の公式スキーマに合う、を確かめます
 
 ## つくり
 
