@@ -483,3 +483,4 @@ input.needs { border-color: var(--warn); background: var(--warn-soft); }
 .rt.ok { color: var(--text); }
 .rt.ok .ic { color: var(--ok); }
 .no-file.file-info { align-content: center; }
+.hint-banner .btn.primary { white-space: normal; text-align: left; height: auto; min-height: 34px; max-width: 100%; line-height: 1.35; padding-top: 7px; padding-bottom: 7px; }

@@ -10,6 +10,7 @@ const path = require('path');
 
 const launch = require('./launch');
 const { Tools, needsFfmpeg } = require('./tools');
+const hints = require('./hints');
 
 // 前の版との互換のため (新しい bot は、ファイルから自動で起動方法を見つけます)
 const RUNTIMES = {
@@ -163,6 +164,8 @@ class Runner extends EventEmitter {
       restarts: s.restarts,
       restartAt: s.restartAt,
       stats: s.stats,
+      hint: s.hint || null,
+      hintAction: s.hintAction || null,
     };
   }
 
@@ -360,6 +363,8 @@ class Runner extends EventEmitter {
     s.restartTimer = null;
     s.stopping = false;
     s.killReason = null;
+    s.hint = null;
+    s.hintAction = null;
     const token = ++s.runToken;
     const dir = this.dir(bot.id);
     fs.mkdirSync(dir, { recursive: true });
@@ -648,7 +653,8 @@ class Runner extends EventEmitter {
     };
     if (bot.port) env.PORT = String(bot.port);
     if (bot.timezone) env.TZ = bot.timezone;
-    for (const [k, v] of Object.entries(bot.env || {})) env[k] = String(v);
+    // 空の値 (まだ入れていない欄) は渡さない。渡すと .env ファイル (python-dotenv など) の値が使われなくなる
+    for (const [k, v] of Object.entries(bot.env || {})) if (v !== '' && v !== null && v !== undefined) env[k] = String(v);
     return env;
   }
 
@@ -697,6 +703,13 @@ class Runner extends EventEmitter {
     return spawn(argv[0], argv.slice(1), { cwd: dir, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'], ...ids });
   }
 
+  // この起動のあいだのログから、原因を探す
+  diagnose(bot, since) {
+    const lines = this.state(bot.id).logs.filter((e) => e.t >= (since || 0) - 1000 && e.s !== 'sys').slice(-80);
+    const text = lines.map((e) => e.l.replace(ANSI_KEEP, '')).join('\n');
+    try { return hints.diagnose(text, { bot, dir: this.dir(bot.id) }); } catch { return null; }
+  }
+
   tail(id, n = 15) {
     return this.state(id).logs.slice(-n).map((e) => e.l.replace(ANSI_KEEP, '')).join('\n');
   }
@@ -724,6 +737,19 @@ class Runner extends EventEmitter {
     else this.sys(bot.id, signal ? `終了しました (シグナル ${signal})` : `終了しました (終了コード ${code})`);
     this.emit('exit', bot.id, { code, signal, manual: false });
     const latest = (this.getBot && this.getBot(bot.id)) || bot;
+    // よくある原因なら、直し方を伝える (再起動しても直らないものは、自動の再起動をやめる)
+    const hint = code !== 0 && !reason ? this.diagnose(latest, s.startedAt) : null;
+    if (hint) {
+      s.hint = hint.text;
+      s.hintAction = hint.action || null;
+      this.sys(bot.id, `💡 ${hint.text}`);
+    }
+    if (hint && hint.fatal && latest.autoRestart) {
+      this.sys(bot.id, 'このエラーは再起動しても直らないので、自動の再起動はしません。直したら「起動」を押してください。');
+      this.setStatus(bot.id, 'crashed');
+      this.emit('crash', bot.id, { reason: 'exit', gaveUp: true, code, signal, tail: this.tail(bot.id), hint: hint.text });
+      return;
+    }
 
     if (!latest.autoRestart) {
       this.setStatus(bot.id, code === 0 && !reason ? 'stopped' : 'crashed');

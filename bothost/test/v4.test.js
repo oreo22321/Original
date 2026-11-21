@@ -421,3 +421,64 @@ test('Web 公開: WebSocket もつながる', async (t) => {
   assert.match(got, /PING/);
   void app;
 });
+
+test('止まった原因と直し方 (ヒント)', () => {
+  const hints = require('../lib/hints');
+  const dir = tmp('hints');
+  write(dir, 'main.py', 'import os\nimport discord\nTOKEN = os.getenv("TOKEN")\nkey = os.environ["OPENAI_API_KEY"]\n');
+  write(dir, '.env', 'OPENAI_API_KEY="sk-xxx"\nEMPTY=\n');
+  assert.deepStrictEqual(hints.scanEnv(dir).used, ['OPENAI_API_KEY', 'TOKEN']);
+  assert.deepStrictEqual(hints.missingEnv(dir, {}), ['TOKEN'], '.env にあるものは入っている扱い');
+  assert.ok(hints.usesDiscord(dir));
+  const login = 'discord.errors.HTTPException: 401 Unauthorized (error code: 0): 401: Unauthorized\ndiscord.errors.LoginFailure: Improper token has been passed.';
+  assert.match(hints.diagnose(login, { bot: { env: {} }, dir }).text, /環境変数 TOKEN から/);
+  const wrong = hints.diagnose(login, { bot: { env: { TOKEN: 'x' } }, dir });
+  assert.ok(wrong.fatal);
+  assert.match(wrong.text, /Reset Token/);
+  assert.match(hints.diagnose('Error [TokenInvalid]: An invalid token was provided.', { bot: { env: { DISCORD_TOKEN: 'x' } } }).text, /Reset Token/);
+  assert.match(hints.diagnose('discord.errors.PrivilegedIntentsRequired: Shard ID None is requesting privileged intents', {}).text, /MESSAGE CONTENT INTENT/);
+  const mod = hints.diagnose("ModuleNotFoundError: No module named 'dotenv'", { dir });
+  assert.match(mod.text, /python-dotenv/);
+  assert.deepStrictEqual(mod.action, { kind: 'pip', pkg: 'python-dotenv' }, 'ボタン 1 つで足せる');
+  assert.strictEqual(hints.diagnose("ModuleNotFoundError: No module named 'mysterylib'", { dir }).action, null, '知らない名前は勝手に入れない');
+  assert.deepStrictEqual(hints.diagnose("Error: Cannot find module 'dotenv'", {}).action, { kind: 'npm', pkg: 'dotenv' });
+  assert.strictEqual(hints.diagnose("Error: Cannot find module 'node:fs'", {}).action, null);
+  assert.match(hints.diagnose("Error: Cannot find module 'discord.js'\nRequire stack:", {}).text, /discord\.js/);
+  assert.strictEqual(hints.diagnose("Error: Cannot find module './commands/ping'", {}), null, '自分のファイルは別');
+  assert.match(hints.diagnose("KeyError: 'API_KEY'\n  os.environ['API_KEY']", {}).text, /API_KEY/);
+  assert.strictEqual(hints.diagnose('openai 401 Unauthorized', {}), null, 'Discord 以外の 401 は Discord のトークンのせいにしない');
+});
+
+test('サーバー: 空の環境変数は渡さない・トークンを整える・原因を伝えて無駄な再起動をしない', async (t) => {
+  const { app, call } = await startApp(t);
+  const { body: { bot } } = await call('POST', '/api/bots', { name: 'tok', template: 'python-discord' });
+  // まだ入れていない DISCORD_TOKEN (空の欄) は bot に渡さない → .env の値が使える
+  await call('PUT', `/api/bots/${bot.id}/file?path=main.py`, [
+    'import os',
+    'print("env", repr(os.environ.get("DISCORD_TOKEN")), flush=True)',
+    'class LoginFailure(Exception): pass',
+    'raise LoginFailure("Improper token has been passed.")  # discord.errors.LoginFailure のつもり',
+  ].join('\n'));
+  await call('PUT', `/api/bots/${bot.id}/file?path=requirements.txt`, '');
+  const before = (await call('GET', `/api/bots/${bot.id}`)).body.launch;
+  assert.strictEqual(before.discord, false);
+  await call('POST', `/api/bots/${bot.id}/start`);
+  for (let i = 0; i < 100 && app.runner.state(bot.id).status !== 'crashed'; i++) await new Promise((r) => setTimeout(r, 100));
+  const logs = app.runner.logs(bot.id).map((e) => e.l);
+  assert.ok(logs.includes('env None'), logs.join('\n'));
+  assert.ok(logs.some((l) => l.startsWith('💡 ') && /環境変数 DISCORD_TOKEN から/.test(l)), logs.join('\n'));
+  assert.ok(logs.some((l) => /再起動しても直らない/.test(l)));
+  assert.strictEqual(app.runner.state(bot.id).status, 'crashed', '自動の再起動はしない');
+  assert.match((await call('GET', `/api/bots/${bot.id}`)).body.bot.hint, /トークン/);
+
+  // コードが TOKEN という名前で読むなら、Discord の欄に入れたトークンをそこにも入れる。前後の空白・引用符・「Bot 」は外す
+  await call('PUT', `/api/bots/${bot.id}/file?path=main.py`, 'import os\nimport discord\nprint(os.getenv("TOKEN"))\n');
+  const info = (await call('GET', `/api/bots/${bot.id}`)).body.launch;
+  assert.ok(info.discord);
+  assert.deepStrictEqual(info.missingEnv, ['TOKEN']);
+  await call('PATCH', `/api/bots/${bot.id}`, { env: { DISCORD_TOKEN: ' "Bot abc.def​.ghi"\n' } });
+  const stored = app.store.bots.find((b) => b.id === bot.id).env;
+  assert.strictEqual(stored.DISCORD_TOKEN, 'abc.def.ghi');
+  assert.strictEqual(stored.TOKEN, 'abc.def.ghi');
+  assert.deepStrictEqual((await call('GET', `/api/bots/${bot.id}`)).body.launch.missingEnv, []);
+});

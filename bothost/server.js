@@ -18,6 +18,7 @@ const discord = require('./lib/discord');
 const { Backup } = require('./lib/backup');
 const { Runner } = require('./lib/runner');
 const launch = require('./lib/launch');
+const hints = require('./lib/hints');
 
 const ROOT = __dirname;
 const VERSION = require('./package.json').version;
@@ -185,7 +186,7 @@ function createApp(config = {}) {
         : info.signal ? `シグナル ${info.signal} で終了しました` : `終了コード ${info.code} で終了しました`;
     discord.notify(bot.notifyWebhook, {
       title: info.gaveUp ? `🔴 ${bot.name} が止まりました` : `🟠 ${bot.name} が落ちました (自動で再起動します)`,
-      description: info.gaveUp ? `${why}。ログを見て直してから起動してください。` : `${why}。`,
+      description: info.hint ? `${why}。\n💡 ${info.hint}` : info.gaveUp ? `${why}。ログを見て直してから起動してください。` : `${why}。`,
       color: info.gaveUp ? 'bad' : 'warn',
       log: info.tail,
     }).catch((e) => runner.sys(id, `通知を送れませんでした: ${e.message}`));
@@ -260,6 +261,9 @@ function createApp(config = {}) {
       label: launch.KINDS[plan.kind] ? launch.KINDS[plan.kind].label : null,
       problem: plan.problem || null, note: plan.note || null, build: plan.build || null,
       candidates: found.candidates,
+      // コードが使っているのに、まだ入っていない環境変数
+      missingEnv: hints.missingEnv(runner.dir(bot.id), bot.env),
+      discord: hints.usesDiscord(runner.dir(bot.id)),
     };
   };
 
@@ -273,6 +277,9 @@ function createApp(config = {}) {
     return true;
   };
   const newSlug = () => crypto.randomBytes(12).toString('base64url');
+  // コードが Discord のトークンを読む環境変数の名前 (DISCORD_TOKEN 以外)
+  const tokenAliases = (bot) => hints.scanEnv(runner.dir(bot.id)).used
+    .filter((k) => k !== 'DISCORD_TOKEN' && (/^(BOT_)?TOKEN$/i.test(k) || /DISCORD/i.test(k) && /TOKEN/i.test(k)));
 
   const ownedBot = (user, id) => {
     const bot = findBot(id);
@@ -511,11 +518,18 @@ function createApp(config = {}) {
         if (v === null) delete bot.env[k];
         else if (typeof v === 'string') {
           if (v.length > 4096) fail(400, '環境変数の値が長すぎます');
-          bot.env[k] = k === 'DISCORD_TOKEN' ? v.trim().replace(/^Bot\s+/i, '') : v;
+          // トークンは、前後の空白・改行・引用符・「Bot 」を外す (スマホでコピーすると付くことがある)
+          bot.env[k] = /TOKEN$/.test(k) ? v.replace(/[\s\u200b-\u200d\ufeff]+/g, ' ').trim().replace(/^(['"`])(.*)\1$/, '$2').replace(/^Bot\s+/i, '').replace(/\s+/g, '') : v;
         }
       }
       if (Object.keys(bot.env).length > 50) fail(400, '環境変数は 50 個までです');
-      if ('DISCORD_TOKEN' in body.env) bot.discord = null;
+      if ('DISCORD_TOKEN' in body.env) {
+        bot.discord = null;
+        // コードがほかの名前 (TOKEN・BOT_TOKEN など) でトークンを読んでいるなら、そこにも同じものを入れる
+        if (bot.env.DISCORD_TOKEN) {
+          for (const k of tokenAliases(bot)) if (!bot.env[k]) bot.env[k] = bot.env.DISCORD_TOKEN;
+        }
+      }
     }
     store.save();
     return { bot: publicBot(bot), launch: launchInfo(bot) };
@@ -587,7 +601,8 @@ function createApp(config = {}) {
   // ----- Discord -----
   route('POST', '/api/bots/:id/discord-check', async ({ user, params }) => {
     const bot = ownedBot(user, params.id);
-    const result = await discord.checkToken(bot.env?.DISCORD_TOKEN, cfg.discordApi ? { api: cfg.discordApi } : {});
+    const name = ['DISCORD_TOKEN', ...tokenAliases(bot)].find((k) => bot.env && bot.env[k]);
+    const result = await discord.checkToken(name ? bot.env[name] : '', cfg.discordApi ? { api: cfg.discordApi } : {});
     if (result.ok) {
       bot.discord = {
         id: result.id, username: result.username, avatarUrl: result.avatarUrl, inviteUrl: result.inviteUrl,

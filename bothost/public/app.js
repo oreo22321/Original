@@ -768,6 +768,9 @@ async function renderBot(id, tab) {
   const hero = h('div', { class: 'bot-hero' });
   const stats = h('div', { class: 'stat-row' });
   const connEl = h('span', { class: 'conn' }, icon('alert', 'sm'), '再接続中…');
+  // 止まった原因と直し方 (サーバーがログから見つけたもの)
+  const hintEl = h('div', { class: 'banner warn hint-banner', style: 'margin-bottom:12px' });
+  hintEl.hidden = true;
   connEl.hidden = true;
   const live = { ...bot, history: [] };
 
@@ -778,6 +781,14 @@ async function renderBot(id, tab) {
   };
   const drawHead = () => {
     const active = ACTIVE.includes(live.status);
+    hintEl.hidden = !live.hint || active;
+    if (live.hint && !active) {
+      const a = live.hintAction;
+      fill(hintEl, icon('alert'), h('div', { class: 'grow' }, h('b', {}, '止まった原因と直し方'), h('div', {}, live.hint),
+        a && h('button', { class: 'btn sm primary', style: 'margin-top:10px', onclick: (e) => fixAndStart(a, e.currentTarget) },
+          icon('zap', 'sm'), a.kind === 'pip' ? `requirements.txt に「${a.pkg}」を足して起動` : `package.json に「${a.pkg}」を足して起動`)),
+        h('a', { class: 'btn sm', href: `#/bots/${id}/settings` }, '設定'));
+    }
     fill(hero,
       avatar(bot, 'lg'),
       h('div', { class: 'title' },
@@ -792,6 +803,26 @@ async function renderBot(id, tab) {
         ? [h('button', { class: 'btn', onclick: act('restart') }, icon('restart'), '再起動'), h('button', { class: 'btn danger', onclick: act('stop') }, icon('stop'), '停止')]
         : [h('button', { class: 'btn primary', onclick: act('start') }, icon('play'), '起動')]));
     drawStats();
+  };
+  // ボタン 1 つで直す: 足りないライブラリを requirements.txt / package.json に書き足して起動
+  const fixAndStart = async (a, btn) => {
+    btn.disabled = true;
+    try {
+      const read = async (f) => { try { return await (await api('GET', `/api/bots/${id}/file?path=${f}`, undefined, { raw: true })).text(); } catch { return null; } };
+      if (a.kind === 'pip') {
+        const cur = (await read('requirements.txt')) || '';
+        const has = cur.split(/\r?\n/).some((l) => l.trim().toLowerCase().split(/[<>=!~\[; ]/)[0] === a.pkg.toLowerCase());
+        if (!has) await api('PUT', `/api/bots/${id}/file?path=requirements.txt`, (cur && !cur.endsWith('\n') ? cur + '\n' : cur) + a.pkg + '\n');
+      } else {
+        const text = await read('package.json');
+        let pkg = { name: 'bot', private: true, dependencies: {} };
+        if (text) { try { pkg = JSON.parse(text); } catch { throw new Error('package.json の書き方が正しくないので、書き足せませんでした'); } }
+        pkg.dependencies = { ...(pkg.dependencies || {}), [a.pkg]: (pkg.dependencies || {})[a.pkg] || 'latest' };
+        await api('PUT', `/api/bots/${id}/file?path=package.json`, JSON.stringify(pkg, null, 2) + '\n');
+      }
+      toast(`「${a.pkg}」を足しました。起動します`);
+      await botAction(id, 'start', btn);
+    } catch (e) { toast(e.message, true); btn.disabled = false; }
   };
   const drawStats = () => {
     const waiting = live.status === 'restarting' && live.restartAt ? Math.max(0, Math.ceil((live.restartAt - Date.now()) / 1000)) : null;
@@ -843,7 +874,7 @@ async function renderBot(id, tab) {
         h('div', { class: 'grow' }, h('b', {}, 'このままでは起動できません'), h('div', {}, launch.problem)),
         h('a', { class: 'btn sm', href: `#/bots/${id}/files` }, 'ファイル'), h('a', { class: 'btn sm', href: `#/bots/${id}/settings` }, '設定')));
     }
-    body.append(logView.el);
+    body.append(hintEl, logView.el);
   } else if (tab === 'files') await renderFiles(id, bot, body, () => live.status, (b, l) => update(b, l));
   else renderSettings(bot, body, update, launch);
 }
@@ -1254,7 +1285,7 @@ async function renderFiles(id, bot, body, getStatus, onLaunch) {
 // ================= 設定 =================
 function renderSettings(bot, body, onSaved, launch) {
   const docker = state.config.mode === 'docker';
-  const isDiscord = (bot.template || '').includes('discord') || bot.env.DISCORD_TOKEN !== undefined;
+  const isDiscord = (bot.template || '').includes('discord') || bot.env.DISCORD_TOKEN !== undefined || !!(launch && launch.discord);
   const saved = (b, msg, l) => { if (l) launch = l; onSaved(b, l); bot = b; if (msg) toast(msg); };
   const redraw = () => renderSettings(bot, body, onSaved, launch);
   const section = (ic, title, hint, ...rest) => h('section', { class: 'section card' }, h('h2', {}, icon(ic), title), hint && h('p', { class: 'hint' }, hint), ...rest);
@@ -1328,7 +1359,14 @@ function renderSettings(bot, body, onSaved, launch) {
     };
     const keys = Object.keys(bot.env || {}).filter((k) => !(k === 'DISCORD_TOKEN' && isDiscord));
     keys.forEach((key) => addRow(key, true));
-    if (!keys.length) addRow();
+    // コードが使っているのに、まだ入っていないもの (os.getenv("TOKEN") など) の欄を用意する
+    const missing = ((launch && launch.missingEnv) || []).filter((k) => !(k in (bot.env || {})));
+    for (const k of missing) {
+      addRow(k, false);
+      rows[rows.length - 1].v.classList.add('needs');
+      rows[rows.length - 1].v.placeholder = 'コードが使っています。値を入れてください';
+    }
+    if (!keys.length && !missing.length) addRow();
     const saveEnv = async (btn) => {
       const env = {};
       for (const r of rows) {
@@ -1349,6 +1387,8 @@ function renderSettings(bot, body, onSaved, launch) {
       } catch (e) { toast(e.message, true); btn.disabled = false; }
     };
     return section('key', '環境変数', 'API キーやパスワードはコードに書かず、ここに入れてください。Python は os.environ["名前"]、Node.js は process.env.名前 で読めます。保存した値は画面には出しません。',
+      missing.length ? h('div', { class: 'banner warn', style: 'margin-bottom:12px' }, icon('alert'),
+        h('div', {}, `コードが使っている環境変数で、まだ入っていないもの: ${missing.join('・')}`)) : null,
       envRows,
       h('div', { class: 'row-end' },
         h('button', { class: 'btn sm', onclick: () => addRow() }, icon('plus', 'sm'), '追加'),
