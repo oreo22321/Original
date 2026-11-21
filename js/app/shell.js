@@ -12,7 +12,7 @@
 //   storage() → { usage, quota } / project() → 名前 / command(id) (アプリのコマンド)
 // }
 import { isBin } from './bin.js'
-import { C, Flow, ShellError, Stream, dirName, globRe, hasGlob, resolvePath, showPath, unescapeGlob } from './shell/util.js'
+import { C, Flow, ShellError, Stream, dirName, globRe, hasGlob, resolvePath, showPath, unescapeGlob, patRe, braceExpand } from './shell/util.js'
 import { arith, lex, parse } from './shell/parse.js'
 import FILES from './shell/cmd-files.js'
 import TEXT from './shell/cmd-text.js'
@@ -20,11 +20,12 @@ import SYS from './shell/cmd-sys.js'
 import SCRIPT from './shell/cmd-script.js'
 import PYTHON from './shell/cmd-python.js'
 import GIT from './shell/cmd-git.js'
+import MORE from './shell/cmd-more.js'
 export { C, resolvePath, showPath, strWidth, ShellError } from './shell/util.js'
 export { lex, parse, arith } from './shell/parse.js'
 
 // コマンドの一覧 (種類ごとのファイルから集める)
-const COMMANDS = { ...FILES, ...TEXT, ...SYS, ...SCRIPT, ...PYTHON, ...GIT }
+const COMMANDS = { ...FILES, ...TEXT, ...SYS, ...SCRIPT, ...PYTHON, ...GIT, ...MORE }
 COMMANDS.py = COMMANDS.python
 export const COMMAND_NAMES = Object.keys(COMMANDS)
 // ============================================================
@@ -166,20 +167,10 @@ export class Shell {
 
   // ---- 単語の展開 ($変数・$(…)・$(( 式 ))・ワイルドカード) ----
   async expand(word, io) {
-    let text = '', pat = '', split = false
-    for (const s of word) {
-      if (s.t === 'lit') { text += s.v; pat += s.v }
-      else if (s.t === 'q') { text += s.v; pat += s.v.replace(/[*?[\]\\]/g, '\\$&') }
-      else {
-        let v
-        if (s.t === 'var' || s.t === 'qvar') v = this.varValue(s.v)
-        else if (s.t === 'arith') v = String(arith(await this.expandText(s.v, io), n => this.varValue(n)))
-        else v = await this.capture(s.v, io)
-        text += v
-        pat += v.replace(/[*?[\]\\]/g, '\\$&')
-        if (s.t === 'var' || s.t === 'sub') split = true
-      }
-    }
+    // {a,b} {1..3} を先に広げる
+    const many = braceExpand(word)
+    if (many.length > 1) { const out = []; for (const w of many) out.push(...await this.expand(w, io)); return out }
+    const { text, pat, split } = await this.parts(word, io)
     if (split) return text.split(/\s+/).filter(Boolean)
     if (hasGlob(pat)) {
       const hits = this.glob(pat)
@@ -187,6 +178,91 @@ export class Shell {
       return [unescapeGlob(pat)]
     }
     return [text]
+  }
+  // 単語の中身: text (展開した文字) / pat (ワイルドカードとして使う形。引用符の中は * を文字として) / split (空白で分ける)
+  async parts(word, io) {
+    let text = '', pat = '', split = false
+    for (const s of word) {
+      if (s.t === 'lit') { text += s.v; pat += s.v }
+      else if (s.t === 'q') { text += s.v; pat += s.v.replace(/[*?[\]\\]/g, '\\$&') }
+      else {
+        let v
+        if (s.t === 'var' || s.t === 'qvar') v = await this.param(s.v, io)
+        else if (s.t === 'arith') v = String(arith(await this.expandText(s.v, io), n => this.varValue(n)))
+        else v = await this.capture(s.v, io)
+        text += v
+        pat += v.replace(/[*?[\]\\]/g, '\\$&')
+        if (s.t === 'var' || s.t === 'sub') split = true
+      }
+    }
+    return { text, pat, split }
+  }
+  // ${…}: ${x:-既定} ${x:=既定} ${x:+別} ${x:?エラー} ${#x} ${x#pat} ${x##pat} ${x%pat} ${x%%pat} ${x/a/b} ${x//a/b} ${x:1:3} ${x^^} ${x,,}
+  async param(expr, io) {
+    if (/^([A-Za-z_]\w*|[0-9?#@*$])$/.test(expr)) return this.varValue(expr)
+    let m = /^#([A-Za-z_]\w*|[0-9@*])$/.exec(expr)
+    if (m) return String(m[1] === '@' || m[1] === '*' ? (this.args[this.args.length - 1] || []).length : this.varValue(m[1]).length)
+    m = /^([A-Za-z_]\w*|[0-9@*?#$])([\s\S]*)$/.exec(expr)
+    if (!m) throw new ShellError(`\${${expr}}: この書き方は使えません`)
+    const [, name, rest] = m
+    const val = this.varValue(name)
+    const word = t => this.expandString(t, io)
+    let r = /^(:?)([-=+?])([\s\S]*)$/.exec(rest)
+    if (r) {
+      const [, colon, op, w] = r
+      const has = this.isSet(name) && (!colon || val !== '')
+      if (op === '-') return has ? val : word(w)
+      if (op === '=') { if (has) return val; const v = await word(w); this.setVar(name, v); return v }
+      if (op === '+') return has ? word(w) : ''
+      if (!has) throw new ShellError(`${name}: ${(await word(w)) || '値がありません'}`)
+      return val
+    }
+    if ((r = /^(##?|%%?)([\s\S]*)$/.exec(rest))) {
+      const re = patRe(await word(r[2]))
+      const [op] = [r[1]]
+      if (op[0] === '#') {
+        const lens = [...Array(val.length + 1).keys()]
+        if (op === '##') lens.reverse()
+        for (const k of lens) if (re.test(val.slice(0, k))) return val.slice(k)
+      } else {
+        const lens = [...Array(val.length + 1).keys()].map(k => val.length - k)
+        if (op === '%%') lens.reverse()
+        for (const k of lens) if (re.test(val.slice(k))) return val.slice(0, k)
+      }
+      return val
+    }
+    if ((r = /^(\/\/?|\/#|\/%)([^/]*)(?:\/([\s\S]*))?$/.exec(rest))) {
+      const body = patRe(await word(r[2]), false).source
+      const rep = await word(r[3] ?? '')
+      const re = new RegExp(r[1] === '/#' ? '^(?:' + body + ')' : r[1] === '/%' ? '(?:' + body + ')$' : body, r[1] === '//' ? 'gs' : 's')
+      return body ? val.replace(re, () => rep) : val
+    }
+    if ((r = /^:\s*(-?\d+)(?::\s*(-?\d+))?$/.exec(rest))) {
+      let off = Number(r[1])
+      if (off < 0) off = Math.max(0, val.length + off)
+      if (r[2] === undefined) return val.slice(off)
+      const len = Number(r[2])
+      return len < 0 ? val.slice(off, Math.max(off, val.length + len)) : val.substr(off, len)
+    }
+    if (rest === '^^') return val.toUpperCase()
+    if (rest === ',,') return val.toLowerCase()
+    if (rest === '^') return val.charAt(0).toUpperCase() + val.slice(1)
+    if (rest === ',') return val.charAt(0).toLowerCase() + val.slice(1)
+    throw new ShellError(`\${${expr}}: この書き方は使えません`)
+  }
+  isSet(name) {
+    if (/^\d$/.test(name)) return name === '0' || (this.args[this.args.length - 1] || []).length >= Number(name)
+    if (/^[?#@*$]$/.test(name)) return true
+    for (let k = this.locals.length - 1; k >= 0; k--) if (name in this.locals[k]) return true
+    return name in this.env || ['PWD', 'OLDPWD', 'RANDOM'].includes(name)
+  }
+  // "…" の中と同じように展開する (ヒアドキュメント・${x:-…} の中): $x ${…} $(…) $((…)) `…`
+  async expandString(text, io) {
+    if (!text.includes('$') && !text.includes('`')) return text.replace(/\\([$`\\])/g, '$1')
+    let toks
+    try { toks = lex('"' + text.replace(/\\(?![$`\\"\n])/g, '\\\\').replace(/"/g, '\\"') + '"') } catch { return text }
+    if (!toks.length || !toks[0].word) return text
+    return (await this.parts(toks[0].word, io)).text
   }
   // $(( )) の中の $変数
   async expandText(src, io) {
@@ -223,7 +299,7 @@ export class Shell {
   // ---- 実行 ----
   async run(line, io) {
     this.idxCache = null
-    if (!this.args.length) this.loops = 0
+    if (!this.args.length) { this.loops = 0; this.reportJobs(io) }
     let list
     try {
       list = parse(lex(line))
@@ -245,6 +321,14 @@ export class Shell {
       const prev = k ? list[k - 1].then : null
       if (prev === '&&' && status !== 0) continue
       if (prev === '||' && status === 0) continue
+      // コマンド & : 裏で動かす (jobs / fg / wait / kill %1)。a && b & は a && b をまとめて裏で
+      let e = k
+      while (e < list.length && (list[e].then === '&&' || list[e].then === '||')) e++
+      if (e < list.length && list[e].then === '&') {
+        this.startJob(list.slice(k, e + 1).map((x, n, a) => (n === a.length - 1 ? { ...x, then: null } : x)), io)
+        k = e; status = 0; this.status = 0
+        continue
+      }
       status = await this.runPipe(list[k].pipe, io)
       this.status = status
       if (io.signal && io.signal.aborted) { this.status = 130; return 130 }
@@ -252,6 +336,33 @@ export class Shell {
     this.status = status
     return status
   }
+  // ---- 裏で動かすコマンド (ジョブ) ----
+  startJob(items, io) {
+    if (!this.jobs) { this.jobs = []; this.jobSeq = 0 }
+    const ac = new AbortController()
+    const id = ++this.jobSeq
+    const pipeText = pipe => pipe.map(c => (c.words ? c.words.map(w => w.map(x => x.v).join('')).join(' ') : '…')).join(' | ')
+    const text = items.map(x => pipeText(x.pipe) + (x.then ? ' ' + x.then : '')).join(' ')
+    const job = { id, text, ac, done: false, status: null, reported: false, started: Date.now() }
+    job.promise = this.runList(items, { ...io, signal: ac.signal, tty: false }).then(s => s, e => { if (e && e.name !== 'AbortError') io.err(`forgesh: ${e.message}\n`); return ac.signal.aborted ? 143 : 1 })
+      .then(s => { job.done = true; job.status = s; if (this.host.jobDone) this.host.jobDone(job) })
+    this.jobs.push(job)
+    io.err(`[${id}] ${text}\n`)
+    return job
+  }
+  // 終わったジョブを知らせる (次のコマンドの前に)
+  reportJobs(io) {
+    if (!this.jobs) return
+    for (const j of this.jobs) if (j.done && !j.reported) { j.reported = true; io.err(`[${j.id}]  ${j.status === 0 ? '終了' : j.status === 143 ? '止めました' : `終了 (${j.status})`}  ${j.text}\n`) }
+    this.jobs = this.jobs.filter(j => !j.reported)
+  }
+  findJob(spec) {
+    const list = this.jobs || []
+    if (!spec || spec === '%' || spec === '%%' || spec === '%+') return list[list.length - 1] || null
+    const n = Number(String(spec).replace(/^%/, ''))
+    return list.find(j => j.id === n) || null
+  }
+
   // 繰り返しの途中で画面を止めない・Ctrl+C で止める
   async tick(io) {
     if (io.signal && io.signal.aborted) throw Object.assign(new Error('止めました'), { name: 'AbortError' })
@@ -267,6 +378,15 @@ export class Shell {
         return 0
       case 'group':
         return this.runList(node.body, io)
+      case 'case': {
+        const subj = (await this.parts(node.subject, io)).text
+        for (const arm of node.arms) {
+          for (const p of arm.pats) {
+            if (patRe((await this.parts(p, io)).pat).test(subj)) return this.runList(arm.body, io)
+          }
+        }
+        return 0
+      }
       case 'if': {
         for (const b of node.branches) {
           if ((await this.runList(b.cond, io)) === 0) return this.runList(b.body, io)
@@ -337,8 +457,13 @@ export class Shell {
       let bad = false
       for (const r of cmd.redirs) {
         if (r.op === '2>&1') { err = out; continue }
+        if (r.op === '<<') {
+          try { stdin = new Stream(r.heredoc.expand ? await this.expandString(r.heredoc.text, io) : r.heredoc.text) } catch (e) { io.err(`forgesh: ${e.message}\n`); bad = true; break }
+          continue
+        }
         let target
-        try { target = (await this.expand(r.word, io))[0] || '' } catch (e) { io.err(`forgesh: ${e.message}\n`); bad = true; break }
+        try { target = r.op === '<<<' ? (await this.parts(r.word, io)).text : (await this.expand(r.word, io))[0] || '' } catch (e) { io.err(`forgesh: ${e.message}\n`); bad = true; break }
+        if (r.op === '<<<') { stdin = new Stream(target + '\n'); continue }
         if (r.op === '<') {
           let t = null
           try { t = await this.readText(target) } catch (e) { io.err(`forgesh: ${e.message}\n`); bad = true; break }

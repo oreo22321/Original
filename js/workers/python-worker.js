@@ -17,6 +17,7 @@ const PYODIDE_VERSION = '314.0.8'
 const CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`
 const MICROPIP = 'micropip-0.11.1-py3-none-any.whl'
 
+let startedFromSnapshot = false
 let post = (m, transfer) => (transfer ? self.postMessage(m, transfer) : self.postMessage(m))
 let py = null
 let loading = null
@@ -93,6 +94,34 @@ function write(kind, bytes) {
 setInterval(() => flush(), 80)
 
 // ---- 読み込み ----
+// ---- 起動を速く: 準備が終わった Python の状態 (メモリのスナップショット) を保存して、次からそこから始める ----
+// ・ふつうに起動すると 2 秒ほど (Python の準備 + よく使う標準ライブラリの読み込み)。スナップショットからなら 0.2 秒ほど
+// ・保存するのは、まだプログラムを動かしていない・画面ともつながっていない状態だけ (毎回同じ)
+// ・30 MB ほどなので gzip で縮めて (7 MB ほど) Cache Storage に置く。Pyodide の版か PRELOAD が変わったら作り直す
+const SNAP_CACHE = 'forgecode-pysnap'
+const PRELOAD = 'json, ast, inspect, asyncio, re, traceback, typing, dataclasses, collections, functools, itertools, random, math, datetime, pathlib, io, base64, codeop, rlcompleter, linecache, tokenize, urllib.request, urllib.parse, zipfile, shutil, tempfile, textwrap, string, decimal, fractions, statistics, heapq, bisect, copy, pprint, enum, contextlib, glob, csv, html, uuid, hashlib, struct, weakref, operator, types, warnings, threading, queue, concurrent.futures, subprocess, email.utils, http.client, unittest, bdb, codecs, locale, calendar, time, os, sys'
+const SNAP_KEY = 'v1-' + PRELOAD.length
+const snapUrl = base => new URL(`__fc_pysnap__/${encodeURIComponent(base.replace(/[^\w.-]+/g, '_'))}/${SNAP_KEY}`, self.location && self.location.href ? self.location.href : 'http://localhost/').href
+const canSnap = () => typeof caches !== 'undefined' && typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined'
+async function readSnapshot(base) {
+  if (!canSnap()) return null
+  try {
+    const c = await caches.open(SNAP_CACHE)
+    const r = await c.match(snapUrl(base))
+    if (!r || !r.body) return null
+    return new Uint8Array(await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
+  } catch { return null }
+}
+async function saveSnapshot(base, buf) {
+  try {
+    const gz = await new Response(new Blob([buf]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer()
+    const c = await caches.open(SNAP_CACHE)
+    for (const k of await c.keys()) if (k.url !== snapUrl(base)) await c.delete(k)   // 古い版のもの
+    await c.put(snapUrl(base), new Response(gz, { headers: { 'Content-Type': 'application/octet-stream' } }))
+  } catch {}
+}
+async function dropSnapshot(base) { try { (await caches.open(SNAP_CACHE)).delete(snapUrl(base)) } catch {} }
+
 async function ensure() {
   if (py) return py
   if (!loading) {
@@ -100,7 +129,20 @@ async function ensure() {
       post({ type: 'status', state: 'loading', text: 'Python を準備しています…' })
       const u = new URL('../../vendor/pyodide/', import.meta.url)
       const base = u.protocol === 'file:' ? decodeURIComponent(u.pathname) : u.href // Node (テスト) ではファイルのパス
-      const p = await loadPyodide({ indexURL: base, lockFileURL: base + 'pyodide-lock.json', packageBaseUrl: CDN, env: { HOME: '/home/pyodide', MPLBACKEND: 'AGG', PYTHONUNBUFFERED: '1' } })
+      const opts = { indexURL: base, lockFileURL: base + 'pyodide-lock.json', packageBaseUrl: CDN, env: { HOME: '/home/pyodide', MPLBACKEND: 'AGG', PYTHONUNBUFFERED: '1' } }
+      let p = null, made = null
+      const snap = await readSnapshot(base)
+      if (snap) {
+        try { p = await loadPyodide({ ...opts, _loadSnapshot: snap }) } catch { p = null; dropSnapshot(base) }
+      }
+      if (!p) {
+        const make = canSnap()
+        p = await loadPyodide(make ? { ...opts, _makeSnapshot: true } : opts)
+        if (make) {
+          try { p.runPython('import ' + PRELOAD); made = p.makeMemorySnapshot() } catch { made = null }
+        }
+      }
+      startedFromSnapshot = !!snap && !made
       p.setStdout({ write: b => write('out', b) })
       p.setStderr({ write: b => write('err', b) })
       p.setStdin({ stdin: readLine, isatty: true })
@@ -115,7 +157,9 @@ async function ensure() {
       p.globals.set('__fc_dbg_src', DEBUGGER)
       p.runPython(SETUP)
       py = p
-      post({ type: 'status', state: 'ready', text: `Python ${p.runPython('import sys; sys.version.split()[0]')}` })
+      post({ type: 'status', state: 'ready', text: `Python ${p.runPython('import sys; sys.version.split()[0]')}`, snapshot: startedFromSnapshot })
+      // 次からすぐ起動できるように、手が空いたら保存する
+      if (made) { const buf = made; made = null; setTimeout(() => saveSnapshot(base, buf), 2500) }
       return p
     })().catch(e => { loading = null; throw e })
   }

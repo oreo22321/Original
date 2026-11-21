@@ -203,6 +203,12 @@ export default {
     return 0
   },
   async kill(args, ctx) {
+    // kill %1: 裏で動かしているジョブを止める
+    const jobArgs = args.filter(a => a.startsWith('%'))
+    if (jobArgs.length) {
+      for (const a of jobArgs) { const j = this.findJob(a); if (!j) { ctx.err(`kill: ${a}: そのジョブはありません\n`); return 1 } j.ac.abort() }
+      return 0
+    }
     const run = this.host.running ? this.host.running() : null
     if (!run) { ctx.err('kill: 実行中のプログラムはありません\n'); return 1 }
     await this.host.command('stop')

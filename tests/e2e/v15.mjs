@@ -167,6 +167,16 @@ await step(page, 'v15: more menu shows the version', async () => {
   if (!/ForgeCode 15\.0\.0/.test(mt)) throw new Error(mt)
   await page.keyboard.press('Escape')
 })
+await step(page, 'v15: Python starts from the saved snapshot after a reload', async () => {
+  for (let i = 0; i < 40; i++) { if (await page.evaluate(async () => (await (await caches.open('forgecode-pysnap')).keys()).length)) break; await page.waitForTimeout(500) }
+  await page.reload()
+  await page.waitForSelector('.cm-editor', { timeout: 30000 })
+  await page.evaluate(async () => { window.__app = (await import('/js/app/app.js')).app; window.__appmod = await import('/js/app/app.js') })
+  await page.evaluate(() => window.__app.editors.open('main.py'))
+  await setDoc('import sys\nprint("snap", "statistics" in sys.modules, "email.utils" in sys.modules)\n')
+  await page.evaluate(() => window.__app.commands.get('run').run())
+  await page.waitForFunction(() => /snap True True/.test(document.querySelector('.output')?.innerText || ''), null, { timeout: 60000 })
+})
 await step(page, 'v15: no console errors', async () => { const e = errors.filter(x => !/favicon|status of 404/.test(x)); if (e.length) throw new Error(e.join(' | ')) })
 
 await ctx.close()

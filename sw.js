@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = 'aa471eb3a5'
+const VERSION = 'adee3ecabc'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -23,6 +23,7 @@ const PRECACHE = [
   "dist/chunks/chunk-AGU3OMW5.js",
   "dist/chunks/chunk-CANPDHTU.js",
   "dist/chunks/chunk-DAL56S24.js",
+  "dist/chunks/chunk-EV7RQ4TY.js",
   "dist/chunks/chunk-GFFV3COP.js",
   "dist/chunks/chunk-HLAUKS6A.js",
   "dist/chunks/chunk-JSS2YWBD.js",
@@ -32,7 +33,6 @@ const PRECACHE = [
   "dist/chunks/chunk-Q6LWNVQE.js",
   "dist/chunks/chunk-QJPW3PIS.js",
   "dist/chunks/chunk-QR6QNIQX.js",
-  "dist/chunks/chunk-QWDG2I52.js",
   "dist/chunks/chunk-VLK6O2HE.js",
   "dist/chunks/chunk-WYABCII2.js",
   "dist/chunks/chunk-Z6M43OW4.js",
@@ -40,18 +40,18 @@ const PRECACHE = [
   "dist/chunks/cloud-core-DLVJ7J22.js",
   "dist/chunks/engine-KSS6D2WT.js",
   "dist/chunks/explain-OLE4ZNWD.js",
-  "dist/chunks/fflate-ECKODDUP.js",
+  "dist/chunks/fflate-YZ6GXIB7.js",
   "dist/chunks/file-preview-WRTESBB5.js",
   "dist/chunks/generate-GFHSBG4N.js",
   "dist/chunks/github-sync-27SMMTPX.js",
-  "dist/chunks/help-LRDGEFUZ.js",
-  "dist/chunks/i18n-en-TSIMURZU.js",
+  "dist/chunks/help-4SJF4NH6.js",
+  "dist/chunks/i18n-en-46ZL5DCT.js",
   "dist/chunks/knowledge-3US6XSXY.js",
-  "dist/chunks/notebook-4QZBRBEK.js",
+  "dist/chunks/notebook-B52LMZIP.js",
   "dist/chunks/preview-VRZ4WJN4.js",
   "dist/chunks/profile-view-ZSELUOQH.js",
   "dist/chunks/scm-LMLNLFW4.js",
-  "dist/chunks/terminal-IZV46Z4T.js",
+  "dist/chunks/terminal-BUJBDMIJ.js",
   "dist/chunks/tests-view-MVHPQGN4.js",
   "dist/chunks/text-GPDYCE7D.js",
   "dist/chunks/tk-view-QOCV2VXO.js",
@@ -86,7 +86,7 @@ self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => {
     const old = keys.filter(k => /^forgecode-[0-9a-f]{6,}$/.test(k) && k !== CACHE)
     const keep = old[old.length - 1]
-    return Promise.all(keys.filter(k => k.startsWith('forgecode-') && k !== CACHE && k !== keep && k !== RUNTIME && k !== PYODIDE_CACHE && k !== LIB_CACHE && !k.startsWith('forgecode-remote')).map(k => caches.delete(k)))
+    return Promise.all(keys.filter(k => k.startsWith('forgecode-') && k !== CACHE && k !== keep && k !== RUNTIME && k !== PYODIDE_CACHE && k !== LIB_CACHE && k !== 'forgecode-pysnap' && !k.startsWith('forgecode-remote')).map(k => caches.delete(k)))
   }).then(() => self.clients.claim()))
 })
 

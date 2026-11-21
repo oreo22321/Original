@@ -24,6 +24,37 @@ export function showHelp(section) {
     <li><b>実行画面</b>: 実行中は上に「停止」、終わると「もう一度」。設定 → 実行 → 実行結果の表示 で、全画面ではなく下のパネルに出すこともできます。実行中にコードへ戻ったときは、右下のボタンで実行画面に戻れます。</li>
     <li>ファイルを長押し → <b>▶ で常にこのファイルを実行</b> を選ぶと、別のファイルを編集中でもそのファイルを実行します。範囲を選んで「選択範囲を実行」もできます。</li>
   </ul>
+  <h3 id="help-notebook">ノートブック</h3>
+  <ul>
+    <li>「その他」→「新しいノートブック」、または <code>.ipynb</code> のファイルを開きます。Jupyter・VS Code・Google Colab のノートブックも開けます。</li>
+    <li>セルに Python を書いて <b>▶</b> か <kbd>Shift + Enter</kbd> (実行して次へ)・<kbd>Ctrl/⌘ + Enter</kbd> (その場で実行)・<kbd>Alt + Enter</kbd> (実行して下に追加)。</li>
+    <li>変数はセルをまたいで残ります。「…」→「カーネルを再起動」で消せます。最後の式の値・<code>print</code>・表 (pandas)・図 (matplotlib)・エラーを、セルの下に出します。</li>
+    <li>Markdown のセルは見出し・文章のメモに。ダブルタップで書き直せます。「…」→「Python のファイルに書き出す」で <code>.py</code> にもできます。</li>
+  </ul>
+  <h3 id="help-web">Web アプリ・Web ページ</h3>
+  <ul>
+    <li><b>Python の Web アプリ</b>: Flask (<code>app.run()</code>)・FastAPI (<code>uvicorn.run(app)</code>)・Bottle・<code>wsgiref</code>・<code>http.server</code> を ▶ で実行すると、ポートを開く代わりに<b>アプリの中のブラウザ (プレビュー)</b> で動きます。リンク・フォーム・<code>fetch</code> もそのまま届き、通信の記録は出力に出ます。</li>
+    <li><b>HTML・CSS・JavaScript</b>: <code>.html</code> を開いて ▶ (または上の地球のアイコン) で表示します。<code>console.log</code> とエラーは、プレビューの「コンソール」に出ます。</li>
+    <li>ターミナルでは <code>flask run</code>・<code>python -m http.server</code>・<code>preview ファイル.html</code>。Flask は初回だけインターネットから読み込みます。</li>
+  </ul>
+  <h3 id="help-tests">テスト</h3>
+  <ul>
+    <li><code>test_</code> で始まるファイル (例: <code>test_main.py</code>) に、<code>test</code> で始まる関数を書きます: <code>def test_add(): assert add(1, 2) == 3</code></li>
+    <li>左の<b>テスト</b>で ▶ (すべて・ファイルごと・1 つだけ)。✓ ✗ と時間、失敗した行と値 (<code>assert 4 == 5</code>) を出し、タップでその行へ移動します。ファイルを開いて「… のテストを作る」でひな形も作れます。</li>
+    <li>pytest と同じ書き方: フィクスチャ (<code>tmp_path</code>・<code>capsys</code>・<code>monkeypatch</code>・<code>@pytest.fixture</code>)・<code>@pytest.mark.parametrize</code>・<code>skip</code>・<code>xfail</code>・<code>pytest.raises</code>・<code>pytest.approx</code>・<code>unittest.TestCase</code>。ターミナルでは <code>pytest -k 名前 -x -v</code>。</li>
+  </ul>
+  <h3 id="help-git">git (変更の記録)</h3>
+  <ul>
+    <li>左の<b>ソース管理</b>で「記録をはじめる」。変更したファイルが一覧に出るので、メッセージを書いて <b>コミット</b> します (ステージしていなければ、すべてをコミット)。</li>
+    <li>ファイルをタップすると違い (差分)、履歴のコミットをタップすると中身。「この変更を取り消す (revert)」「ここからブランチ」「この時点に戻す」が使えます。ブランチの切り替え・作成・マージは上のブランチ名から。</li>
+    <li>ターミナルでも同じ記録を <code>git</code> で使えます: <code>status</code>・<code>add</code>・<code>commit -m</code>・<code>log --oneline</code>・<code>diff</code>・<code>show</code>・<code>branch</code>・<code>switch -c</code>・<code>merge</code>・<code>restore</code>・<code>reset --hard</code>・<code>revert</code>・<code>cherry-pick</code>・<code>stash</code>・<code>tag</code>・<code>blame</code>。<code>.gitignore</code> も使えます。</li>
+    <li>記録はこの端末に保存されます。<code>git push</code> / <code>git pull</code> は「GitHub と同期」につながり、最後のコミットのメッセージで保存します。</li>
+  </ul>
+  <h3 id="help-profile">時間を計って実行</h3>
+  <ul>
+    <li>「その他」→「時間を計って実行 (プロファイル)」。実行が終わると、時間のかかった<b>関数</b> (回数・その中だけの時間・合計) と<b>行</b> (回数・時間の目安) を表で出します。タップでその場所へ移動します。</li>
+    <li>ターミナルでは <code>profile ファイル.py</code> か <code>python -m cProfile ファイル.py</code>。</li>
+  </ul>
   <h3 id="help-terminal">ターミナル</h3>
   <ul>
     <li><b>開き方</b>: 上のバーの <b>&gt;_</b> (PC・タブレットは下のパネルの「ターミナル」タブ)、または <kbd>Ctrl + \`</kbd>。ファイル一覧の「…」→「ターミナルで開く」でも開けます。スマホでは画面いっぱいに開き、左上の「‹ 戻る」で戻ります。</li>
@@ -34,6 +65,9 @@ export function showHelp(section) {
     <li><b>スクリプト</b>: <code>for f in *.py; do echo $f; done</code>・<code>while</code>・<code>if [ -f a.txt ]; then … fi</code>・関数 <code>名前() { … }</code>・<code>$((1 + 2))</code>・<code>read</code> が使えます。<code>sh run.sh</code> や <code>./run.sh</code> でシェルスクリプトも動きます。<code>do</code> や <code>then</code> の後で Enter を押すと、続きの行 (<code>&gt;</code>) を入力できます。</li>
     <li><b>便利に</b>: 前に打ったコマンドの続きが薄い文字で出たら <b>→</b> で確定。<kbd>Ctrl + R</kbd> で履歴を検索。上のメニュー (PC はパネルの <b>+</b>) から<b>ターミナルを増やせ</b>ます (別々の場所で作業できます)。<code>xargs</code>・<code>watch</code>・<code>zip</code>/<code>unzip</code>・<code>base64</code>・<code>sha256sum</code>・<code>file</code> も使えます。</li>
     <li>閉じても、次に開いたときに前の続き (いた場所・最後の画面) から始まります。</li>
+    <li><b>データの加工</b>: <code>awk</code> (列ごとの処理・集計)・<code>jq</code> (JSON)・<code>sqlite3</code> (データベース)・<code>bc</code> (計算機)・<code>column -t</code>・<code>paste</code>・<code>comm</code>・<code>fold</code>・<code>tac</code>・<code>shuf</code>・<code>split</code>。</li>
+    <li><b>ファイル</b>: <code>tar -czf</code> / <code>-xzf</code>・<code>gzip</code>・<code>gunzip</code>・<code>zcat</code>・<code>xxd</code>・<code>hexdump -C</code>・<code>od</code>・<code>md5sum</code>・<code>sha1sum</code>・<code>sha512sum</code>・<code>mktemp</code>・<code>truncate</code>・<code>cmp</code>。</li>
+    <li><b>書き方</b>: <code>case $x in a*) … ;; esac</code>・ヒアドキュメント <code>cat &lt;&lt;EOF</code>・<code>&lt;&lt;&lt; "文字"</code>・<code>\${x:-既定}</code> <code>\${#x}</code> <code>\${x%.py}</code> <code>\${x/a/b}</code>・<code>{1..10}</code> <code>{a,b}</code>・<code>コマンド &amp;</code> と <code>jobs</code> / <code>fg</code> / <code>wait</code> / <code>kill %1</code>・<code>eval</code>・<code>timeout</code>。</li>
   </ul>
   <h3 id="help-always">24 時間動かす</h3>
   <ul>
@@ -150,6 +184,16 @@ export function showHelp(section) {
 export function showWhatsNew() {
   const body = h('div', { class: 'help whats-new' })
   body.innerHTML = `
+  <p>ForgeCode 15 — <b>開発の道具がそろいました</b></p>
+  <ul>
+    <li><b>ノートブック (.ipynb)</b> — 「その他」→「新しいノートブック」。セルごとに書いて ▶ (Shift + Enter) で実行し、結果・表・図をセルの下に出します。変数は次のセルでも使えます。Jupyter・Google Colab と同じ形で保存します。</li>
+    <li><b>Web アプリ</b> — Flask・FastAPI・<code>http.server</code>・<code>wsgiref</code> の <code>app.run()</code> を、アプリの中のブラウザ (プレビュー) で動かします。HTML・CSS・JavaScript のファイルも ▶ でそのまま表示 (コンソール付き)。</li>
+    <li><b>テスト</b> — 左の「テスト」で <code>test_*.py</code> を一覧にして実行。✓ ✗ と、失敗した行・<code>assert 4 == 5</code> のような値を表示します。pytest と同じ書き方 (フィクスチャ・<code>parametrize</code>・<code>raises</code>)。ターミナルでは <code>pytest</code>。</li>
+    <li><b>git</b> — 左の「ソース管理」で、変更の一覧・コミット・履歴・差分・ブランチ・マージ・前の版に戻す。ターミナルでも <code>git status</code> / <code>commit</code> / <code>log</code> / <code>diff</code> / <code>branch</code> / <code>stash</code> など。</li>
+    <li><b>時間を計って実行</b> — 「その他」→「時間を計って実行」で、時間のかかった関数・行を表で表示 (タップでその場所へ)。</li>
+    <li><b>ターミナル</b> — <code>awk</code>・<code>jq</code>・<code>sqlite3</code>・<code>bc</code>・<code>tar</code>・<code>gzip</code>・<code>xxd</code>・<code>md5sum</code>・<code>column</code> など 30 以上のコマンドと、<code>case</code>・ヒアドキュメント (<code>&lt;&lt;EOF</code>)・<code>\${x:-既定}</code>・<code>{1..10}</code>・<code>&amp;</code> (裏で動かす) に対応。</li>
+    <li><b>速く・いつも最新</b> — 2 回目からは Python の準備が約 3 倍速く (準備の終わった状態を保存)。新しい版は、何も動いていないときに自動で切り替わります (「その他」の一番下に版を表示)。</li>
+  </ul>
   <p>ForgeCode 14.1 — <b>アプリを閉じても動く</b>・ターミナルの進化</p>
   <ul>
     <li><b>クラウドで動かす</b> — GitHub のサーバーで、5 分ごと〜毎日 決まった時刻にプログラムを動かします。アプリを閉じても、スマホの電源を切っても動き続け、結果のファイルと出力は GitHub に残ります (「その他」→「クラウドで動かす」・ターミナルの <code>cloud</code>)。</li>

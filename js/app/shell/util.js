@@ -61,6 +61,57 @@ export function globRe(pat, flags = '') {
   }
   return new RegExp('^' + src + '$', flags)
 }
+// case のパターン・${x#pat} 用: * は / も含めて何にでも当てはまる (anchored: 全体と比べる)
+export function patRe(pat, anchored = true) {
+  const re = globRe(pat).source.slice(1, -1).replace(/\[\^\/\]\*/g, '.*').replace(/\[\^\/\]/g, '.')
+  return new RegExp(anchored ? '^(?:' + re + ')$' : re, 's')
+}
+// {a,b,c} と {1..5} {a..e} {01..10} {1..10..2} (引用符の外だけ)
+export function braceExpand(word) {
+  for (let k = 0; k < word.length; k++) {
+    const s = word[k]
+    if (s.t !== 'lit' || !s.v.includes('{')) continue
+    const g = findBrace(s.v)
+    if (!g) continue
+    const out = []
+    for (const alt of g.alts) out.push(...braceExpand([...word.slice(0, k), { t: 'lit', v: s.v.slice(0, g.start) + alt + s.v.slice(g.end + 1) }, ...word.slice(k + 1)]))
+    return out
+  }
+  return [word]
+}
+function findBrace(v) {
+  for (let i = 0; i < v.length; i++) {
+    if (v[i] !== '{' || (i > 0 && v[i - 1] === '$')) continue
+    let depth = 0, last = i + 1
+    const parts = []
+    for (let j = i; j < v.length; j++) {
+      if (v[j] === '{') depth++
+      else if (v[j] === ',' && depth === 1) { parts.push(v.slice(last, j)); last = j + 1 }
+      else if (v[j] === '}') {
+        depth--
+        if (depth) continue
+        parts.push(v.slice(last, j))
+        if (parts.length > 1) return { start: i, end: j, alts: parts }
+        const m = /^(-?\d+|[a-zA-Z])\.\.(-?\d+|[a-zA-Z])(?:\.\.(-?\d+))?$/.exec(parts[0])
+        if (m) {
+          const step = Math.abs(Number(m[3] || 1)) || 1
+          const alts = []
+          if (/\d/.test(m[1]) && /\d/.test(m[2])) {
+            const a = Number(m[1]), b = Number(m[2])
+            const pad = (/^-?0\d/.test(m[1]) || /^-?0\d/.test(m[2])) ? Math.max(m[1].replace('-', '').length, m[2].replace('-', '').length) : 0
+            for (let x = a; a <= b ? x <= b : x >= b; x += a <= b ? step : -step) { alts.push(pad ? (x < 0 ? '-' : '') + String(Math.abs(x)).padStart(pad, '0') : String(x)); if (alts.length > 10000) break }
+          } else if (!/\d/.test(m[1]) && !/\d/.test(m[2])) {
+            const a = m[1].charCodeAt(0), b = m[2].charCodeAt(0)
+            for (let x = a; a <= b ? x <= b : x >= b; x += a <= b ? step : -step) alts.push(String.fromCharCode(x))
+          } else break
+          return { start: i, end: j, alts }
+        }
+        break
+      }
+    }
+  }
+  return null
+}
 export const hasGlob = pat => /(^|[^\\])[*?[]/.test(pat)
 export const unescapeGlob = pat => pat.replace(/\\(.)/g, '$1')
 // 標準入力 (パイプ・< ファイル)。read は 1 行ずつ、ほかのコマンドは残りすべてを読む

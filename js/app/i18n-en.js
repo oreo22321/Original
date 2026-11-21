@@ -1,6 +1,20 @@
 // 英語の辞書 (日本語の文言 → English)。画面に出た文字をこの表で置き換えます
 // 足りない文言は日本語のまま表示されます。新しい文言を足したらここにも追加してください
 export const EN = {
+  // ---- v15: ソース管理・テスト・ノートブック・Web プレビュー・プロファイル ----
+  'ソース管理': 'Source Control', 'ソース管理 (git)': 'Source control (git)', 'テストの一覧': 'Test explorer', 'テストをすべて実行': 'Run all tests', 'テストを実行': 'Run tests',
+  '記録をはじめる (git init)': 'Initialize repository (git init)', 'コミット': 'Commit', 'すべてコミット': 'Commit all', 'ステージした変更': 'Staged changes', 
+  'メッセージ (何を変えたか)': 'Message (what you changed)', '変更はありません (最後のコミットと同じです)': 'No changes (same as the last commit)', 'まだ記録はありません': 'No commits yet',
+  'ブランチを切り替える': 'Switch branch', 'ブランチ': 'Branch', '新しいブランチ…': 'New branch…', 'ブランチを消す…': 'Delete branch…', '変更をしまう': 'Stash changes', 'しまった変更を戻す': 'Pop stash',
+  'GitHub に保存 (push)': 'Push to GitHub', 'GitHub から取り込む (pull)': 'Pull from GitHub', 'ターミナルで git を使う': 'Use git in the terminal',
+  'この変更を取り消す (revert)': 'Revert this commit', 'ここからブランチ': 'Branch from here', 'この時点に戻す': 'Reset to this commit', 'ステージ': 'Stage', 'ステージから外す': 'Unstage', 'すべてステージ': 'Stage all', 
+  'すべて実行': 'Run all', 'このファイルを実行': 'Run this file', 'このテストだけ実行': 'Run this test', '失敗したものだけ実行': 'Run failed tests', 'テストの出力': 'Test output', 
+  '時間を計って実行 (プロファイル)': 'Run with profiler', '行': 'Line', '回数': 'Calls', '中だけ': 'Self', '合計': 'Total',
+  '新しいノートブック': 'New notebook', '新しいノートブック (.ipynb)': 'New notebook (.ipynb)', 'Markdown': 'Markdown', 'カーネルを再起動 (変数を消す)': 'Restart kernel (clear variables)', '再起動してすべて実行': 'Restart and run all',
+  '出力をすべて消す': 'Clear all outputs', 'Python のファイルに書き出す': 'Export as Python file', 'JSON のまま開く': 'Open as JSON', 'コードのセルを最後に追加': 'Add code cell at end', 'Markdown のセルを最後に追加': 'Add Markdown cell at end',
+  '上へ': 'Move up', '下へ': 'Move down', '下にセルを追加': 'Add cell below', 'セルを消す': 'Delete cell', '入力して Enter': 'Type and press Enter',
+  'Web ページをプレビュー': 'Preview web page', 'プレビューを開く': 'Open preview', '消す': 'Clear', '新しいタブで開く': 'Open in new tab', '前のページ': 'Back', '読み込み直す': 'Reload', 'プロジェクトのファイル': 'Project files',
+  '新しいバージョンに更新': 'Update to the new version', '今すぐ': 'Now', '最新': 'Latest', '今すぐ更新': 'Update now', '最新のバージョンに更新しました': 'Updated to the latest version', '新しいバージョンを入れました。次に開いたときに切り替わります': 'A new version is installed. It will be used next time you open the app',
   // ---- 画面の枠 ----
   'ファイル': 'Files', '検索': 'Search', '構造': 'Outline', '設定': 'Settings', '使い方': 'Help', '閉じる': 'Close', 'その他': 'More',
   'メニュー': 'Menu', 'ファイル一覧': 'Files', 'プロジェクト': 'Project', 'プロジェクトなし': 'No project', 'アウトライン': 'Outline',
