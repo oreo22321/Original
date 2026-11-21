@@ -1433,3 +1433,45 @@ body[data-layout=mobile] .rh-series { display: none; }
 .web-card > svg { color: var(--accent); flex: none; }
 .wc-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .wc-text span { font-size: 12px; color: var(--muted); }
+
+/* ---- ノートブック ---- */
+.nb { position: fixed; inset: 0; z-index: 55; display: flex; flex-direction: column; background: var(--bg); padding: var(--safe-t, 0) var(--safe-r, 0) 0 var(--safe-l, 0); }
+.nb.hidden { display: none; }
+.nb-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--panel); flex: none; }
+.nb-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; }
+.nb-title svg { color: #e8a33d; flex: none; }
+.nb-title span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nb-state { font-size: 11.5px; color: var(--muted); max-width: 30%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nb-cells { flex: 1; min-height: 0; overflow: auto; padding: 10px 8px calc(40px + var(--safe-b, 0px)); display: flex; flex-direction: column; gap: 8px; max-width: 980px; width: 100%; margin: 0 auto; }
+.nb-cell { position: relative; display: flex; gap: 6px; padding: 6px 6px 6px 0; border-radius: var(--r); border: 1px solid transparent; }
+.nb-cell:focus-within { border-color: var(--border-strong); background: var(--panel); }
+.nb-cell.running { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.nb-gutter { width: 38px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding-top: 4px; }
+.nb-run { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: var(--accent); border: 1px solid var(--border); background: var(--bg); }
+.nb-run.ghost { color: var(--faint); border-color: transparent; background: none; }
+.nb-run .spinner { width: 13px; height: 13px; }
+.nb-count { font-family: var(--editor-font); font-size: 10.5px; color: var(--faint); min-height: 14px; }
+.nb-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.nb-editor { border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); }
+.nb-editor .cm-content { padding: 6px 0; }
+.nb-editor .cm-scroller { overflow: visible; }
+.nb-editor.cm-focused { outline: none; border-color: var(--accent); }
+.nb-tools { position: absolute; top: -10px; right: 8px; display: none; gap: 1px; padding: 1px; border-radius: var(--r-sm); background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow); z-index: 2; }
+.nb-cell:hover .nb-tools, .nb-cell:focus-within .nb-tools { display: flex; }
+body[data-layout=mobile] .nb-cell:focus-within .nb-tools { display: flex; top: auto; bottom: -12px; }
+.nb-out { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.nb-out.empty { display: none; }
+.nb-stream { margin: 0; font-family: var(--editor-font); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; padding: 2px 4px; max-height: 420px; overflow: auto; }
+.nb-stream.err { color: var(--danger); background: color-mix(in srgb, var(--danger) 7%, transparent); border-radius: var(--r-sm); padding: 6px 8px; }
+.nb-stream.result { color: var(--fg); }
+.nb-img { max-width: 100%; height: auto; border-radius: var(--r-sm); background: #fff; align-self: flex-start; }
+.nb-html { overflow: auto; max-height: 480px; }
+.nb-md { padding: 4px 6px; font-size: 14px; line-height: 1.7; }
+.nb-cell.md:not(.editing) { cursor: text; }
+.nb-input-row { display: flex; align-items: center; gap: 6px; }
+.nb-input { flex: 1; font-family: var(--editor-font); }
+.nb-add { display: flex; gap: 6px; justify-content: center; padding: 4px 0 20px; }
+body.nb-open .keybar { display: none; }
+.nb-editor, .nb-editor .cm-scroller, .nb-editor .cm-content { height: auto !important; min-height: 0 !important; }
+.nb-editor .cm-content { padding: 6px 0 !important; }
+.nb-md h1 { font-size: 1.5em; margin: .2em 0 .4em; } .nb-md h2 { font-size: 1.25em; margin: .2em 0 .4em; } .nb-md p { margin: .3em 0; }

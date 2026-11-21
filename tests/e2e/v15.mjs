@@ -130,6 +130,35 @@ await step(page, 'v15: Python web app (WSGI) in the preview', async () => {
   await page.waitForFunction(() => { try { return document.querySelector('.pv-frame').contentDocument.querySelector('#w').textContent === 'Python /about' } catch { return false } }, null, { timeout: 15000 })
   await page.evaluate(() => import('/js/app/preview.js').then(m => m.closePreview()))
 })
+await step(page, 'v15: notebook runs cells with shared variables, tables and figures', async () => {
+  await page.evaluate(() => window.__app.commands.get('newNotebook').run())
+  await page.waitForSelector('.nb .nb-cell.code', { timeout: 15000 })
+  // 最初のコードのセル (x = 21 / x * 2) を実行
+  await page.locator('.nb .nb-cell.code .nb-run').first().click()
+  await page.waitForFunction(() => /42/.test(document.querySelector('.nb .nb-cell.code .nb-out')?.textContent || ''), null, { timeout: 60000 })
+  // 下にセルを足して、前のセルの変数・print・図を使う
+  await page.locator('.nb .nb-add button:has-text("コード")').click()
+  const ed = page.locator('.nb .nb-cell.code .cm-content').last()
+  await ed.click()
+  await page.keyboard.insertText('print("x is", x)\nclass T:\n    def _repr_html_(self):\n        return "<table><tr><td id=cellv>" + str(x) + "</td></tr></table>"\n\nT()')
+  await page.keyboard.press('Shift+Enter')
+  await page.waitForFunction(() => /x is 21/.test(document.querySelector('.nb').textContent), null, { timeout: 90000 })
+  await page.waitForSelector('.nb .nb-html table', { timeout: 30000 })
+  // エラーも出る
+  await page.locator('.nb .nb-add button:has-text("コード")').click()
+  await page.locator('.nb .nb-cell.code .cm-content').last().click()
+  await page.keyboard.insertText('1 / 0')
+  await page.keyboard.press('Control+Enter')
+  await page.waitForSelector('.nb .nb-stream.err', { timeout: 30000 })
+  // 保存された .ipynb
+  await page.waitForTimeout(1200)
+  const saved = await page.evaluate(() => window.__app.contents.get('notebook.ipynb'))
+  const nb = JSON.parse(saved)
+  if (nb.nbformat !== 4 || !nb.cells.some(c => c.outputs && c.outputs.some(o => o.output_type === 'execute_result' && /42/.test(o.data['text/plain'])))) throw new Error(saved.slice(0, 600))
+  if (!nb.cells.some(c => c.outputs && c.outputs.some(o => o.data && o.data['text/html'] && /cellv/.test(o.data['text/html'])))) throw new Error('no html saved')
+  if (!nb.cells.some(c => c.outputs && c.outputs.some(o => o.output_type === 'error' && o.ename === 'ZeroDivisionError'))) throw new Error('no error saved: ' + JSON.stringify(nb.cells.map(c => c.outputs)).slice(0, 500))
+  await page.click('.nb .nb-bar button:has-text("戻る")')
+})
 await step(page, 'v15: more menu shows the version', async () => {
   await page.evaluate(() => window.__app.runner.exitFull && window.__app.runner.exitFull())
   await page.click('.top-actions button[aria-label="その他"]')

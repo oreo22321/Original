@@ -1262,13 +1262,25 @@ def collect_module(path, mod):
 # ============================================================
 # assert の失敗を分かりやすく (式の両側の値を見せる)
 # ============================================================
-_SAFE_CALLS = {"len", "sorted", "list", "set", "tuple", "dict", "str", "int", "float", "abs", "sum", "max", "min", "round", "repr", "type", "bool", "frozenset"}
+# 呼び直すと結果が変わりそうなメソッド (pop など) があるときは、値を出さない
+_UNSAFE_METHODS = {"pop", "popitem", "append", "extend", "insert", "remove", "clear", "update", "add", "discard", "setdefault", "write", "writelines", "send", "read", "readline", "readlines", "next", "close", "put", "get_nowait", "put_nowait", "seek", "sort", "reverse", "delete", "save", "commit", "execute", "input", "print", "random", "randint", "choice", "shuffle", "time", "now"}
+
+
+_UNSAFE_FUNCS = {"input", "print", "next", "open", "exec", "eval", "setattr", "delattr", "__import__", "exit", "quit"}
 
 
 def _safe(node):
     for n in ast.walk(node):
-        if isinstance(n, ast.Call) and not (isinstance(n.func, ast.Name) and n.func.id in _SAFE_CALLS):
-            return False
+        if isinstance(n, ast.Call):
+            f = n.func
+            if isinstance(f, ast.Attribute):
+                if f.attr in _UNSAFE_METHODS:
+                    return False
+            elif isinstance(f, ast.Name):
+                if f.id in _UNSAFE_FUNCS:
+                    return False
+            else:
+                return False
         if isinstance(n, (ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom, ast.Lambda)):
             return False
     return True
@@ -1306,6 +1318,9 @@ def explain_assert(tb):
             left, right = ev(t.left), ev(t.comparators[0])
             op = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">=", ast.In: "in", ast.NotIn: "not in", ast.Is: "is", ast.IsNot: "is not"}.get(type(t.ops[0]), "?")
             lines.append("assert %s %s %s" % (_r(left), op, _r(right)))
+            for side, val in ((t.left, left), (t.comparators[0], right)):
+                if isinstance(side, ast.Call):
+                    lines.append("  %s の結果: %s" % (ast.unparse(side), _r(val)))
             if op == "==" and isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
                 for k, (a, b) in enumerate(zip(left, right)):
                     if a != b:

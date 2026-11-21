@@ -287,6 +287,7 @@ export class Workbench {
       { label: 'ターミナル', icon: 'terminal', hint: '⌃`', run: () => runCommand('terminal') },
       { label: '実行画面を開く', icon: 'play', run: () => runCommand('openRunScreen') },
       { label: 'テストを実行', icon: 'beaker', run: () => runCommand('runTests') },
+      { label: '新しいノートブック', icon: 'notebook', run: () => runCommand('newNotebook') },
       { label: '時間を計って実行 (プロファイル)', icon: 'gauge', run: () => runCommand('profileRun'), disabled: !(py || (app.runner && app.runner.runTarget())) },
       { label: 'Python を再起動', icon: 'refresh', run: () => runCommand('restartPython') },
       { label: 'クラウドで動かす (24 時間)', icon: 'cloud', run: () => runCommand('cloud') },
@@ -421,6 +422,15 @@ command('redo', 'やり直し', () => { const v = app.editors.activeView(); if (
 command('selectAll', 'すべて選択', () => { const v = app.editors.activeView(); if (v) { selectAll(v); v.focus() } }, { key: '⌘A' })
 command('closeTab', 'タブを閉じる', () => app.editors.close(app.editors.active), { icon: 'close', key: '⌘W' })
 command('closeAll', 'すべてのタブを閉じる', () => app.editors.closeAll())
+command('newNotebook', '新しいノートブック (.ipynb)', async () => {
+  if (!app.project) return
+  const { newFile } = await import('./app.js')
+  const { EMPTY_NOTEBOOK } = await import('./notebook.js')
+  let n = 1, path = 'notebook.ipynb'
+  while (app.files.some(f => f.path === path)) path = `notebook${++n}.ipynb`
+  await newFile(path, EMPTY_NOTEBOOK())
+  await app.editors.open(path)
+}, { icon: 'notebook' })
 command('sourceControl', 'ソース管理 (git)', () => app.wb.showView('scm'), { icon: 'branch' })
 command('testsView', 'テストの一覧', () => app.wb.showView('tests'), { icon: 'beaker' })
 command('runTests', 'テストをすべて実行', async () => { const v = await app.wb.loadView('tests'); app.wb.showView('tests'); v.run([]) }, { icon: 'beaker' })

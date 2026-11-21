@@ -142,6 +142,8 @@ async function boot() {
     // Ctrl + ` : ターミナル (VS Code と同じ。エディタの中でも)
     if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === '`' || e.code === 'Backquote')) { e.preventDefault(); runCommand('toggleTerminal'); return }
     const mod = e.metaKey || e.ctrlKey
+    // エディタ・ノートブックなどが受け取ったキーは、ここでは扱わない
+    if (e.defaultPrevented || (e.target && e.target.closest && e.target.closest('.nb, .pv'))) return
     if (!mod) { if (e.key === 'F5') { e.preventDefault(); runCommand('run') } return }
     const k = e.key.toLowerCase()
     const inEditor = document.activeElement && document.activeElement.closest && document.activeElement.closest('.cm-editor')

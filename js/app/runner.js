@@ -142,7 +142,7 @@ export class Runner {
     })
     document.addEventListener('keydown', e => {
       // 実行画面で ⌘/Ctrl + Enter: もう一度実行
-      if (this.full && (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !this.running) { e.preventDefault(); this.rerun(); return }
+      if (this.full && (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !this.running && !e.defaultPrevented && !(e.target && e.target.closest && e.target.closest('.nb, .pv'))) { e.preventDefault(); this.rerun(); return }
       if (!(this.full || this.termFull) || e.key !== 'Escape' || e.defaultPrevented) return
       if (document.querySelector('.modal-overlay, .menu-overlay, .sf-max')) return
       const t = e.target
@@ -613,7 +613,7 @@ export class Runner {
   // ============================================================
   // ターミナルからの Python (対話モード・pip・Tab の補完)
   // ============================================================
-  termEval(code, { ns = 'repl', repl = false, complete = null, sink = null } = {}) {
+  termEval(code, { ns = 'repl', repl = false, complete = null, sink = null, files = null, keep = null, cwd = undefined } = {}) {
     if (this.running) return Promise.resolve({ ok: false, busy: true, error: '別のプログラムが実行中です' })
     const w = this.ensureWorker()
     if (!w) return Promise.resolve({ ok: false, error: 'Python を起動できませんでした' })
@@ -627,7 +627,9 @@ export class Runner {
       })
       if (sink) { this.sink = sink; this.sinkShown = false; this.evalBusy = id; busy('run', true) }
       if (this.shared) new Int32Array(this.shared.interrupt)[0] = 0
-      w.postMessage({ type: 'eval', id, code, ns, repl, complete: typeof complete === 'string' ? complete : undefined })
+      // ノートブック: 先にプロジェクトのファイルを渡す (変えたものだけ)
+      if (files) for (const [p, c] of Object.entries(files)) this.sent.set(p, c)
+      w.postMessage({ type: 'eval', id, code, ns, repl, complete: typeof complete === 'string' ? complete : undefined, files: files || undefined, keep: keep || undefined, cwd })
     })
   }
   // 対話モードの実行を止める (KeyboardInterrupt。止まらなければ Python ごと立ち上げ直す)

@@ -1098,7 +1098,19 @@ async function pipCommand(code) {
 
 // コンソール: 最後の実行の続きで、式や文を実行
 // ターミナルの python (対話モード) は、ns: 'repl' (続き) / 'repl-new' (新しく始める) / 'last' (python -i: 実行の続き)
+// ノートブックごとの名前空間 (nb:<パス>。nb-new:<パス> で作り直す)
+const nbSpaces = new Map()
 function namespace(ns) {
+  if (typeof ns === 'string' && /^nb(-new)?:/.test(ns)) {
+    const key = ns.slice(ns.indexOf(':') + 1)
+    let g = nbSpaces.get(key)
+    if (ns.startsWith('nb-new:') || !g) {
+      if (g) { try { g.destroy() } catch {} }
+      g = py.runPython('__fc_new_ns()')
+      nbSpaces.set(key, g)
+    }
+    return g
+  }
   if (ns === 'repl-new' || (ns === 'repl' && !replGlobals)) {
     if (replGlobals) { try { replGlobals.destroy() } catch {} }
     replGlobals = py.runPython('__fc_new_ns()')
@@ -1127,15 +1139,21 @@ async function evalCode(m) {
     }
     const pip = await pipCommand(m.code).catch(e => ({ ok: false, error: String(e && e.message || e).split('\n').slice(-1)[0] }))
     if (pip) { flush(true); post({ type: 'evalResult', id: m.id, ...pip }); return }
+    // ノートブック: プロジェクトのファイル・いる場所・input() を、ふつうの実行と同じに
+    if (m.files) writeProject(m.files, Array.isArray(m.keep) ? m.keep : null)
+    if (m.cwd !== undefined) { py.globals.set('__fc_cwd', m.cwd ? String(m.cwd) : null); py.runPython('__fc_chdir(__fc_cwd)') }
+    if (m.files) py.runPython(shared ? 'builtins.input = __fc_builtin_input' : 'builtins.input = __fc_no_input')
     const g = namespace(m.ns)
-    await ensureImports({ '<console>.py': m.code }).catch(() => {})
+    await ensureImports(m.files ? { ...Object.fromEntries([...snapshot].filter(([p, c]) => p.endsWith('.py') && typeof c === 'string')), '<console>.py': m.code } : { '<console>.py': m.code }).catch(() => {})
     py.globals.set('__fc_g', g)
     py.globals.set('__fc_code', m.code)
     const r = JSON.parse(py.runPython('__fc_eval(__fc_code, __fc_g)'))
     flush(true)
     try { py.runPython('__fc_show_figures()') } catch {}
-    if (r.ok) post({ type: 'evalResult', id: m.id, ok: true, value: r.value, html: r.html || null })
-    else post({ type: 'evalResult', id: m.id, ok: false, etype: r.type, error: r.type === 'KeyboardInterrupt' ? '停止しました' : r.error })
+    let files
+    if (m.files) { try { files = changedFiles() } catch {} }
+    if (r.ok) post({ type: 'evalResult', id: m.id, ok: true, value: r.value, html: r.html || null, files })
+    else post({ type: 'evalResult', id: m.id, ok: false, etype: r.type, error: r.type === 'KeyboardInterrupt' ? '停止しました' : r.error, files })
   } catch (e) {
     flush(true)
     post({ type: 'evalResult', id: m.id, ok: false, error: String(e && e.message || e) })

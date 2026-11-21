@@ -133,6 +133,8 @@ const FILE_KINDS = {
   package: ['cube', '#a493d6', 'パッケージ (__init__.py)'],
   test: ['check', '#6fae8a', 'テスト'],
   json: ['braces', '#b3a36e', 'JSON'],
+  nb: ['notebook', '#e8a33d', 'ノートブック (Jupyter)'],
+  html: ['globe', '#e37933', 'Web ページ (HTML)'],
   csv: ['layers', '#8fae6f', 'CSV (表のデータ)'],
   md: ['book', '#8d9097', 'メモ (Markdown)'],
   text: ['text', '#8d9097', 'テキスト'],
@@ -143,6 +145,8 @@ export function fileKind(path) {
   const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
   if (/\.(png|jpe?g|gif|webp|bmp|ico|svg|avif)$/.test(name)) return 'image'
   if (/\.(xlsx|xls|db|sqlite3?|pkl|pickle|npy|npz|zip|gz|pdf|mp3|wav|ogg|mp4|bin|parquet)$/.test(name)) return 'binary'
+  if (/\.ipynb$/.test(name)) return 'nb'
+  if (/\.html?$/.test(name)) return 'html'
   const m = /\.(pyw?|pyi|json|md|markdown|csv|tsv|txt)$/.exec(name)
   if (!m) return 'text'
   const ext = m[1]

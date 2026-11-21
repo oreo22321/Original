@@ -1,4 +1,4 @@
-import{a as c,g as l}from"./chunk-F5K4EXNR.js";function t(e){let d=c("div",{class:"help"});d.innerHTML=`
+import{a as c,g as l}from"./chunk-3B4WXQCL.js";function t(e){let d=c("div",{class:"help"});d.innerHTML=`
   <h3 id="help-start">はじめかた</h3>
   <ol>
     <li>左上の <b>☰</b> (iPad / PC では左端のアイコン) でファイル一覧を開き、<code>main.py</code> などのファイルをタップして開きます。</li>
