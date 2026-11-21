@@ -47,14 +47,14 @@ function localFiles() {
 let chain = Promise.resolve()
 const serial = fn => (chain = chain.then(fn, fn))
 
-export function syncPush({ force = false, quiet = false } = {}) {
+export function syncPush({ force = false, quiet = false, message = null } = {}) {
   return serial(async () => {
     const p = app.project
     if (!p || !ghReady()) return null
     setStatus('syncing')
     try {
       if (app.editors) await app.editors.saveAll().catch(() => {})
-      const r = await pushProject(client(), { dir: projDir(p), files: localFiles(), state: p.github && p.github.state, message: `ForgeCode: ${p.name} を更新`, force })
+      const r = await pushProject(client(), { dir: projDir(p), files: localFiles(), state: p.github && p.github.state, message: message ? `${message} (ForgeCode: ${p.name})` : `ForgeCode: ${p.name} を更新`, force })
       await saveState(p, r.state)
       setStatus(r.conflicts.length ? 'conflict' : 'ok', { at: Date.now(), error: '', conflicts: r.conflicts })
       if (r.conflicts.length) conflictToast(r.conflicts)

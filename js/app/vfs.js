@@ -1,7 +1,7 @@
 // 仮想ファイルシステム (IndexedDB に保存)
 // プロジェクト単位でファイルを管理します。IndexedDB が使えない場合は localStorage に保存します。
 const DB_NAME = 'forgecode'
-const DB_VERSION = 1
+const DB_VERSION = 2
 let dbPromise = null
 let memory = null // フォールバック
 
@@ -21,6 +21,8 @@ function openDB() {
         const hs = db.createObjectStore('history', { keyPath: 'id', autoIncrement: true })
         hs.createIndex('file', ['pid', 'path'])
       }
+      // git の記録 (コミット・ファイルの中身・ブランチなど): [pid, key]
+      if (!db.objectStoreNames.contains('git')) db.createObjectStore('git', { keyPath: ['pid', 'key'] })
     }
     req.onsuccess = () => {
       const db = req.result
@@ -150,6 +152,7 @@ export async function deleteProject(id) {
   const files = await listFiles(id)
   knownDirs.delete(id)
   clearDrafts(id)
+  await gitClear(id).catch(() => {})
   await tx(db, ['projects', 'files', 'history'], 'readwrite', t => {
     t.objectStore('projects').delete(id)
     const fs = t.objectStore('files')
@@ -160,6 +163,41 @@ export async function deleteProject(id) {
       r.onsuccess = () => { const c = r.result; if (c) { c.delete(); c.continue() } }
     }
   })
+}
+
+// ---- git の記録 ----
+// GitRepo (git-core.js) が使う置き場所。IndexedDB が使えないときはメモリ (アプリを閉じると消える)
+const gitMemory = new Map()
+export function gitStore(pid) {
+  const mem = () => { let m = gitMemory.get(pid); if (!m) gitMemory.set(pid, m = new Map()); return m }
+  return {
+    async get(key) {
+      const db = await openDB()
+      if (!db) return mem().get(key)
+      return retry(() => new Promise((resolve, reject) => {
+        const t = db.transaction('git', 'readonly')
+        const r = t.objectStore('git').get([pid, key])
+        r.onsuccess = () => resolve(r.result ? r.result.v : undefined)
+        r.onerror = () => reject(r.error)
+      }))
+    },
+    async put(key, v) {
+      const db = await openDB()
+      if (!db) { mem().set(key, v); return }
+      await retry(() => tx(db, ['git'], 'readwrite', t => { t.objectStore('git').put({ pid, key, v }) }))
+    },
+    async del(key) {
+      const db = await openDB()
+      if (!db) { mem().delete(key); return }
+      await retry(() => tx(db, ['git'], 'readwrite', t => { t.objectStore('git').delete([pid, key]) }))
+    },
+  }
+}
+export async function gitClear(pid) {
+  gitMemory.delete(pid)
+  const db = await openDB()
+  if (!db) return
+  await tx(db, ['git'], 'readwrite', t => { t.objectStore('git').delete(IDBKeyRange.bound([pid, ''], [pid, '\uffff'])) })
 }
 
 // ---- ファイル ----

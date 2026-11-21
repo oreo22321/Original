@@ -1,4 +1,4 @@
-import{b as y,e as p,f as b,g as u}from"./chunk-OCXOK7H2.js";import{g as c}from"./chunk-LMAZ7UGJ.js";import{a as i,b as a,f as m,g as f,p as d,r as g}from"./chunk-MZT4OYFQ.js";var $=[[/\.(png|jpe?g|gif|webp|bmp)$/i,e=>`from PIL import Image
+import{b as y,e as p,f as b,g as u}from"./chunk-OCXOK7H2.js";import{g as c}from"./chunk-DAL56S24.js";import{a as i,b as a,f as m,g as f,p as d,r as g}from"./chunk-F5K4EXNR.js";var $=[[/\.(png|jpe?g|gif|webp|bmp)$/i,e=>`from PIL import Image
 img = Image.open(${JSON.stringify(e)})
 print(img.size)`],[/\.(xlsx|xlsm)$/i,e=>`import openpyxl
 wb = openpyxl.load_workbook(${JSON.stringify(e)})

@@ -5,7 +5,7 @@
 // ・色 (ANSI)・\r での書き換え (進み具合の表示)・Tab の補完・↑↓ の履歴・Ctrl+C / D / L・貼り付けた複数行
 import { app, runCommand, writeProjectFile, deletePath, renamePath, refreshFiles } from './app.js'
 import * as vfs from './vfs.js'
-import { on, isTouch } from './store.js'
+import { on, emit, isTouch } from './store.js'
 import { h, icon, haptic } from './ui.js'
 import { AnsiState, appendAnsi, stripAnsi } from './ansi.js'
 import { Shell, C, showPath, strWidth } from './shell.js'
@@ -610,6 +610,11 @@ export class Terminal {
       storage: () => vfs.storageEstimate(),
       running: () => (app.runner.running ? { name: vfs.basename(app.runner.runPath || ''), ms: performance.now() - app.runner.t0 } : null),
       cloud: (sub, args, ctx) => this.cloud(sub, args, ctx),
+      gitStore: () => (pid() ? vfs.gitStore(pid()) : null),
+      githubPush: async message => { const g = await import('./github-sync.js'); if (!g.ghReady()) { g.settingsDialog(); return } await g.syncPush({ message }) },
+      githubInfo: () => { try { const c = JSON.parse(localStorage.getItem('forgecode.github') || 'null'); return c && c.repo ? { repo: c.repo } : null } catch { return null } },
+      gitChanged: () => emit('git'),
+      preview: p => import('./preview.js').then(m => m.openPreview(p)),
     }
   }
 

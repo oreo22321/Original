@@ -431,6 +431,8 @@ sys.breakpointhook = __fc_breakpointhook
 self.__fc_image = (b64, key) => { flush(true); post({ type: 'image', data: b64, key: key || null }) }
 self.__fc_svg = svg => { flush(true); post({ type: 'image', data: btoa(unescape(encodeURIComponent(String(svg)))), mime: 'image/svg+xml' }) }
 self.__fc_html = (html, text) => { flush(true); post({ type: 'html', html: String(html).slice(0, 400000), text: String(text || '') }) }
+// 画面への知らせ (テストの結果・プロファイル・Web アプリなど): { type: 'event', kind, data (JSON) }
+self.__fc_event = (kind, json) => { flush(true); post({ type: 'event', kind: String(kind), data: String(json) }) }
 self.__fc_meta = text => { flush(true); post({ type: 'output', items: [{ kind: 'meta', text: String(text) }] }) }
 self.__fc_link = url => { flush(true); post({ type: 'link', url: String(url) }) }
 self.__fc_password = () => { passwordNext = true }
@@ -961,6 +963,26 @@ async function run(m) {
   post({ type: 'done', id, ok, reason, error, files, ms: Math.round(performance.now() - t0) })
 }
 
+// ---- Web アプリのプレビュー: 1 回の通信に答える (_fcweb.handle) ----
+function web(m) {
+  const fail = (status, text) => post({ type: 'webResult', id: m.id, head: { status, headers: [['Content-Type', 'text/plain; charset=utf-8']] }, body: new TextEncoder().encode(text) })
+  if (!py) { fail(503, 'Python の準備ができていません'); return }
+  try {
+    resetBudget()
+    if (shared) shared.interrupt[0] = 0
+    py.FS.writeFile('/tmp/fcweb_req', m.body ? new Uint8Array(m.body) : new Uint8Array(0))
+    py.globals.set('__fc_web_req', JSON.stringify(m.req))
+    const head = JSON.parse(py.runPython('import _fcweb\n_fcweb.handle(__fc_web_req)'))
+    const body = py.FS.readFile('/tmp/fcweb_body')
+    flush(true)
+    post({ type: 'webResult', id: m.id, head, body }, [body.buffer])
+    // 通信の中で書いたファイル (データベースなど) をプロジェクトに戻す
+    let files = {}
+    try { files = changedFiles() } catch {}
+    if (Object.keys(files).length) post({ type: 'webFiles', files })
+  } catch (e) { flush(true); fail(500, String(e && e.message || e)) }
+}
+
 // ---- ライブラリ: Pyodide にあるものは読み込み、ないものは PyPI から入れる ----
 const outMsg = (kind, text) => { flush(true); post({ type: 'output', items: [{ kind, text }] }) }
 async function ensureImports(pyFiles, requirements) {
@@ -1134,4 +1156,5 @@ self.onmessage = e => {
   else if (m.type === 'eval') evalCode(m)
   // 生きているかの確認 (長い間裏にあった後など)
   else if (m.type === 'ping') post({ type: 'pong', id: m.id, ready: !!py })
+  else if (m.type === 'web') web(m)
 }

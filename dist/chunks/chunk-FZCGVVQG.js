@@ -1,4 +1,2173 @@
-var i="/home/pyodide/.forgecode",n=String.raw`"""ForgeCode の実行環境 (ブラウザの Python を、ふつうの Python に近づける道具)"""
+var e=String.raw`"""ForgeCode の subprocess / os.system (よく使うコマンドを、この中で再現します)
+
+使えるもの: cls / clear (画面を消す)・pause・echo・python (ほかの .py)・ls / dir・cat / type・pwd / cd・
+mkdir・rm / del・sleep / timeout・date・whoami・exit・color / title / chcp (何もしない)
+ほかのプログラム (git など) は、ブラウザの中では起動できません
+"""
+import io, os, sys, shlex, time, runpy, contextlib
+
+CLEAR = "\x1b[2J\x1b[H"
+
+
+class _Exit(Exception):
+    def __init__(self, code):
+        self.code = code
+
+
+def _split(cmd, shell):
+    if isinstance(cmd, (list, tuple)):
+        args = [os.fspath(a) if not isinstance(a, str) else a for a in cmd]
+        if shell and len(args) == 1:
+            return _split(args[0], True)
+        return [args]
+    cmd = os.fspath(cmd) if not isinstance(cmd, str) else cmd
+    # && ; で区切った複数のコマンド (かんたんに)
+    out = []
+    for part in cmd.replace("&&", ";").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(shlex.split(part, posix=os.name != "nt"))
+        except ValueError:
+            out.append(part.split())
+    return out
+
+
+def _python(args, out, err, stdin):
+    # python ファイル.py 引数 / -c コード / -m モジュール を、この Python の中で実行
+    argv0 = sys.argv
+    saved_in = sys.stdin
+    try:
+        if stdin is not None:
+            sys.stdin = io.StringIO(stdin)
+        if not args:
+            raise _Exit(0)
+        if args[0] == "-c":
+            sys.argv = ["-c"] + args[2:]
+            g = {"__name__": "__main__"}
+            exec(compile(args[1] if len(args) > 1 else "", "<string>", "exec"), g)
+        elif args[0] == "-m":
+            sys.argv = [args[1]] + args[2:]
+            runpy.run_module(args[1], run_name="__main__", alter_sys=True)
+        elif args[0] in ("-V", "--version"):
+            print("Python " + sys.version.split()[0])
+        else:
+            sys.argv = list(args)
+            runpy.run_path(args[0], run_name="__main__")
+        return 0
+    except SystemExit as e:
+        c = e.code
+        if c is None:
+            return 0
+        if isinstance(c, int):
+            return c
+        print(c, file=sys.stderr)
+        return 1
+    except _Exit as e:
+        return e.code
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return 1
+    finally:
+        sys.argv = argv0
+        sys.stdin = saved_in
+
+
+def _one(args, shell, stdin):
+    name = os.path.basename(args[0]).lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    rest = args[1:]
+    if name in ("cls", "clear"):
+        sys.stdout.write(CLEAR)
+        return 0
+    if name == "pause":
+        try:
+            input("続行するには Enter キーを押してください . . . ")
+        except EOFError:
+            pass
+        return 0
+    if name == "echo":
+        if rest == ["."] or rest == []:
+            print()
+        else:
+            print(" ".join(rest))
+        return 0
+    if name in ("python", "python3", "py") or args[0] == sys.executable:
+        return _python(rest, None, None, stdin)
+    if name in ("pip", "pip3"):
+        print("pip はターミナルで使ってください (例: pip install 名前)。import するだけでも自動で入ります", file=sys.stderr)
+        return 1
+    if name in ("ls", "dir"):
+        path = next((a for a in rest if not a.startswith("-") and not a.startswith("/")), ".")
+        try:
+            names = sorted(n for n in os.listdir(path) if not n.startswith(".") and n != "__pycache__")
+        except OSError as e:
+            print(e, file=sys.stderr)
+            return 1
+        print("\n".join(names))
+        return 0
+    if name in ("cat", "type"):
+        code = 0
+        for f in rest:
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    sys.stdout.write(fh.read())
+            except OSError as e:
+                print(e, file=sys.stderr)
+                code = 1
+        return code
+    if name == "pwd" or (name == "cd" and not rest):
+        print(os.getcwd())
+        return 0
+    if name == "cd":
+        try:
+            os.chdir(rest[0])
+            return 0
+        except OSError as e:
+            print(e, file=sys.stderr)
+            return 1
+    if name in ("mkdir", "md"):
+        for d in rest:
+            if not d.startswith("-"):
+                os.makedirs(d, exist_ok=True)
+        return 0
+    if name in ("rm", "del", "erase"):
+        code = 0
+        for f in rest:
+            if f.startswith("-") or f.startswith("/"):
+                continue
+            try:
+                if os.path.isdir(f):
+                    import shutil
+                    shutil.rmtree(f)
+                else:
+                    os.remove(f)
+            except OSError as e:
+                print(e, file=sys.stderr)
+                code = 1
+        return code
+    if name in ("sleep", "timeout"):
+        nums = [a for a in rest if a.replace(".", "", 1).isdigit()]
+        time.sleep(float(nums[0]) if nums else 1)
+        return 0
+    if name == "date":
+        import datetime
+        print(datetime.datetime.now().strftime("%Y年 %m月 %d日 %H:%M:%S"))
+        return 0
+    if name == "whoami":
+        print("forge")
+        return 0
+    if name == "exit":
+        raise _Exit(int(rest[0]) if rest and rest[0].lstrip("-").isdigit() else 0)
+    if name in ("color", "title", "chcp", "mode", "true", "rem", ":"):
+        return 0
+    if name == "false":
+        return 1
+    if shell:
+        print("'%s' はこの環境では使えません (ブラウザの中では、ほかのプログラムを起動できません)" % args[0], file=sys.stderr)
+        return 127
+    raise FileNotFoundError(2, "No such file or directory: '%s' (ブラウザの中では、ほかのプログラムを起動できません)" % args[0], args[0])
+
+
+def run(cmd, shell=False, capture=False, input=None, cwd=None, text=True):
+    """戻り値: (終了コード, 出力, エラー出力)"""
+    out, err = io.StringIO(), io.StringIO()
+    old = os.getcwd()
+    code = 0
+    try:
+        if cwd is not None:
+            os.chdir(cwd)
+        ctx_out = contextlib.redirect_stdout(out) if capture else contextlib.nullcontext()
+        ctx_err = contextlib.redirect_stderr(err) if capture else contextlib.nullcontext()
+        with ctx_out, ctx_err:
+            for args in _split(cmd, shell):
+                if not args:
+                    continue
+                try:
+                    code = _one(args, shell, input)
+                except _Exit as e:
+                    code = e.code
+                    break
+    finally:
+        if cwd is not None:
+            os.chdir(old)
+    return code, out.getvalue(), err.getvalue()
+
+
+def install(sp):
+    """subprocess の run / call / check_output などを置き換える"""
+    def _data(v, text):
+        if v is None:
+            return None
+        return v if text else v.encode()
+
+    def _run(args, *, stdin=None, input=None, stdout=None, stderr=None, capture_output=False, shell=False, cwd=None,
+             timeout=None, check=False, text=None, universal_newlines=None, encoding=None, errors=None, env=None, **kw):
+        txt = bool(text or universal_newlines or encoding or errors)
+        cap_out = capture_output or stdout in (sp.PIPE, sp.DEVNULL)
+        cap_err = capture_output or stderr in (sp.PIPE, sp.DEVNULL, sp.STDOUT)
+        if isinstance(input, bytes):
+            input = input.decode("utf-8", "replace")
+        code, out, err = run(args, shell=shell, capture=cap_out or cap_err, input=input, cwd=cwd)
+        if stderr == sp.STDOUT and cap_out:
+            out, err = out + err, ""
+        # 受け取らないものは、そのまま画面へ
+        if not cap_out:
+            if out:
+                sys.stdout.write(out)
+            out = None
+        elif stdout == sp.DEVNULL:
+            out = None
+        if not cap_err:
+            if err:
+                sys.stderr.write(err)
+            err = None
+        elif stderr in (sp.DEVNULL, sp.STDOUT):
+            err = None
+        cp = sp.CompletedProcess(args, code, _data(out, txt), _data(err, txt))
+        if check and code:
+            raise sp.CalledProcessError(code, args, cp.stdout, cp.stderr)
+        return cp
+
+    def _call(args, **kw):
+        kw.pop("check", None)
+        return _run(args, **kw).returncode
+
+    def _check_call(args, **kw):
+        kw["check"] = True
+        _run(args, **kw)
+        return 0
+
+    def _check_output(args, **kw):
+        kw.setdefault("stdout", sp.PIPE)
+        kw["check"] = True
+        return _run(args, **kw).stdout
+
+    def _getstatusoutput(cmd, **kw):
+        code, out, err = run(cmd, shell=True, capture=True)
+        data = (out + err)
+        if data.endswith("\n"):
+            data = data[:-1]
+        return code, data
+
+    def _getoutput(cmd, **kw):
+        return _getstatusoutput(cmd)[1]
+
+    class Popen:
+        """かんたんな Popen (作った時点で最後まで実行します)"""
+        def __init__(self, args, stdin=None, stdout=None, stderr=None, shell=False, cwd=None, text=None, universal_newlines=None, encoding=None, **kw):
+            self.args = args
+            self._txt = bool(text or universal_newlines or encoding)
+            self._kw = dict(stdout=stdout, stderr=stderr, shell=shell, cwd=cwd)
+            self._done = None
+            self.stdin = None
+            self.pid = 2
+            if stdin != sp.PIPE:
+                self._finish(None)
+
+        def _finish(self, input):
+            if self._done is None:
+                self._done = _run(self.args, input=input, text=self._txt, **self._kw)
+                self.returncode = self._done.returncode
+                self.stdout = io.StringIO(self._done.stdout) if isinstance(self._done.stdout, str) else io.BytesIO(self._done.stdout) if self._done.stdout is not None else None
+                self.stderr = io.StringIO(self._done.stderr) if isinstance(self._done.stderr, str) else io.BytesIO(self._done.stderr) if self._done.stderr is not None else None
+            return self._done
+
+        def communicate(self, input=None, timeout=None):
+            d = self._finish(input)
+            return d.stdout, d.stderr
+
+        def wait(self, timeout=None):
+            self._finish(None)
+            return self.returncode
+
+        def poll(self):
+            return self.returncode if self._done is not None else None
+
+        def kill(self):
+            pass
+
+        terminate = kill
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            self.wait()
+
+    sp.run = _run
+    sp.call = _call
+    sp.check_call = _check_call
+    sp.check_output = _check_output
+    sp.getoutput = _getoutput
+    sp.getstatusoutput = _getstatusoutput
+    sp.Popen = Popen
+`,s=String.raw`"""msvcrt (ForgeCode 互換版: キーを押す代わりに、入力欄に入れて Enter)"""
+_buf = []
+
+
+def _line():
+    if not _buf:
+        try:
+            s = input()
+        except EOFError:
+            s = ""
+        _buf.extend(list(s) or ["\r"])
+    return _buf.pop(0)
+
+
+def getwch():
+    return _line()
+
+
+def getwche():
+    c = _line()
+    print(c, end="")
+    return c
+
+
+def getch():
+    return getwch().encode("utf-8")[:1] or b"\r"
+
+
+def getche():
+    return getwche().encode("utf-8")[:1] or b"\r"
+
+
+def kbhit():
+    return bool(_buf)
+
+
+def putch(c):
+    print(c.decode() if isinstance(c, bytes) else c, end="")
+
+
+def putwch(c):
+    print(c, end="")
+`;var t=String.raw`"""ForgeCode の multiprocessing
+ブラウザではプロセスを作れないため、同じ Python の中で順番に実行します (結果はふつうと同じになります)
+"""
+import os as _os
+import queue as _queue
+import threading as _th
+import itertools as _it
+import traceback as _tb
+
+__all__ = ["Process", "Pool", "Queue", "JoinableQueue", "SimpleQueue", "Pipe", "Lock", "RLock", "Event", "Semaphore",
+           "BoundedSemaphore", "Condition", "Barrier", "Value", "Array", "Manager", "cpu_count", "current_process",
+           "parent_process", "active_children", "freeze_support", "set_start_method", "get_start_method",
+           "get_context", "get_all_start_methods", "TimeoutError", "ProcessError", "AuthenticationError", "BufferTooShort"]
+
+
+def _note():
+    try:
+        import _forgecode
+        _forgecode.note("mp", "この環境ではプロセスを作れないため、multiprocessing の処理は順番に実行します")
+    except Exception:
+        pass
+
+
+class ProcessError(Exception):
+    pass
+
+
+class BufferTooShort(ProcessError):
+    pass
+
+
+class TimeoutError(ProcessError):
+    pass
+
+
+class AuthenticationError(ProcessError):
+    pass
+
+
+Lock, RLock, Event, Semaphore, BoundedSemaphore, Condition, Barrier = _th.Lock, _th.RLock, _th.Event, _th.Semaphore, _th.BoundedSemaphore, _th.Condition, _th.Barrier
+_pids = _it.count(_os.getpid() + 1)
+
+
+class _Current:
+    name = "MainProcess"
+    daemon = False
+    exitcode = None
+    authkey = b""
+
+    @property
+    def pid(self):
+        return _os.getpid()
+
+    ident = pid
+
+
+_main = _Current()
+_cur = [_main]
+
+
+def current_process():
+    return _cur[-1]
+
+
+def parent_process():
+    return None if _cur[-1] is _main else _main
+
+
+def active_children():
+    return []
+
+
+def cpu_count():
+    return _os.cpu_count() or 1
+
+
+def freeze_support():
+    pass
+
+
+def set_start_method(method, force=False):
+    pass
+
+
+def get_start_method(allow_none=False):
+    return "fork"
+
+
+def get_all_start_methods():
+    return ["fork", "spawn"]
+
+
+class Process:
+    _counter = _it.count(1)
+
+    def __init__(self, group=None, target=None, name=None, args=(), kwargs=None, *, daemon=None):
+        self._target = target
+        self._args = tuple(args)
+        self._kwargs = dict(kwargs or {})
+        self.name = name or "Process-%d" % next(Process._counter)
+        self.daemon = bool(daemon)
+        self.exitcode = None
+        self.pid = None
+        self.authkey = b""
+
+    @property
+    def ident(self):
+        return self.pid
+
+    def run(self):
+        if self._target is not None:
+            self._target(*self._args, **self._kwargs)
+
+    def start(self):
+        if self.pid is not None:
+            raise AssertionError("cannot start a process twice")
+        _note()
+        self.pid = next(_pids)
+        _cur.append(self)
+        try:
+            self.run()
+            self.exitcode = 0
+        except SystemExit as e:
+            self.exitcode = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
+        except KeyboardInterrupt:
+            raise
+        except BaseException:
+            print("Process %s:" % self.name)
+            _tb.print_exc()
+            self.exitcode = 1
+        finally:
+            _cur.pop()
+
+    def join(self, timeout=None):
+        pass
+
+    def is_alive(self):
+        return False
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def close(self):
+        pass
+
+    @property
+    def sentinel(self):
+        return 0
+
+
+class Queue(_queue.Queue):
+    def __init__(self, maxsize=0, *, ctx=None):
+        super().__init__(maxsize)
+
+    def close(self):
+        pass
+
+    def join_thread(self):
+        pass
+
+    def cancel_join_thread(self):
+        pass
+
+
+JoinableQueue = Queue
+
+
+class SimpleQueue(_queue.SimpleQueue):
+    def close(self):
+        pass
+
+    def empty(self):
+        return super().empty()
+
+
+class _Conn:
+    def __init__(self, inbox, outbox):
+        self._in, self._out = inbox, outbox
+        self.closed = False
+
+    def send(self, obj):
+        self._out.append(obj)
+
+    def recv(self):
+        if not self._in:
+            raise EOFError("相手がまだ何も送っていません (この環境では順番に実行するため、送る側を先に実行します)")
+        return self._in.pop(0)
+
+    def poll(self, timeout=0.0):
+        return bool(self._in)
+
+    def send_bytes(self, buf, offset=0, size=None):
+        b = bytes(buf)
+        self.send(b[offset: None if size is None else offset + size])
+
+    def recv_bytes(self, maxlength=None):
+        return self.recv()
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+
+def Pipe(duplex=True):
+    a, b = [], []
+    return _Conn(a, b), _Conn(b, a)
+
+
+class _Value:
+    def __init__(self, typecode_or_type, value, lock=True):
+        self.value = value
+        self._lock = _th.RLock()
+
+    def get_lock(self):
+        return self._lock
+
+    def get_obj(self):
+        return self
+
+    def __repr__(self):
+        return "<Value %r>" % (self.value,)
+
+
+def Value(typecode_or_type, *args, lock=True):
+    return _Value(typecode_or_type, args[0] if args else 0, lock)
+
+
+class _Array(list):
+    def __init__(self, init):
+        super().__init__(init)
+        self._lock = _th.RLock()
+
+    def get_lock(self):
+        return self._lock
+
+    def get_obj(self):
+        return self
+
+
+def Array(typecode_or_type, size_or_initializer, *, lock=True):
+    if isinstance(size_or_initializer, int):
+        return _Array([0] * size_or_initializer)
+    return _Array(size_or_initializer)
+
+
+class _Namespace:
+    def __repr__(self):
+        return "Namespace(%s)" % ", ".join("%s=%r" % kv for kv in self.__dict__.items())
+
+
+class _Manager:
+    def start(self, *a, **k):
+        pass
+
+    def shutdown(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        pass
+
+    def dict(self, *a, **k):
+        return dict(*a, **k)
+
+    def list(self, *a):
+        return list(*a)
+
+    def Queue(self, maxsize=0):
+        return Queue(maxsize)
+
+    JoinableQueue = Queue
+
+    def Value(self, typecode, value, lock=True):
+        return _Value(typecode, value)
+
+    def Array(self, typecode, seq, lock=True):
+        return Array(typecode, seq)
+
+    def Namespace(self):
+        return _Namespace()
+
+    def Lock(self):
+        return Lock()
+
+    def RLock(self):
+        return RLock()
+
+    def Event(self):
+        return Event()
+
+    def Semaphore(self, value=1):
+        return Semaphore(value)
+
+    def Condition(self, lock=None):
+        return Condition(lock)
+
+    def Barrier(self, parties, action=None, timeout=None):
+        return Barrier(parties, action, timeout)
+
+
+def Manager():
+    return _Manager()
+
+
+from multiprocessing.pool import Pool  # noqa: E402
+
+
+class _Context:
+    def __getattr__(self, name):
+        return globals()[name]
+
+
+def get_context(method=None):
+    return _Context()
+`,r=String.raw`"""ForgeCode の multiprocessing.pool (順番に実行します)"""
+import itertools as _it
+
+__all__ = ["Pool", "ThreadPool", "AsyncResult", "ApplyResult", "MapResult"]
+
+
+class AsyncResult:
+    def __init__(self, fn, callback=None, error_callback=None):
+        self._ok = True
+        try:
+            self._value = fn()
+        except KeyboardInterrupt:
+            raise
+        except BaseException as e:
+            self._ok = False
+            self._value = e
+            if error_callback:
+                error_callback(e)
+        else:
+            if callback:
+                callback(self._value)
+
+    def get(self, timeout=None):
+        if self._ok:
+            return self._value
+        raise self._value
+
+    def wait(self, timeout=None):
+        pass
+
+    def ready(self):
+        return True
+
+    def successful(self):
+        return self._ok
+
+
+ApplyResult = MapResult = AsyncResult
+
+
+class Pool:
+    def __init__(self, processes=None, initializer=None, initargs=(), maxtasksperchild=None, context=None):
+        if processes is not None and processes < 1:
+            raise ValueError("Number of processes must be at least 1")
+        self._closed = False
+        try:
+            from multiprocessing import _note
+            _note()
+        except Exception:
+            pass
+        if initializer is not None:
+            initializer(*initargs)
+
+    def _check(self):
+        if self._closed:
+            raise ValueError("Pool not running")
+
+    def apply(self, func, args=(), kwds={}):
+        self._check()
+        return func(*args, **kwds)
+
+    def apply_async(self, func, args=(), kwds={}, callback=None, error_callback=None):
+        self._check()
+        return AsyncResult(lambda: func(*args, **kwds), callback, error_callback)
+
+    def map(self, func, iterable, chunksize=None):
+        self._check()
+        return [func(x) for x in iterable]
+
+    def map_async(self, func, iterable, chunksize=None, callback=None, error_callback=None):
+        self._check()
+        return AsyncResult(lambda: [func(x) for x in iterable], callback, error_callback)
+
+    def imap(self, func, iterable, chunksize=1):
+        self._check()
+        return (func(x) for x in iterable)
+
+    imap_unordered = imap
+
+    def starmap(self, func, iterable, chunksize=None):
+        self._check()
+        return [func(*a) for a in iterable]
+
+    def starmap_async(self, func, iterable, chunksize=None, callback=None, error_callback=None):
+        self._check()
+        return AsyncResult(lambda: [func(*a) for a in iterable], callback, error_callback)
+
+    def close(self):
+        self._closed = True
+
+    def terminate(self):
+        self._closed = True
+
+    def join(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.terminate()
+
+
+ThreadPool = Pool
+`,i=String.raw`"""ForgeCode の multiprocessing.dummy (順番に実行します)"""
+from multiprocessing import (Queue, JoinableQueue, Lock, RLock, Event, Semaphore, BoundedSemaphore, Condition, Barrier,
+                             Value, Array, Manager, cpu_count, current_process, active_children, Pipe)
+from multiprocessing.pool import ThreadPool as Pool
+from threading import Thread as Process
+`,n=String.raw`from multiprocessing import Queue, JoinableQueue, SimpleQueue
+`;var l=String.raw`"""ForgeCode の webbrowser: 出力にリンクを表示します (タップで開けます)"""
+import js
+
+__all__ = ["Error", "open", "open_new", "open_new_tab", "get", "register"]
+
+
+class Error(Exception):
+    pass
+
+
+def open(url, new=0, autoraise=True):
+    js.__fc_link(str(url))
+    return True
+
+
+def open_new(url):
+    return open(url, 1)
+
+
+def open_new_tab(url):
+    return open(url, 2)
+
+
+class _Browser:
+    name = "forgecode"
+
+    def open(self, url, new=0, autoraise=True):
+        return open(url, new)
+
+    def open_new(self, url):
+        return open(url, 1)
+
+    def open_new_tab(self, url):
+        return open(url, 2)
+
+
+def get(using=None):
+    return _Browser()
+
+
+def register(name, klass, instance=None, *, preferred=False):
+    pass
+`,o=String.raw`"""winsound (ForgeCode 互換版: 画面で音を鳴らします)"""
+import json as _json
+import js as _js
+
+SND_FILENAME = 0x20000
+SND_ALIAS = 0x10000
+SND_LOOP = 0x0008
+SND_MEMORY = 0x0004
+SND_PURGE = 0x0040
+SND_ASYNC = 0x0001
+SND_NODEFAULT = 0x0002
+SND_NOSTOP = 0x0010
+SND_NOWAIT = 0x2000
+MB_ICONASTERISK = 0x40
+MB_ICONEXCLAMATION = 0x30
+MB_ICONHAND = 0x10
+MB_ICONQUESTION = 0x20
+MB_OK = 0x0
+_n = [0]
+
+
+def Beep(frequency, duration):
+    if not 37 <= frequency <= 32767:
+        raise ValueError("frequency must be in 37 thru 32767")
+    _js.__fc_sound(_json.dumps({"op": "beep", "freq": int(frequency), "ms": int(duration)}), None)
+    import time
+    time.sleep(duration / 1000.0)
+
+
+def MessageBeep(type=MB_OK):
+    _js.__fc_sound(_json.dumps({"op": "beep", "freq": 660, "ms": 150, "wave": "sine"}), None)
+
+
+def PlaySound(sound, flags):
+    if sound is None or flags & SND_PURGE:
+        _js.__fc_sound(_json.dumps({"op": "stopall"}), None)
+        return
+    if flags & SND_ALIAS:
+        MessageBeep()
+        return
+    data = bytes(sound) if flags & SND_MEMORY else open(sound, "rb").read()
+    from pyodide.ffi import to_js
+    _n[0] += 1
+    _js.__fc_sound(_json.dumps({"op": "play", "id": "ws%d" % _n[0], "channel": "winsound", "loops": -1 if flags & SND_LOOP else 0}), to_js(data))
+`,f=String.raw`"""playsound (ForgeCode 互換版: 画面で音を鳴らします)"""
+import json as _json
+import js as _js
+
+_n = [0]
+
+
+class PlaysoundException(Exception):
+    pass
+
+
+def playsound(sound, block=True):
+    import os
+    path = os.fspath(sound)
+    if path.startswith("http://") or path.startswith("https://"):
+        raise PlaysoundException("この環境では、プロジェクトの中の音のファイルだけ鳴らせます")
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        raise PlaysoundException(str(e))
+    from pyodide.ffi import to_js
+    _n[0] += 1
+    _js.__fc_sound(_json.dumps({"op": "play", "id": "ps%d" % _n[0]}), to_js(data))
+`;var a=String.raw`"""ForgeCode のテスト実行 (pytest と同じ書き方)"""
+import sys, os, io, re, ast, json, time, types, inspect, linecache, traceback, importlib.util, contextlib, tempfile, shutil, unittest
+
+PROJECT = "/home/pyodide/project"
+_last_failed = set()
+
+
+def _event(data):
+    try:
+        import js
+        js.__fc_event("tests", json.dumps(data, ensure_ascii=False, default=str))
+    except Exception:
+        pass
+
+
+def _rel(path):
+    try:
+        p = os.path.relpath(os.path.abspath(path), PROJECT)
+    except ValueError:
+        return path
+    return p.replace(os.sep, "/")
+
+
+def _is_test_file(name):
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+
+
+def find_files(paths):
+    out = []
+    targets = paths or ["."]
+    for t in targets:
+        full = os.path.join(PROJECT, t) if not os.path.isabs(t) else t
+        if os.path.isfile(full):
+            out.append(full)
+            continue
+        for root, dirs, files in os.walk(full):
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("__pycache__", "venv", ".venv", "node_modules", "site-packages"))
+            for f in sorted(files):
+                if _is_test_file(f):
+                    out.append(os.path.join(root, f))
+    seen, res = set(), []
+    for f in out:
+        if f not in seen:
+            seen.add(f)
+            res.append(f)
+    return res
+
+
+# ============================================================
+# pytest が無いときの pytest (よく使うものだけ)
+# ============================================================
+class Skipped(Exception):
+    pass
+
+
+class XFailed(Exception):
+    pass
+
+
+class Failed(AssertionError):
+    pass
+
+
+class _Mark:
+    def __init__(self, name, args=(), kwargs=None):
+        self.name, self.args, self.kwargs = name, args, kwargs or {}
+
+    def __call__(self, *args, **kwargs):
+        if len(args) == 1 and callable(args[0]) and not kwargs and self.name not in ("parametrize", "skipif"):
+            return self._apply(args[0])
+        return _MarkApply(_Mark(self.name, args, kwargs))
+
+    def _apply(self, fn):
+        marks = list(getattr(fn, "pytestmark", []))
+        marks.append(self)
+        try:
+            fn.pytestmark = marks
+        except Exception:
+            pass
+        return fn
+
+
+class _MarkApply:
+    def __init__(self, mark):
+        self.mark = mark
+
+    def __call__(self, fn):
+        return self.mark._apply(fn)
+
+
+class _MarkGen:
+    def __getattr__(self, name):
+        return _Mark(name)
+
+
+class _Raises:
+    def __init__(self, exc, match=None):
+        self.expected, self.match, self.value, self.type = exc, match, None, None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, et, ev, tb):
+        if et is None:
+            names = self.expected.__name__ if isinstance(self.expected, type) else ", ".join(e.__name__ for e in self.expected)
+            raise Failed("DID NOT RAISE " + names)
+        if not issubclass(et, self.expected):
+            return False
+        self.value, self.type = ev, et
+        if self.match and not re.search(self.match, str(ev)):
+            raise Failed("例外のメッセージ %r が %r に当てはまりません" % (str(ev), self.match))
+        return True
+
+
+def _raises(exc, *args, match=None, **kwargs):
+    r = _Raises(exc, match)
+    if args:
+        with r:
+            args[0](*args[1:], **kwargs)
+        return r
+    return r
+
+
+class _Approx:
+    def __init__(self, expected, rel=None, abs=None):
+        self.expected, self.rel, self.abs = expected, rel, abs
+
+    def _close(self, a, b):
+        tol = max(self.rel if self.rel is not None else 1e-6 * builtin_abs(b), self.abs if self.abs is not None else 1e-12)
+        return builtin_abs(a - b) <= tol
+
+    def __eq__(self, other):
+        e = self.expected
+        try:
+            if isinstance(e, dict):
+                return isinstance(other, dict) and e.keys() == other.keys() and all(self._close(other[k], e[k]) for k in e)
+            if isinstance(e, (list, tuple)):
+                return len(e) == len(other) and all(self._close(a, b) for a, b in zip(other, e))
+            return self._close(other, e)
+        except TypeError:
+            return False
+
+    def __repr__(self):
+        return "approx(%r)" % (self.expected,)
+
+
+builtin_abs = abs
+
+
+def _fixture(fn=None, *, scope="function", autouse=False, params=None, name=None):
+    def deco(f):
+        f._fc_fixture = {"scope": scope, "autouse": autouse, "name": name or f.__name__}
+        return f
+    return deco(fn) if fn is not None else deco
+
+
+def _skip(reason=""):
+    raise Skipped(reason)
+
+
+def _fail(reason=""):
+    raise Failed(reason)
+
+
+def _xfail(reason=""):
+    raise XFailed(reason)
+
+
+def _importorskip(name, minversion=None):
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        raise Skipped("%s を import できません" % name)
+
+
+def make_pytest_shim():
+    m = types.ModuleType("pytest")
+    m.__doc__ = "ForgeCode の簡易 pytest (本物の pytest が使えないとき)"
+    m.raises, m.approx, m.fixture, m.mark = _raises, _Approx, _fixture, _MarkGen()
+    m.skip, m.fail, m.xfail, m.importorskip = _skip, _fail, _xfail, _importorskip
+    m.skip.Exception = Skipped
+    m.param = lambda *values, id=None, marks=(): values if len(values) != 1 else values[0]
+    m.warns = lambda *a, **k: contextlib.nullcontext()
+    m.deprecated_call = lambda *a, **k: contextlib.nullcontext()
+    m.main = lambda args=None: main(list(args or []))
+    m._fc_shim = True
+    return m
+
+
+# ---- 用意されているフィクスチャ ----
+class _Capsys:
+    def __init__(self):
+        self.out, self.err = io.StringIO(), io.StringIO()
+        self._saved = (sys.stdout, sys.stderr)
+        sys.stdout, sys.stderr = self.out, self.err
+
+    def readouterr(self):
+        o, e = self.out.getvalue(), self.err.getvalue()
+        self.out.seek(0); self.out.truncate()
+        self.err.seek(0); self.err.truncate()
+        return types.SimpleNamespace(out=o, err=e)
+
+    def close(self):
+        sys.stdout, sys.stderr = self._saved
+
+
+class _MonkeyPatch:
+    _missing = object()
+
+    def __init__(self):
+        self._undo = []
+
+    def setattr(self, target, name, value=_missing, raising=True):
+        if value is self._missing and isinstance(target, str):
+            mod, _, attr = target.rpartition(".")
+            target, value, name = importlib.import_module(mod), name, attr
+        old = getattr(target, name, self._missing)
+        if old is self._missing and raising:
+            raise AttributeError(name)
+        self._undo.append(lambda: delattr(target, name) if old is self._missing else setattr(target, name, old))
+        setattr(target, name, value)
+
+    def delattr(self, target, name, raising=True):
+        if not hasattr(target, name):
+            if raising:
+                raise AttributeError(name)
+            return
+        old = getattr(target, name)
+        self._undo.append(lambda: setattr(target, name, old))
+        delattr(target, name)
+
+    def setitem(self, d, key, value):
+        old = d.get(key, self._missing) if hasattr(d, "get") else self._missing
+        self._undo.append(lambda: d.pop(key, None) if old is self._missing else d.__setitem__(key, old))
+        d[key] = value
+
+    def delitem(self, d, key, raising=True):
+        if key not in d:
+            if raising:
+                raise KeyError(key)
+            return
+        old = d[key]
+        self._undo.append(lambda: d.__setitem__(key, old))
+        del d[key]
+
+    def setenv(self, name, value, prepend=None):
+        self.setitem(os.environ, name, str(value))
+
+    def delenv(self, name, raising=True):
+        self.delitem(os.environ, name, raising)
+
+    def chdir(self, path):
+        old = os.getcwd()
+        self._undo.append(lambda: os.chdir(old))
+        os.chdir(path)
+
+    def syspath_prepend(self, path):
+        sys.path.insert(0, str(path))
+        self._undo.append(lambda: sys.path.remove(str(path)) if str(path) in sys.path else None)
+
+    def undo(self):
+        while self._undo:
+            try:
+                self._undo.pop()()
+            except Exception:
+                pass
+
+
+def _builtin_fixture(name, finalizers):
+    if name in ("tmp_path", "tmpdir"):
+        import pathlib
+        d = tempfile.mkdtemp(prefix="fctest_")
+        finalizers.append(lambda: shutil.rmtree(d, ignore_errors=True))
+        return pathlib.Path(d) if name == "tmp_path" else d
+    if name in ("capsys", "capfd"):
+        c = _Capsys()
+        finalizers.append(c.close)
+        return c
+    if name == "monkeypatch":
+        m = _MonkeyPatch()
+        finalizers.append(m.undo)
+        return m
+    if name == "request":
+        return types.SimpleNamespace(param=None, node=None, config=None)
+    raise LookupError(name)
+
+
+# ============================================================
+# 集める
+# ============================================================
+class Item:
+    def __init__(self, file, name, fn, line, cls=None, params=None, case=None):
+        self.file, self.name, self.fn, self.line, self.cls, self.params, self.case = file, name, fn, line, cls, params or {}, case
+        self.id = file + "::" + (cls.__name__ + "::" if cls is not None else "") + name
+
+
+def _marks(obj):
+    return list(getattr(obj, "pytestmark", []) or [])
+
+
+def _param_sets(fn):
+    sets = [({}, "")]
+    for m in reversed([m for m in _marks(fn) if m.name == "parametrize"]):
+        names, values = m.args[0], m.args[1]
+        names = [n.strip() for n in names.split(",")] if isinstance(names, str) else list(names)
+        ids = m.kwargs.get("ids")
+        nxt = []
+        for base, bid in sets:
+            for k, v in enumerate(values):
+                vals = (v,) if len(names) == 1 else tuple(v)
+                pid = ids[k] if isinstance(ids, (list, tuple)) and k < len(ids) else "-".join(_short_repr(x) for x in vals)
+                d = dict(base)
+                d.update(zip(names, vals))
+                nxt.append((d, (bid + "-" if bid else "") + str(pid)))
+        sets = nxt
+    return sets
+
+
+def _short_repr(v):
+    if isinstance(v, (int, float, bool)) or v is None:
+        return str(v)
+    if isinstance(v, str) and len(v) <= 20 and v.isidentifier():
+        return v
+    return type(v).__name__ + str(abs(hash(repr(v))) % 1000)
+
+
+def _line_of(fn):
+    try:
+        return inspect.getsourcelines(fn)[1]
+    except Exception:
+        try:
+            return fn.__code__.co_firstlineno
+        except Exception:
+            return 1
+
+
+def load_module(path):
+    name = "fctest_" + re.sub(r"\W", "_", _rel(path)[:-3])
+    d = os.path.dirname(path)
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def collect_module(path, mod):
+    rel = _rel(path)
+    items = []
+    for name, obj in list(vars(mod).items()):
+        if inspect.isclass(obj) and getattr(obj, "__module__", None) == mod.__name__:
+            if issubclass(obj, unittest.TestCase):
+                for mname in unittest.TestLoader().getTestCaseNames(obj):
+                    items.append(Item(rel, mname, getattr(obj, mname), _line_of(getattr(obj, mname)), cls=obj, case=True))
+            elif name.startswith("Test") and "__init__" not in vars(obj):
+                for mname, m in vars(obj).items():
+                    if mname.startswith("test") and callable(m):
+                        for params, pid in _param_sets(m):
+                            items.append(Item(rel, mname + ("[%s]" % pid if pid else ""), m, _line_of(m), cls=obj, params=params))
+        elif name.startswith("test") and inspect.isfunction(obj) and obj.__module__ == mod.__name__:
+            for params, pid in _param_sets(obj):
+                items.append(Item(rel, name + ("[%s]" % pid if pid else ""), obj, _line_of(obj), params=params))
+    items.sort(key=lambda it: it.line)
+    return items
+
+
+# ============================================================
+# assert の失敗を分かりやすく (式の両側の値を見せる)
+# ============================================================
+_SAFE_CALLS = {"len", "sorted", "list", "set", "tuple", "dict", "str", "int", "float", "abs", "sum", "max", "min", "round", "repr", "type", "bool", "frozenset"}
+
+
+def _safe(node):
+    for n in ast.walk(node):
+        if isinstance(n, ast.Call) and not (isinstance(n.func, ast.Name) and n.func.id in _SAFE_CALLS):
+            return False
+        if isinstance(n, (ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom, ast.Lambda)):
+            return False
+    return True
+
+
+def _r(v):
+    s = repr(v)
+    return s if len(s) <= 240 else s[:237] + "..."
+
+
+def explain_assert(tb):
+    frame, lineno = None, None
+    for f, ln in traceback.walk_tb(tb):
+        frame, lineno = f, ln
+    if frame is None:
+        return None
+    fname = frame.f_code.co_filename
+    try:
+        tree = ast.parse("".join(linecache.getlines(fname)))
+    except Exception:
+        return None
+    node = None
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assert) and n.lineno <= lineno <= getattr(n, "end_lineno", n.lineno):
+            node = n
+    if node is None:
+        return None
+    src = ast.get_source_segment("".join(linecache.getlines(fname)), node) or ""
+    t = node.test
+    env_g, env_l = frame.f_globals, frame.f_locals
+    ev = lambda e: eval(compile(ast.Expression(e), fname, "eval"), env_g, env_l)
+    lines = [src]
+    try:
+        if isinstance(t, ast.Compare) and len(t.ops) == 1 and _safe(t):
+            left, right = ev(t.left), ev(t.comparators[0])
+            op = {ast.Eq: "==", ast.NotEq: "!=", ast.Lt: "<", ast.LtE: "<=", ast.Gt: ">", ast.GtE: ">=", ast.In: "in", ast.NotIn: "not in", ast.Is: "is", ast.IsNot: "is not"}.get(type(t.ops[0]), "?")
+            lines.append("assert %s %s %s" % (_r(left), op, _r(right)))
+            if op == "==" and isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+                for k, (a, b) in enumerate(zip(left, right)):
+                    if a != b:
+                        lines.append("  %d 番目が違います: %s != %s" % (k, _r(a), _r(b)))
+                        break
+                else:
+                    if len(left) != len(right):
+                        lines.append("  長さが違います: %d != %d" % (len(left), len(right)))
+            elif op == "==" and isinstance(left, dict) and isinstance(right, dict):
+                diff = [k for k in set(left) | set(right) if left.get(k, object()) != right.get(k, object())]
+                for k in sorted(diff, key=repr)[:5]:
+                    lines.append("  [%r]: %s != %s" % (k, _r(left.get(k, "(なし)")), _r(right.get(k, "(なし)"))))
+            elif op == "==" and isinstance(left, str) and isinstance(right, str) and len(left) > 20:
+                k = next((i for i, (a, b) in enumerate(zip(left, right)) if a != b), min(len(left), len(right)))
+                lines.append("  %d 文字目から違います: %r と %r" % (k, left[k:k + 20], right[k:k + 20]))
+        elif _safe(t):
+            v = ev(t)
+            lines.append("assert %s" % _r(v))
+    except Exception:
+        pass
+    return "\n".join(lines)
+
+
+def failure_text(e, tb):
+    frames = [f for f in traceback.extract_tb(tb) if os.path.abspath(f.filename).startswith(PROJECT)]
+    loc = frames[-1] if frames else None
+    head = ""
+    if isinstance(e, AssertionError) and not isinstance(e, Failed):
+        head = explain_assert(tb) or ""
+        if str(e):
+            head = (head + "\n" if head else "") + "AssertionError: " + str(e)
+        elif not head:
+            head = "AssertionError"
+    else:
+        head = "%s: %s" % (type(e).__name__, e) if str(e) else type(e).__name__
+    trace = "".join(traceback.format_list(frames)) if frames else ""
+    return head, trace, (_rel(loc.filename), loc.lineno) if loc else (None, None)
+
+
+# ============================================================
+# 実行 (内蔵)
+# ============================================================
+class Runner:
+    def __init__(self, verbose=False, stop_first=False):
+        self.verbose, self.stop_first = verbose, stop_first
+        self.results = []
+        self.session_cache = {}
+
+    def fixtures_for(self, mod, conftests):
+        table = {}
+        for src in conftests + [mod]:
+            for v in vars(src).values():
+                info = getattr(v, "_fc_fixture", None)
+                if info:
+                    table[info["name"]] = (v, info)
+        # 本物の pytest の @pytest.fixture (shim を使わず本物を import していたとき)
+        return table
+
+    def resolve(self, name, table, item, finalizers, cache, stack=()):
+        if name in cache:
+            return cache[name]
+        if name in item.params:
+            return item.params[name]
+        if name in table:
+            fn, info = table[name]
+            if info["scope"] in ("module", "session", "package") and name in self.session_cache:
+                return self.session_cache[name]
+            if name in stack:
+                raise RuntimeError("フィクスチャ %s が自分自身を使っています" % name)
+            kwargs = {p: self.resolve(p, table, item, finalizers, cache, stack + (name,)) for p in inspect.signature(fn).parameters if p not in ("self",)}
+            val = fn(**kwargs)
+            if inspect.isgenerator(val):
+                gen = val
+                val = next(gen)
+                def fin(g=gen):
+                    try:
+                        next(g)
+                    except StopIteration:
+                        pass
+                (finalizers if info["scope"] == "function" else self.session_finalizers).append(fin)
+            if info["scope"] != "function":
+                self.session_cache[name] = val
+            cache[name] = val
+            return val
+        return _builtin_fixture(name, finalizers)
+
+    def run_item(self, item, mod, table):
+        t0 = time.perf_counter()
+        marks = _marks(item.fn) + (_marks(item.cls) if item.cls is not None else []) + _marks(mod)
+        res = {"id": item.id, "file": item.file, "name": item.name, "cls": item.cls.__name__ if item.cls is not None else None, "line": item.line}
+        for m in marks:
+            if m.name == "skip" or (m.name == "skipif" and m.args and m.args[0]):
+                res.update(outcome="skipped", message=str(m.kwargs.get("reason") or (m.args[0] if m.name == "skip" and m.args else "") or "skip"))
+                return self.finish(res, t0)
+        xfail = next((m for m in marks if m.name == "xfail" and (not m.args or m.args[0])), None)
+        if item.case:
+            return self.run_case(item, res, t0)
+        finalizers, cache = [], {}
+        stage = "setup"
+        try:
+            for name, (fn, info) in table.items():
+                if info["autouse"]:
+                    self.resolve(name, table, item, finalizers, cache)
+            inst = item.cls() if item.cls is not None else None
+            fn = getattr(inst, item.fn.__name__) if inst is not None else item.fn
+            if inst is not None and hasattr(inst, "setup_method"):
+                inst.setup_method(fn)
+            params = [p for p in inspect.signature(fn).parameters]
+            kwargs = {p: self.resolve(p, table, item, finalizers, cache) for p in params}
+            stage = "call"
+            r = fn(**kwargs)
+            if inspect.iscoroutine(r):
+                import asyncio
+                asyncio.run(r)
+            if inst is not None and hasattr(inst, "teardown_method"):
+                inst.teardown_method(fn)
+            if xfail:
+                res.update(outcome="xpassed", message="失敗するはずが通りました")
+            else:
+                res.update(outcome="passed")
+        except Skipped as e:
+            res.update(outcome="skipped", message=str(e) or "skip")
+        except XFailed as e:
+            res.update(outcome="xfailed", message=str(e))
+        except KeyboardInterrupt:
+            raise
+        except BaseException as e:
+            if isinstance(e, SystemExit) and stage == "setup":
+                raise
+            if xfail and stage == "call":
+                res.update(outcome="xfailed", message=str(xfail.kwargs.get("reason") or "予想どおり失敗"))
+            else:
+                head, trace, (f, ln) = failure_text(e, e.__traceback__)
+                if isinstance(e, LookupError) and stage == "setup" and str(e).strip("'") in [p for p in inspect.signature(item.fn).parameters]:
+                    head = "フィクスチャ '%s' が見つかりません" % str(e).strip("'")
+                res.update(outcome="failed" if stage == "call" else "error", message=head, detail=trace, at={"file": f, "line": ln} if f else None)
+        finally:
+            for fin in reversed(finalizers):
+                try:
+                    fin()
+                except Exception:
+                    pass
+        return self.finish(res, t0)
+
+    def run_case(self, item, res, t0):
+        result = unittest.TestResult()
+        case = item.cls(item.name)
+        case.run(result)
+        if result.skipped:
+            res.update(outcome="skipped", message=result.skipped[0][1])
+        elif result.expectedFailures:
+            res.update(outcome="xfailed", message="")
+        elif result.unexpectedSuccesses:
+            res.update(outcome="xpassed", message="")
+        elif result.failures or result.errors:
+            kind, (c, text) = ("failed", result.failures[0]) if result.failures else ("error", result.errors[0])
+            last = [l for l in text.strip().split("\n") if l.strip()]
+            m = re.findall(r'File "([^"]+)", line (\d+)', text)
+            at = None
+            for f, ln in m:
+                if os.path.abspath(f).startswith(PROJECT):
+                    at = {"file": _rel(f), "line": int(ln)}
+            res.update(outcome="failed" if kind == "failed" else "error", message=last[-1] if last else kind, detail=text, at=at)
+        else:
+            res.update(outcome="passed")
+        return self.finish(res, t0)
+
+    def finish(self, res, t0):
+        res["ms"] = round((time.perf_counter() - t0) * 1000, 2)
+        self.results.append(res)
+        _event(dict(phase="result", **res))
+        return res
+
+
+SYMBOL = {"passed": ".", "failed": "F", "error": "E", "skipped": "s", "xfailed": "x", "xpassed": "X"}
+COLOR = {"passed": "32", "failed": "31", "error": "31", "skipped": "33", "xfailed": "33", "xpassed": "33"}
+
+
+def _match_k(expr, text):
+    if not expr:
+        return True
+    words = re.findall(r"\(|\)|\band\b|\bor\b|\bnot\b|[^\s()]+", expr)
+    py = []
+    for w in words:
+        if w in ("and", "or", "not", "(", ")"):
+            py.append(w)
+        else:
+            py.append(repr(w.lower()) + " in _t")
+    try:
+        return bool(eval(" ".join(py), {"_t": text.lower()}))
+    except Exception:
+        return expr.lower() in text.lower()
+
+
+def parse_args(args):
+    o = {"paths": [], "k": None, "x": False, "v": False, "q": False, "lf": False, "ids": [], "real": None}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "-k":
+            i += 1
+            o["k"] = args[i] if i < len(args) else None
+        elif a.startswith("-k") and len(a) > 2:
+            o["k"] = a[2:]
+        elif a in ("-x", "--exitfirst"):
+            o["x"] = True
+        elif a in ("-v", "--verbose", "-vv"):
+            o["v"] = True
+        elif a in ("-q", "--quiet"):
+            o["q"] = True
+        elif a in ("--lf", "--last-failed"):
+            o["lf"] = True
+        elif a == "--fc-builtin":
+            o["real"] = False
+        elif a == "--fc-ids":
+            i += 1
+            o["ids"] = json.loads(args[i])
+        elif a.startswith("-"):
+            pass
+        else:
+            if "::" in a:
+                o["ids"].append(a)
+                o["paths"].append(a.split("::")[0])
+            else:
+                o["paths"].append(a)
+        i += 1
+    return o
+
+
+def _write(s):
+    sys.stdout.write(s)
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
+def run_builtin(o):
+    global _last_failed
+    t0 = time.perf_counter()
+    shim_added = False
+    if "pytest" not in sys.modules:
+        sys.modules["pytest"] = make_pytest_shim()
+        shim_added = True
+    runner = Runner(verbose=o["v"], stop_first=o["x"])
+    runner.session_finalizers = []
+    files = find_files(o["paths"] or ([i.split("::")[0] for i in o["ids"]] if o["ids"] else []))
+    # conftest.py (フィクスチャの置き場所)
+    conftests = []
+    cpath = os.path.join(PROJECT, "conftest.py")
+    if os.path.isfile(cpath):
+        try:
+            conftests.append(load_module(cpath))
+        except Exception as e:
+            _write("conftest.py を読み込めませんでした: %s\n" % e)
+    plan = []
+    errors = []
+    for f in files:
+        rel = _rel(f)
+        try:
+            mod = load_module(f)
+        except KeyboardInterrupt:
+            raise
+        except BaseException as e:
+            head, trace, (ff, ln) = failure_text(e, e.__traceback__)
+            if isinstance(e, SyntaxError):
+                ff, ln = rel, e.lineno
+                head = "SyntaxError: %s (%s 行目)" % (e.msg, e.lineno)
+            errors.append({"id": rel, "file": rel, "name": rel, "cls": None, "line": ln or 1, "outcome": "error", "message": "読み込めませんでした: " + head, "detail": trace, "at": {"file": ff, "line": ln} if ff else None, "ms": 0})
+            continue
+        items = collect_module(f, mod)
+        if o["ids"]:
+            want = set(o["ids"])
+            items = [it for it in items if it.id in want or it.id.split("[")[0] in want or any(it.id.startswith(w + "::") for w in want)]
+        if o["k"]:
+            items = [it for it in items if _match_k(o["k"], it.id)]
+        if o["lf"] and _last_failed:
+            items = [it for it in items if it.id in _last_failed]
+        plan.append((rel, mod, items))
+    total = sum(len(p[2]) for p in plan)
+    _event({"phase": "start", "total": total, "runner": "builtin", "files": [_rel(f) for f in files]})
+    _write("\x1b[1m===== テスト %d 個 (%d ファイル) =====\x1b[0m\n" % (total, len(files)))
+    for e in errors:
+        runner.results.append(e)
+        _event(dict(phase="result", **e))
+        _write("\x1b[31mE\x1b[0m %s %s\n" % (e["file"], e["message"]))
+    stop = False
+    for rel, mod, items in plan:
+        if stop:
+            break
+        if not items:
+            continue
+        table = runner.fixtures_for(mod, conftests)
+        if not o["v"]:
+            _write(rel + " ")
+        for it in items:
+            r = runner.run_item(it, mod, table)
+            if o["v"]:
+                _write("%s \x1b[%sm%s\x1b[0m\n" % (it.id, COLOR[r["outcome"]], r["outcome"].upper()))
+            else:
+                _write("\x1b[%sm%s\x1b[0m" % (COLOR[r["outcome"]], SYMBOL[r["outcome"]]))
+            if o["x"] and r["outcome"] in ("failed", "error"):
+                stop = True
+                break
+        if not o["v"]:
+            _write("\n")
+    for fin in reversed(runner.session_finalizers):
+        try:
+            fin()
+        except Exception:
+            pass
+    if shim_added and getattr(sys.modules.get("pytest"), "_fc_shim", False):
+        del sys.modules["pytest"]
+    return finish_report(runner.results, time.perf_counter() - t0, "builtin")
+
+
+def finish_report(results, secs, kind):
+    global _last_failed
+    bad = [r for r in results if r["outcome"] in ("failed", "error")]
+    _last_failed = set(r["id"] for r in bad)
+    if bad:
+        _write("\n\x1b[1m===== 失敗したテスト =====\x1b[0m\n")
+        for r in bad:
+            _write("\x1b[31m\x1b[1m%s\x1b[0m%s\n" % (r["id"], " (準備で失敗)" if r["outcome"] == "error" else ""))
+            if r.get("detail") and kind == "builtin":
+                _write("\x1b[90m%s\x1b[0m" % r["detail"])
+            _write("\x1b[31m%s\x1b[0m\n\n" % (r.get("message") or ""))
+    counts = {}
+    for r in results:
+        counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
+    names = [("failed", "失敗"), ("error", "エラー"), ("passed", "成功"), ("skipped", "スキップ"), ("xfailed", "予想どおり失敗"), ("xpassed", "予想外に成功")]
+    parts = ["%d %s" % (counts[k], j) for k, j in names if counts.get(k)]
+    color = "31" if bad else "32" if results else "33"
+    _write("\x1b[%sm===== %s (%.2f 秒) =====\x1b[0m\n" % (color, ", ".join(parts) or "テストが見つかりません", secs))
+    _event({"phase": "done", "counts": counts, "seconds": round(secs, 3), "runner": kind})
+    return 1 if bad else (5 if not results else 0)
+
+
+# ============================================================
+# 本物の pytest (あれば)
+# ============================================================
+def run_real(o, args):
+    import pytest
+    collected = []
+    t0 = time.perf_counter()
+
+    class Plugin:
+        def pytest_collection_finish(self, session):
+            _event({"phase": "start", "total": len(session.items), "runner": "pytest"})
+
+        def pytest_runtest_logreport(self, report):
+            if report.when != "call" and not (report.failed or report.skipped):
+                return
+            if report.when == "teardown" and not report.failed:
+                return
+            fspath, line, _ = report.location
+            parts = report.nodeid.split("::")
+            outcome = report.outcome
+            if hasattr(report, "wasxfail"):
+                outcome = "xfailed" if report.skipped else "xpassed"
+            elif report.failed and report.when != "call":
+                outcome = "error"
+            msg = ""
+            detail = ""
+            at = None
+            if report.failed:
+                lr = report.longrepr
+                try:
+                    msg = lr.reprcrash.message
+                    at = {"file": _rel(os.path.join(str(session_root[0]), lr.reprcrash.path)) if not os.path.isabs(lr.reprcrash.path) else _rel(lr.reprcrash.path), "line": lr.reprcrash.lineno}
+                except Exception:
+                    msg = str(lr).strip().split("\n")[-1]
+                detail = str(lr)
+            elif report.skipped:
+                try:
+                    msg = report.longrepr[2]
+                except Exception:
+                    msg = ""
+            r = {"id": report.nodeid, "file": parts[0], "name": parts[-1], "cls": parts[1] if len(parts) > 2 else None, "line": (line or 0) + 1, "outcome": outcome, "message": msg, "detail": detail, "at": at, "ms": round(report.duration * 1000, 2)}
+            collected.append(r)
+            _event(dict(phase="result", **r))
+
+    session_root = [PROJECT]
+    pa = [a for a in args if not a.startswith("--fc-")]
+    if o["ids"] and not any("::" in a for a in pa):
+        pa += o["ids"]
+    pa = ["-p", "no:cacheprovider", "--color=yes", "-o", "console_output_style=classic"] + pa
+    code = pytest.main(pa, plugins=[Plugin()])
+    counts = {}
+    for r in collected:
+        counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
+    _event({"phase": "done", "counts": counts, "seconds": round(time.perf_counter() - t0, 3), "runner": "pytest"})
+    return int(code)
+
+
+def main(args=None):
+    args = list(sys.argv[1:] if args is None else args)
+    o = parse_args(args)
+    os.chdir(PROJECT) if os.getcwd() == "/" else None
+    use_real = o["real"]
+    if use_real is None:
+        mod = sys.modules.get("pytest")
+        use_real = mod is not None and not getattr(mod, "_fc_shim", False)
+        if not use_real:
+            use_real = importlib.util.find_spec("pytest") is not None
+    code = 0
+    try:
+        code = run_real(o, args) if use_real else run_builtin(o)
+    except KeyboardInterrupt:
+        _write("\n\x1b[33m止めました\x1b[0m\n")
+        _event({"phase": "done", "counts": {}, "stopped": True})
+        code = 2
+    return code
+`;var _=String.raw`"""ForgeCode のプロファイラー"""
+import sys, os, time, json, traceback
+
+PROJECT = "/home/pyodide/project"
+
+
+def _rel(path):
+    try:
+        ap = os.path.abspath(path)
+    except Exception:
+        return path
+    if ap.startswith(PROJECT + "/"):
+        return ap[len(PROJECT) + 1:]
+    return None
+
+
+def _event(data):
+    try:
+        import js
+        js.__fc_event("profile", json.dumps(data, ensure_ascii=False, default=str))
+    except Exception:
+        pass
+
+
+class LineTimer:
+    """プロジェクトのファイルの行ごとに、通った回数と、次の行までの時間 (その行の時間の目安) を数える"""
+    TOOL = 1   # sys.monitoring.COVERAGE_ID (デバッガーは 0、cProfile は 2 を使う)
+
+    def __init__(self):
+        self.hits = {}
+        self.time = {}
+        self.last = None
+        self.t = 0.0
+        self.on = False
+
+    def start(self):
+        mon = getattr(sys, "monitoring", None)
+        if mon is None:
+            return False
+        try:
+            mon.use_tool_id(self.TOOL, "forgecode-lines")
+        except ValueError:
+            return False
+        mon.register_callback(self.TOOL, mon.events.LINE, self.line)
+        mon.set_events(self.TOOL, mon.events.LINE)
+        self.on = True
+        self.t = time.perf_counter()
+        return True
+
+    def line(self, code, lineno):
+        now = time.perf_counter()
+        f = code.co_filename
+        if not f.startswith(PROJECT):
+            return sys.monitoring.DISABLE
+        if self.last is not None:
+            self.time[self.last] = self.time.get(self.last, 0.0) + (now - self.t)
+        key = (f, lineno)
+        self.hits[key] = self.hits.get(key, 0) + 1
+        self.last = key
+        self.t = time.perf_counter()
+
+    def stop(self):
+        if not self.on:
+            return
+        mon = sys.monitoring
+        now = time.perf_counter()
+        if self.last is not None:
+            self.time[self.last] = self.time.get(self.last, 0.0) + (now - self.t)
+        mon.set_events(self.TOOL, 0)
+        mon.register_callback(self.TOOL, mon.events.LINE, None)
+        mon.free_tool_id(self.TOOL)
+        self.on = False
+
+
+def _source_line(path, n):
+    try:
+        import linecache
+        return linecache.getline(path, n).strip()
+    except Exception:
+        return ""
+
+
+def report(prof, lines, total, text=True, top=40):
+    import pstats
+    st = pstats.Stats(prof)
+    rows = []
+    for (fname, lineno, func), (cc, nc, tt, ct, callers) in st.stats.items():
+        rel = _rel(fname)
+        if rel is None:
+            if fname == "~":
+                where = "(組み込み)"
+            else:
+                parts = fname.replace("\\", "/").split("/")
+                where = "/".join(parts[-2:]) if "site-packages" in fname or "lib/python" in fname else fname
+        else:
+            where = rel
+        if func in ("<module>",) and rel is None:
+            continue
+        if func.startswith("<built-in method builtins.exec>") or func == "<method 'disable' of '_lsprof.Profiler' objects>":
+            continue
+        rows.append({"file": rel, "where": where, "line": lineno, "name": func, "calls": nc, "prim": cc, "self": tt, "total": ct, "project": rel is not None})
+    rows.sort(key=lambda r: (-r["self"], -r["total"]))
+    funcs = rows[:top]
+    # プロジェクトの関数は、上位に入らなくても入れる
+    for r in rows[top:]:
+        if r["project"] and len(funcs) < top + 20:
+            funcs.append(r)
+    lrows = []
+    if lines is not None:
+        for (f, n), hits in lines.hits.items():
+            lrows.append({"file": _rel(f), "line": n, "hits": hits, "time": lines.time.get((f, n), 0.0), "code": _source_line(f, n)})
+        lrows.sort(key=lambda r: -r["time"])
+        lrows = lrows[:60]
+    data = {"total": total, "functions": funcs, "lines": lrows}
+    _event(data)
+    if text:
+        w = sys.stdout.write
+        w("\n\x1b[1m===== 時間のかかった関数 (合計 %.3f 秒) =====\x1b[0m\n" % total)
+        w("%8s %10s %10s  %s\n" % ("回数", "中だけ(秒)", "合計(秒)", "関数"))
+        for r in funcs[:15]:
+            loc = "%s:%d" % (r["where"], r["line"]) if r["line"] else r["where"]
+            name = r["name"]
+            w("%8s %10.4f %10.4f  %s%s\x1b[0m  \x1b[90m%s\x1b[0m\n" % (r["calls"] if r["calls"] == r["prim"] else "%d/%d" % (r["calls"], r["prim"]), r["self"], r["total"], "\x1b[36m" if r["project"] else "", name, loc))
+        if lrows:
+            w("\n\x1b[1m===== 時間のかかった行 =====\x1b[0m\n")
+            for r in lrows[:10]:
+                w("%8d回 %8.4f 秒  \x1b[90m%s:%d\x1b[0m  %s\n" % (r["hits"], r["time"], r["file"], r["line"], r["code"][:60]))
+    return data
+
+
+def run_file(path, argv=None, text=True, lines=True):
+    import cProfile
+    full = path if os.path.isabs(path) else os.path.join(PROJECT, path)
+    with open(full, encoding="utf-8") as fp:
+        src = fp.read()
+    code = compile(src, full, "exec")
+    g = {"__name__": "__main__", "__file__": full, "__builtins__": __builtins__}
+    old_argv = sys.argv
+    sys.argv = list(argv or [path])
+    d = os.path.dirname(full)
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    lt = LineTimer() if lines else None
+    prof = cProfile.Profile()
+    err = None
+    t0 = time.perf_counter()
+    if lt is not None and not lt.start():
+        lt = None
+    prof.enable()
+    try:
+        exec(code, g)
+    except SystemExit:
+        pass
+    except KeyboardInterrupt:
+        err = "止めました"
+    except BaseException as e:
+        err = e
+    finally:
+        prof.disable()
+        if lt is not None:
+            lt.stop()
+        sys.argv = old_argv
+    total = time.perf_counter() - t0
+    if err is not None and not isinstance(err, str):
+        tb = [f for f in traceback.extract_tb(err.__traceback__) if f.filename.startswith(PROJECT)]
+        sys.stderr.write("Traceback (most recent call last):\n" + "".join(traceback.format_list(tb)).replace(PROJECT + "/", "") + "%s: %s\n" % (type(err).__name__, err))
+    elif err:
+        sys.stderr.write(err + "\n")
+    return report(prof, lt, total, text=text)
+`;var d=String.raw`"""ForgeCode の Web アプリのプレビュー"""
+import sys, io, os, json, traceback, urllib.parse
+
+PROJECT = "/home/pyodide/project"
+REQ_FILE, BODY_FILE = "/tmp/fcweb_req", "/tmp/fcweb_body"
+current = {"kind": None, "obj": None, "title": ""}
+
+
+def _event(data):
+    try:
+        import js
+        js.__fc_event("web", json.dumps(data, ensure_ascii=False, default=str))
+    except Exception:
+        pass
+
+
+def serve(obj, kind, title=""):
+    current.update(kind=kind, obj=obj, title=title)
+    _event({"phase": "serve", "kind": kind, "title": title})
+    sys.stdout.write("\x1b[32m * %s をプレビューで動かしています\x1b[0m (実行画面の「プレビューを開く」で見られます。ポートは使いません)\n" % title)
+
+
+def stop():
+    current.update(kind=None, obj=None, title="")
+
+
+# ---- ポートを開く代わりに、プレビューに登録する ----
+def patch(name, mod):
+    if name == "flask":
+        def run(self, host=None, port=None, debug=None, load_dotenv=True, **kw):
+            serve(self, "wsgi", "Flask (%s)" % getattr(self, "name", "app"))
+        mod.Flask.run = run
+    elif name == "werkzeug.serving":
+        def run_simple(hostname, port, application, *a, **k):
+            serve(application, "wsgi", "WSGI")
+        mod.run_simple = run_simple
+    elif name == "wsgiref.simple_server":
+        class PreviewServer:
+            server_address = ("127.0.0.1", 8000)
+            server_port = 8000
+
+            def __init__(self, app):
+                self.app = app
+
+            def serve_forever(self, *a, **k):
+                serve(self.app, "wsgi", "WSGI (wsgiref)")
+
+            handle_request = serve_forever
+
+            def set_app(self, app):
+                self.app = app
+
+            def get_app(self):
+                return self.app
+
+            def server_close(self):
+                pass
+
+            def shutdown(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+        mod.make_server = lambda host, port, app, *a, **k: PreviewServer(app)
+    elif name == "http.server":
+        base = mod.HTTPServer
+
+        class PreviewHTTPServer(base):
+            def __init__(self, server_address, RequestHandlerClass, bind_and_activate=True):
+                self.server_address = server_address
+                self.server_name, self.server_port = "forgecode.local", (server_address[1] if len(server_address) > 1 else 8000)
+                self.RequestHandlerClass = RequestHandlerClass
+
+            def serve_forever(self, poll_interval=0.5):
+                serve(self, "http", "http.server (%s)" % self.RequestHandlerClass.__name__)
+
+            handle_request = serve_forever
+
+            def server_close(self):
+                pass
+
+            def shutdown(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+        mod.HTTPServer = PreviewHTTPServer
+        mod.ThreadingHTTPServer = PreviewHTTPServer
+    elif name == "bottle":
+        orig_run = mod.run
+
+        def run(app=None, *a, **k):
+            serve(app or mod.default_app(), "wsgi", "Bottle")
+        mod.run = run
+        mod.Bottle.run = lambda self, **k: serve(self, "wsgi", "Bottle")
+    elif name == "anyio.to_thread":
+        # ブラウザではスレッドを使えないので、その場で実行する (FastAPI の def の関数のため)
+        async def run_sync(func, *args, abandon_on_cancel=False, cancellable=None, limiter=None):
+            return func(*args)
+        mod.run_sync = run_sync
+
+
+# ---- 1 回の通信に答える ----
+def _headers_dict(pairs):
+    return {k.lower(): v for k, v in pairs}
+
+
+def _wsgi(app, req, body):
+    path = req.get("path") or "/"
+    hdr = _headers_dict(req.get("headers") or [])
+    env = {
+        "REQUEST_METHOD": req.get("method", "GET"),
+        "SCRIPT_NAME": req.get("prefix", ""),
+        "PATH_INFO": urllib.parse.unquote(path),
+        "QUERY_STRING": req.get("query", ""),
+        "SERVER_NAME": "forgecode.local", "SERVER_PORT": "443", "SERVER_PROTOCOL": "HTTP/1.1",
+        "REMOTE_ADDR": "127.0.0.1", "REMOTE_HOST": "localhost",
+        "CONTENT_TYPE": hdr.get("content-type", ""), "CONTENT_LENGTH": str(len(body)),
+        "wsgi.version": (1, 0), "wsgi.url_scheme": "https", "wsgi.input": io.BytesIO(body), "wsgi.errors": sys.stderr,
+        "wsgi.multithread": False, "wsgi.multiprocess": False, "wsgi.run_once": False,
+    }
+    for k, v in hdr.items():
+        if k in ("content-type", "content-length"):
+            continue
+        env["HTTP_" + k.upper().replace("-", "_")] = v
+    out = {"status": "500 Internal Server Error", "headers": []}
+    chunks = []
+
+    def start_response(status, headers, exc_info=None):
+        out["status"], out["headers"] = status, list(headers)
+        return chunks.append
+
+    result = app(env, start_response)
+    try:
+        for c in result:
+            if c:
+                chunks.append(c)
+    finally:
+        if hasattr(result, "close"):
+            result.close()
+    return int(str(out["status"]).split()[0]), out["headers"], b"".join(c if isinstance(c, bytes) else str(c).encode() for c in chunks)
+
+
+def _http(server, req, body):
+    cls = server.RequestHandlerClass
+    path = req.get("path") or "/"
+    full = path + ("?" + req["query"] if req.get("query") else "")
+    lines = ["%s %s HTTP/1.1" % (req.get("method", "GET"), full)]
+    has_len = False
+    for k, v in req.get("headers") or []:
+        if k.lower() == "content-length":
+            has_len = True
+        lines.append("%s: %s" % (k, v))
+    if body and not has_len:
+        lines.append("Content-Length: %d" % len(body))
+    raw = ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1", "replace") + body
+    h = cls.__new__(cls)
+    h.rfile, h.wfile = io.BytesIO(raw), io.BytesIO()
+    h.client_address, h.server, h.request, h.connection = ("127.0.0.1", 0), server, None, None
+    if not hasattr(h, "directory"):
+        h.directory = os.getcwd()
+    h.close_connection = True
+    h.handle_one_request()
+    data = h.wfile.getvalue()
+    head, _, rest = data.partition(b"\r\n\r\n")
+    hl = head.decode("latin-1").split("\r\n")
+    try:
+        status = int(hl[0].split()[1])
+    except Exception:
+        status = 200
+    headers = [tuple(x.split(": ", 1)) for x in hl[1:] if ": " in x]
+    return status, headers, rest
+
+
+def _asgi(app, req, body):
+    import asyncio
+    path = req.get("path") or "/"
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
+        "method": req.get("method", "GET"), "scheme": "https", "path": urllib.parse.unquote(path), "raw_path": path.encode(),
+        "query_string": (req.get("query") or "").encode(), "root_path": req.get("prefix", ""),
+        "headers": [(k.lower().encode("latin-1"), v.encode("latin-1", "replace")) for k, v in (req.get("headers") or [])],
+        "client": ("127.0.0.1", 0), "server": ("forgecode.local", 443), "state": {},
+    }
+    sent = {"status": 500, "headers": [], "body": bytearray()}
+    got = [False]
+
+    async def receive():
+        if not got[0]:
+            got[0] = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(msg):
+        if msg["type"] == "http.response.start":
+            sent["status"] = msg["status"]
+            sent["headers"] = [(k.decode("latin-1") if isinstance(k, bytes) else k, v.decode("latin-1") if isinstance(v, bytes) else v) for k, v in msg.get("headers", [])]
+        elif msg["type"] == "http.response.body":
+            sent["body"] += msg.get("body", b"")
+
+    asyncio.run(app(scope, receive, send))
+    return sent["status"], sent["headers"], bytes(sent["body"])
+
+
+def _error_page(e):
+    tb = [f for f in traceback.extract_tb(e.__traceback__) if f.filename.startswith(PROJECT)]
+    text = "Traceback (most recent call last):\n" + "".join(traceback.format_list(tb)).replace(PROJECT + "/", "") + "%s: %s" % (type(e).__name__, e)
+    sys.stderr.write(text + "\n")
+    import html
+    page = "<!doctype html><meta charset=utf-8><title>500</title><body style='font-family:system-ui;padding:16px'><h2 style='color:#c33'>500 サーバーのエラー</h2><pre style='white-space:pre-wrap;background:#f4f4f4;padding:12px;border-radius:8px'>%s</pre>" % html.escape(text)
+    return 500, [("Content-Type", "text/html; charset=utf-8")], page.encode()
+
+
+def handle(req_json):
+    req = json.loads(req_json)
+    try:
+        with open(REQ_FILE, "rb") as f:
+            body = f.read()
+    except OSError:
+        body = b""
+    kind, obj = current["kind"], current["obj"]
+    try:
+        if kind == "wsgi":
+            status, headers, data = _wsgi(obj, req, body)
+        elif kind == "http":
+            status, headers, data = _http(obj, req, body)
+        elif kind == "asgi":
+            status, headers, data = _asgi(obj, req, body)
+        else:
+            status, headers, data = 503, [("Content-Type", "text/plain; charset=utf-8")], "Web アプリは動いていません".encode()
+    except KeyboardInterrupt:
+        status, headers, data = 503, [("Content-Type", "text/plain; charset=utf-8")], "止めました".encode()
+    except BaseException as e:
+        status, headers, data = _error_page(e)
+    with open(BODY_FILE, "wb") as f:
+        f.write(data)
+    if kind:
+        col = "32" if status < 300 else "33" if status < 400 else "31"
+        sys.stdout.write("\x1b[90m%s %s%s \x1b[%sm%d\x1b[0m\n" % (req.get("method", "GET"), req.get("path", "/"), "?" + req["query"] if req.get("query") else "", col, status))
+    return json.dumps({"status": status, "headers": [[str(k), str(v)] for k, v in headers]})
+`,p=String.raw`"""uvicorn (ForgeCode 互換版: アプリの中のプレビューで動かします)"""
+import importlib
+
+
+def _load(app):
+    if isinstance(app, str):
+        mod, _, attr = app.partition(":")
+        m = importlib.import_module(mod)
+        app = getattr(m, attr or "app")
+    return app
+
+
+def run(app, host="127.0.0.1", port=8000, **kwargs):
+    import _fcweb
+    _fcweb.serve(_load(app), "asgi", "ASGI (uvicorn)")
+
+
+class Config:
+    def __init__(self, app, host="127.0.0.1", port=8000, **kwargs):
+        self.app, self.host, self.port = app, host, port
+
+
+class Server:
+    def __init__(self, config):
+        self.config = config
+
+    def run(self, sockets=None):
+        run(self.config.app)
+
+    async def serve(self, sockets=None):
+        run(self.config.app)
+`;var h="/home/pyodide/.forgecode",w=String.raw`"""ForgeCode の実行環境 (ブラウザの Python を、ふつうの Python に近づける道具)"""
 import sys, os, io, json, base64, builtins, time as _time, heapq
 import js
 
@@ -915,900 +3084,21 @@ def _hook_subprocess(sp):
 
 
 on_import("subprocess", _hook_subprocess)
-`,f=String.raw`"""ForgeCode の subprocess / os.system (よく使うコマンドを、この中で再現します)
 
-使えるもの: cls / clear (画面を消す)・pause・echo・python (ほかの .py)・ls / dir・cat / type・pwd / cd・
-mkdir・rm / del・sleep / timeout・date・whoami・exit・color / title / chcp (何もしない)
-ほかのプログラム (git など) は、ブラウザの中では起動できません
-"""
-import io, os, sys, shlex, time, runpy, contextlib
 
-CLEAR = "\x1b[2J\x1b[H"
+# ============================================================
+# Web アプリ: app.run() などは、ポートを開く代わりにアプリの中のプレビューで受ける (_fcweb)
+# ============================================================
+def _hook_web(name):
+    def fn(mod):
+        import _fcweb
+        _fcweb.patch(name, mod)
+    return fn
 
 
-class _Exit(Exception):
-    def __init__(self, code):
-        self.code = code
-
-
-def _split(cmd, shell):
-    if isinstance(cmd, (list, tuple)):
-        args = [os.fspath(a) if not isinstance(a, str) else a for a in cmd]
-        if shell and len(args) == 1:
-            return _split(args[0], True)
-        return [args]
-    cmd = os.fspath(cmd) if not isinstance(cmd, str) else cmd
-    # && ; で区切った複数のコマンド (かんたんに)
-    out = []
-    for part in cmd.replace("&&", ";").split(";"):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            out.append(shlex.split(part, posix=os.name != "nt"))
-        except ValueError:
-            out.append(part.split())
-    return out
-
-
-def _python(args, out, err, stdin):
-    # python ファイル.py 引数 / -c コード / -m モジュール を、この Python の中で実行
-    argv0 = sys.argv
-    saved_in = sys.stdin
-    try:
-        if stdin is not None:
-            sys.stdin = io.StringIO(stdin)
-        if not args:
-            raise _Exit(0)
-        if args[0] == "-c":
-            sys.argv = ["-c"] + args[2:]
-            g = {"__name__": "__main__"}
-            exec(compile(args[1] if len(args) > 1 else "", "<string>", "exec"), g)
-        elif args[0] == "-m":
-            sys.argv = [args[1]] + args[2:]
-            runpy.run_module(args[1], run_name="__main__", alter_sys=True)
-        elif args[0] in ("-V", "--version"):
-            print("Python " + sys.version.split()[0])
-        else:
-            sys.argv = list(args)
-            runpy.run_path(args[0], run_name="__main__")
-        return 0
-    except SystemExit as e:
-        c = e.code
-        if c is None:
-            return 0
-        if isinstance(c, int):
-            return c
-        print(c, file=sys.stderr)
-        return 1
-    except _Exit as e:
-        return e.code
-    except Exception:
-        import traceback
-        traceback.print_exc()
-        return 1
-    finally:
-        sys.argv = argv0
-        sys.stdin = saved_in
-
-
-def _one(args, shell, stdin):
-    name = os.path.basename(args[0]).lower()
-    if name.endswith(".exe"):
-        name = name[:-4]
-    rest = args[1:]
-    if name in ("cls", "clear"):
-        sys.stdout.write(CLEAR)
-        return 0
-    if name == "pause":
-        try:
-            input("続行するには Enter キーを押してください . . . ")
-        except EOFError:
-            pass
-        return 0
-    if name == "echo":
-        if rest == ["."] or rest == []:
-            print()
-        else:
-            print(" ".join(rest))
-        return 0
-    if name in ("python", "python3", "py") or args[0] == sys.executable:
-        return _python(rest, None, None, stdin)
-    if name in ("pip", "pip3"):
-        print("pip はターミナルで使ってください (例: pip install 名前)。import するだけでも自動で入ります", file=sys.stderr)
-        return 1
-    if name in ("ls", "dir"):
-        path = next((a for a in rest if not a.startswith("-") and not a.startswith("/")), ".")
-        try:
-            names = sorted(n for n in os.listdir(path) if not n.startswith(".") and n != "__pycache__")
-        except OSError as e:
-            print(e, file=sys.stderr)
-            return 1
-        print("\n".join(names))
-        return 0
-    if name in ("cat", "type"):
-        code = 0
-        for f in rest:
-            try:
-                with open(f, encoding="utf-8") as fh:
-                    sys.stdout.write(fh.read())
-            except OSError as e:
-                print(e, file=sys.stderr)
-                code = 1
-        return code
-    if name == "pwd" or (name == "cd" and not rest):
-        print(os.getcwd())
-        return 0
-    if name == "cd":
-        try:
-            os.chdir(rest[0])
-            return 0
-        except OSError as e:
-            print(e, file=sys.stderr)
-            return 1
-    if name in ("mkdir", "md"):
-        for d in rest:
-            if not d.startswith("-"):
-                os.makedirs(d, exist_ok=True)
-        return 0
-    if name in ("rm", "del", "erase"):
-        code = 0
-        for f in rest:
-            if f.startswith("-") or f.startswith("/"):
-                continue
-            try:
-                if os.path.isdir(f):
-                    import shutil
-                    shutil.rmtree(f)
-                else:
-                    os.remove(f)
-            except OSError as e:
-                print(e, file=sys.stderr)
-                code = 1
-        return code
-    if name in ("sleep", "timeout"):
-        nums = [a for a in rest if a.replace(".", "", 1).isdigit()]
-        time.sleep(float(nums[0]) if nums else 1)
-        return 0
-    if name == "date":
-        import datetime
-        print(datetime.datetime.now().strftime("%Y年 %m月 %d日 %H:%M:%S"))
-        return 0
-    if name == "whoami":
-        print("forge")
-        return 0
-    if name == "exit":
-        raise _Exit(int(rest[0]) if rest and rest[0].lstrip("-").isdigit() else 0)
-    if name in ("color", "title", "chcp", "mode", "true", "rem", ":"):
-        return 0
-    if name == "false":
-        return 1
-    if shell:
-        print("'%s' はこの環境では使えません (ブラウザの中では、ほかのプログラムを起動できません)" % args[0], file=sys.stderr)
-        return 127
-    raise FileNotFoundError(2, "No such file or directory: '%s' (ブラウザの中では、ほかのプログラムを起動できません)" % args[0], args[0])
-
-
-def run(cmd, shell=False, capture=False, input=None, cwd=None, text=True):
-    """戻り値: (終了コード, 出力, エラー出力)"""
-    out, err = io.StringIO(), io.StringIO()
-    old = os.getcwd()
-    code = 0
-    try:
-        if cwd is not None:
-            os.chdir(cwd)
-        ctx_out = contextlib.redirect_stdout(out) if capture else contextlib.nullcontext()
-        ctx_err = contextlib.redirect_stderr(err) if capture else contextlib.nullcontext()
-        with ctx_out, ctx_err:
-            for args in _split(cmd, shell):
-                if not args:
-                    continue
-                try:
-                    code = _one(args, shell, input)
-                except _Exit as e:
-                    code = e.code
-                    break
-    finally:
-        if cwd is not None:
-            os.chdir(old)
-    return code, out.getvalue(), err.getvalue()
-
-
-def install(sp):
-    """subprocess の run / call / check_output などを置き換える"""
-    def _data(v, text):
-        if v is None:
-            return None
-        return v if text else v.encode()
-
-    def _run(args, *, stdin=None, input=None, stdout=None, stderr=None, capture_output=False, shell=False, cwd=None,
-             timeout=None, check=False, text=None, universal_newlines=None, encoding=None, errors=None, env=None, **kw):
-        txt = bool(text or universal_newlines or encoding or errors)
-        cap_out = capture_output or stdout in (sp.PIPE, sp.DEVNULL)
-        cap_err = capture_output or stderr in (sp.PIPE, sp.DEVNULL, sp.STDOUT)
-        if isinstance(input, bytes):
-            input = input.decode("utf-8", "replace")
-        code, out, err = run(args, shell=shell, capture=cap_out or cap_err, input=input, cwd=cwd)
-        if stderr == sp.STDOUT and cap_out:
-            out, err = out + err, ""
-        # 受け取らないものは、そのまま画面へ
-        if not cap_out:
-            if out:
-                sys.stdout.write(out)
-            out = None
-        elif stdout == sp.DEVNULL:
-            out = None
-        if not cap_err:
-            if err:
-                sys.stderr.write(err)
-            err = None
-        elif stderr in (sp.DEVNULL, sp.STDOUT):
-            err = None
-        cp = sp.CompletedProcess(args, code, _data(out, txt), _data(err, txt))
-        if check and code:
-            raise sp.CalledProcessError(code, args, cp.stdout, cp.stderr)
-        return cp
-
-    def _call(args, **kw):
-        kw.pop("check", None)
-        return _run(args, **kw).returncode
-
-    def _check_call(args, **kw):
-        kw["check"] = True
-        _run(args, **kw)
-        return 0
-
-    def _check_output(args, **kw):
-        kw.setdefault("stdout", sp.PIPE)
-        kw["check"] = True
-        return _run(args, **kw).stdout
-
-    def _getstatusoutput(cmd, **kw):
-        code, out, err = run(cmd, shell=True, capture=True)
-        data = (out + err)
-        if data.endswith("\n"):
-            data = data[:-1]
-        return code, data
-
-    def _getoutput(cmd, **kw):
-        return _getstatusoutput(cmd)[1]
-
-    class Popen:
-        """かんたんな Popen (作った時点で最後まで実行します)"""
-        def __init__(self, args, stdin=None, stdout=None, stderr=None, shell=False, cwd=None, text=None, universal_newlines=None, encoding=None, **kw):
-            self.args = args
-            self._txt = bool(text or universal_newlines or encoding)
-            self._kw = dict(stdout=stdout, stderr=stderr, shell=shell, cwd=cwd)
-            self._done = None
-            self.stdin = None
-            self.pid = 2
-            if stdin != sp.PIPE:
-                self._finish(None)
-
-        def _finish(self, input):
-            if self._done is None:
-                self._done = _run(self.args, input=input, text=self._txt, **self._kw)
-                self.returncode = self._done.returncode
-                self.stdout = io.StringIO(self._done.stdout) if isinstance(self._done.stdout, str) else io.BytesIO(self._done.stdout) if self._done.stdout is not None else None
-                self.stderr = io.StringIO(self._done.stderr) if isinstance(self._done.stderr, str) else io.BytesIO(self._done.stderr) if self._done.stderr is not None else None
-            return self._done
-
-        def communicate(self, input=None, timeout=None):
-            d = self._finish(input)
-            return d.stdout, d.stderr
-
-        def wait(self, timeout=None):
-            self._finish(None)
-            return self.returncode
-
-        def poll(self):
-            return self.returncode if self._done is not None else None
-
-        def kill(self):
-            pass
-
-        terminate = kill
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            self.wait()
-
-    sp.run = _run
-    sp.call = _call
-    sp.check_call = _check_call
-    sp.check_output = _check_output
-    sp.getoutput = _getoutput
-    sp.getstatusoutput = _getstatusoutput
-    sp.Popen = Popen
-`,o=String.raw`"""msvcrt (ForgeCode 互換版: キーを押す代わりに、入力欄に入れて Enter)"""
-_buf = []
-
-
-def _line():
-    if not _buf:
-        try:
-            s = input()
-        except EOFError:
-            s = ""
-        _buf.extend(list(s) or ["\r"])
-    return _buf.pop(0)
-
-
-def getwch():
-    return _line()
-
-
-def getwche():
-    c = _line()
-    print(c, end="")
-    return c
-
-
-def getch():
-    return getwch().encode("utf-8")[:1] or b"\r"
-
-
-def getche():
-    return getwche().encode("utf-8")[:1] or b"\r"
-
-
-def kbhit():
-    return bool(_buf)
-
-
-def putch(c):
-    print(c.decode() if isinstance(c, bytes) else c, end="")
-
-
-def putwch(c):
-    print(c, end="")
-`,a=String.raw`"""ForgeCode の webbrowser: 出力にリンクを表示します (タップで開けます)"""
-import js
-
-__all__ = ["Error", "open", "open_new", "open_new_tab", "get", "register"]
-
-
-class Error(Exception):
-    pass
-
-
-def open(url, new=0, autoraise=True):
-    js.__fc_link(str(url))
-    return True
-
-
-def open_new(url):
-    return open(url, 1)
-
-
-def open_new_tab(url):
-    return open(url, 2)
-
-
-class _Browser:
-    name = "forgecode"
-
-    def open(self, url, new=0, autoraise=True):
-        return open(url, new)
-
-    def open_new(self, url):
-        return open(url, 1)
-
-    def open_new_tab(self, url):
-        return open(url, 2)
-
-
-def get(using=None):
-    return _Browser()
-
-
-def register(name, klass, instance=None, *, preferred=False):
-    pass
-`,_=String.raw`"""ForgeCode の multiprocessing
-ブラウザではプロセスを作れないため、同じ Python の中で順番に実行します (結果はふつうと同じになります)
-"""
-import os as _os
-import queue as _queue
-import threading as _th
-import itertools as _it
-import traceback as _tb
-
-__all__ = ["Process", "Pool", "Queue", "JoinableQueue", "SimpleQueue", "Pipe", "Lock", "RLock", "Event", "Semaphore",
-           "BoundedSemaphore", "Condition", "Barrier", "Value", "Array", "Manager", "cpu_count", "current_process",
-           "parent_process", "active_children", "freeze_support", "set_start_method", "get_start_method",
-           "get_context", "get_all_start_methods", "TimeoutError", "ProcessError", "AuthenticationError", "BufferTooShort"]
-
-
-def _note():
-    try:
-        import _forgecode
-        _forgecode.note("mp", "この環境ではプロセスを作れないため、multiprocessing の処理は順番に実行します")
-    except Exception:
-        pass
-
-
-class ProcessError(Exception):
-    pass
-
-
-class BufferTooShort(ProcessError):
-    pass
-
-
-class TimeoutError(ProcessError):
-    pass
-
-
-class AuthenticationError(ProcessError):
-    pass
-
-
-Lock, RLock, Event, Semaphore, BoundedSemaphore, Condition, Barrier = _th.Lock, _th.RLock, _th.Event, _th.Semaphore, _th.BoundedSemaphore, _th.Condition, _th.Barrier
-_pids = _it.count(_os.getpid() + 1)
-
-
-class _Current:
-    name = "MainProcess"
-    daemon = False
-    exitcode = None
-    authkey = b""
-
-    @property
-    def pid(self):
-        return _os.getpid()
-
-    ident = pid
-
-
-_main = _Current()
-_cur = [_main]
-
-
-def current_process():
-    return _cur[-1]
-
-
-def parent_process():
-    return None if _cur[-1] is _main else _main
-
-
-def active_children():
-    return []
-
-
-def cpu_count():
-    return _os.cpu_count() or 1
-
-
-def freeze_support():
-    pass
-
-
-def set_start_method(method, force=False):
-    pass
-
-
-def get_start_method(allow_none=False):
-    return "fork"
-
-
-def get_all_start_methods():
-    return ["fork", "spawn"]
-
-
-class Process:
-    _counter = _it.count(1)
-
-    def __init__(self, group=None, target=None, name=None, args=(), kwargs=None, *, daemon=None):
-        self._target = target
-        self._args = tuple(args)
-        self._kwargs = dict(kwargs or {})
-        self.name = name or "Process-%d" % next(Process._counter)
-        self.daemon = bool(daemon)
-        self.exitcode = None
-        self.pid = None
-        self.authkey = b""
-
-    @property
-    def ident(self):
-        return self.pid
-
-    def run(self):
-        if self._target is not None:
-            self._target(*self._args, **self._kwargs)
-
-    def start(self):
-        if self.pid is not None:
-            raise AssertionError("cannot start a process twice")
-        _note()
-        self.pid = next(_pids)
-        _cur.append(self)
-        try:
-            self.run()
-            self.exitcode = 0
-        except SystemExit as e:
-            self.exitcode = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
-        except KeyboardInterrupt:
-            raise
-        except BaseException:
-            print("Process %s:" % self.name)
-            _tb.print_exc()
-            self.exitcode = 1
-        finally:
-            _cur.pop()
-
-    def join(self, timeout=None):
-        pass
-
-    def is_alive(self):
-        return False
-
-    def terminate(self):
-        pass
-
-    def kill(self):
-        pass
-
-    def close(self):
-        pass
-
-    @property
-    def sentinel(self):
-        return 0
-
-
-class Queue(_queue.Queue):
-    def __init__(self, maxsize=0, *, ctx=None):
-        super().__init__(maxsize)
-
-    def close(self):
-        pass
-
-    def join_thread(self):
-        pass
-
-    def cancel_join_thread(self):
-        pass
-
-
-JoinableQueue = Queue
-
-
-class SimpleQueue(_queue.SimpleQueue):
-    def close(self):
-        pass
-
-    def empty(self):
-        return super().empty()
-
-
-class _Conn:
-    def __init__(self, inbox, outbox):
-        self._in, self._out = inbox, outbox
-        self.closed = False
-
-    def send(self, obj):
-        self._out.append(obj)
-
-    def recv(self):
-        if not self._in:
-            raise EOFError("相手がまだ何も送っていません (この環境では順番に実行するため、送る側を先に実行します)")
-        return self._in.pop(0)
-
-    def poll(self, timeout=0.0):
-        return bool(self._in)
-
-    def send_bytes(self, buf, offset=0, size=None):
-        b = bytes(buf)
-        self.send(b[offset: None if size is None else offset + size])
-
-    def recv_bytes(self, maxlength=None):
-        return self.recv()
-
-    def close(self):
-        self.closed = True
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        self.close()
-
-
-def Pipe(duplex=True):
-    a, b = [], []
-    return _Conn(a, b), _Conn(b, a)
-
-
-class _Value:
-    def __init__(self, typecode_or_type, value, lock=True):
-        self.value = value
-        self._lock = _th.RLock()
-
-    def get_lock(self):
-        return self._lock
-
-    def get_obj(self):
-        return self
-
-    def __repr__(self):
-        return "<Value %r>" % (self.value,)
-
-
-def Value(typecode_or_type, *args, lock=True):
-    return _Value(typecode_or_type, args[0] if args else 0, lock)
-
-
-class _Array(list):
-    def __init__(self, init):
-        super().__init__(init)
-        self._lock = _th.RLock()
-
-    def get_lock(self):
-        return self._lock
-
-    def get_obj(self):
-        return self
-
-
-def Array(typecode_or_type, size_or_initializer, *, lock=True):
-    if isinstance(size_or_initializer, int):
-        return _Array([0] * size_or_initializer)
-    return _Array(size_or_initializer)
-
-
-class _Namespace:
-    def __repr__(self):
-        return "Namespace(%s)" % ", ".join("%s=%r" % kv for kv in self.__dict__.items())
-
-
-class _Manager:
-    def start(self, *a, **k):
-        pass
-
-    def shutdown(self):
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        pass
-
-    def dict(self, *a, **k):
-        return dict(*a, **k)
-
-    def list(self, *a):
-        return list(*a)
-
-    def Queue(self, maxsize=0):
-        return Queue(maxsize)
-
-    JoinableQueue = Queue
-
-    def Value(self, typecode, value, lock=True):
-        return _Value(typecode, value)
-
-    def Array(self, typecode, seq, lock=True):
-        return Array(typecode, seq)
-
-    def Namespace(self):
-        return _Namespace()
-
-    def Lock(self):
-        return Lock()
-
-    def RLock(self):
-        return RLock()
-
-    def Event(self):
-        return Event()
-
-    def Semaphore(self, value=1):
-        return Semaphore(value)
-
-    def Condition(self, lock=None):
-        return Condition(lock)
-
-    def Barrier(self, parties, action=None, timeout=None):
-        return Barrier(parties, action, timeout)
-
-
-def Manager():
-    return _Manager()
-
-
-from multiprocessing.pool import Pool  # noqa: E402
-
-
-class _Context:
-    def __getattr__(self, name):
-        return globals()[name]
-
-
-def get_context(method=None):
-    return _Context()
-`,d=String.raw`"""ForgeCode の multiprocessing.pool (順番に実行します)"""
-import itertools as _it
-
-__all__ = ["Pool", "ThreadPool", "AsyncResult", "ApplyResult", "MapResult"]
-
-
-class AsyncResult:
-    def __init__(self, fn, callback=None, error_callback=None):
-        self._ok = True
-        try:
-            self._value = fn()
-        except KeyboardInterrupt:
-            raise
-        except BaseException as e:
-            self._ok = False
-            self._value = e
-            if error_callback:
-                error_callback(e)
-        else:
-            if callback:
-                callback(self._value)
-
-    def get(self, timeout=None):
-        if self._ok:
-            return self._value
-        raise self._value
-
-    def wait(self, timeout=None):
-        pass
-
-    def ready(self):
-        return True
-
-    def successful(self):
-        return self._ok
-
-
-ApplyResult = MapResult = AsyncResult
-
-
-class Pool:
-    def __init__(self, processes=None, initializer=None, initargs=(), maxtasksperchild=None, context=None):
-        if processes is not None and processes < 1:
-            raise ValueError("Number of processes must be at least 1")
-        self._closed = False
-        try:
-            from multiprocessing import _note
-            _note()
-        except Exception:
-            pass
-        if initializer is not None:
-            initializer(*initargs)
-
-    def _check(self):
-        if self._closed:
-            raise ValueError("Pool not running")
-
-    def apply(self, func, args=(), kwds={}):
-        self._check()
-        return func(*args, **kwds)
-
-    def apply_async(self, func, args=(), kwds={}, callback=None, error_callback=None):
-        self._check()
-        return AsyncResult(lambda: func(*args, **kwds), callback, error_callback)
-
-    def map(self, func, iterable, chunksize=None):
-        self._check()
-        return [func(x) for x in iterable]
-
-    def map_async(self, func, iterable, chunksize=None, callback=None, error_callback=None):
-        self._check()
-        return AsyncResult(lambda: [func(x) for x in iterable], callback, error_callback)
-
-    def imap(self, func, iterable, chunksize=1):
-        self._check()
-        return (func(x) for x in iterable)
-
-    imap_unordered = imap
-
-    def starmap(self, func, iterable, chunksize=None):
-        self._check()
-        return [func(*a) for a in iterable]
-
-    def starmap_async(self, func, iterable, chunksize=None, callback=None, error_callback=None):
-        self._check()
-        return AsyncResult(lambda: [func(*a) for a in iterable], callback, error_callback)
-
-    def close(self):
-        self._closed = True
-
-    def terminate(self):
-        self._closed = True
-
-    def join(self):
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        self.terminate()
-
-
-ThreadPool = Pool
-`,c=String.raw`"""ForgeCode の multiprocessing.dummy (順番に実行します)"""
-from multiprocessing import (Queue, JoinableQueue, Lock, RLock, Event, Semaphore, BoundedSemaphore, Condition, Barrier,
-                             Value, Array, Manager, cpu_count, current_process, active_children, Pipe)
-from multiprocessing.pool import ThreadPool as Pool
-from threading import Thread as Process
-`,u=String.raw`from multiprocessing import Queue, JoinableQueue, SimpleQueue
-`,p=String.raw`"""winsound (ForgeCode 互換版: 画面で音を鳴らします)"""
-import json as _json
-import js as _js
-
-SND_FILENAME = 0x20000
-SND_ALIAS = 0x10000
-SND_LOOP = 0x0008
-SND_MEMORY = 0x0004
-SND_PURGE = 0x0040
-SND_ASYNC = 0x0001
-SND_NODEFAULT = 0x0002
-SND_NOSTOP = 0x0010
-SND_NOWAIT = 0x2000
-MB_ICONASTERISK = 0x40
-MB_ICONEXCLAMATION = 0x30
-MB_ICONHAND = 0x10
-MB_ICONQUESTION = 0x20
-MB_OK = 0x0
-_n = [0]
-
-
-def Beep(frequency, duration):
-    if not 37 <= frequency <= 32767:
-        raise ValueError("frequency must be in 37 thru 32767")
-    _js.__fc_sound(_json.dumps({"op": "beep", "freq": int(frequency), "ms": int(duration)}), None)
-    import time
-    time.sleep(duration / 1000.0)
-
-
-def MessageBeep(type=MB_OK):
-    _js.__fc_sound(_json.dumps({"op": "beep", "freq": 660, "ms": 150, "wave": "sine"}), None)
-
-
-def PlaySound(sound, flags):
-    if sound is None or flags & SND_PURGE:
-        _js.__fc_sound(_json.dumps({"op": "stopall"}), None)
-        return
-    if flags & SND_ALIAS:
-        MessageBeep()
-        return
-    data = bytes(sound) if flags & SND_MEMORY else open(sound, "rb").read()
-    from pyodide.ffi import to_js
-    _n[0] += 1
-    _js.__fc_sound(_json.dumps({"op": "play", "id": "ws%d" % _n[0], "channel": "winsound", "loops": -1 if flags & SND_LOOP else 0}), to_js(data))
-`,m=String.raw`"""playsound (ForgeCode 互換版: 画面で音を鳴らします)"""
-import json as _json
-import js as _js
-
-_n = [0]
-
-
-class PlaysoundException(Exception):
-    pass
-
-
-def playsound(sound, block=True):
-    import os
-    path = os.fspath(sound)
-    if path.startswith("http://") or path.startswith("https://"):
-        raise PlaysoundException("この環境では、プロジェクトの中の音のファイルだけ鳴らせます")
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-    except OSError as e:
-        raise PlaysoundException(str(e))
-    from pyodide.ffi import to_js
-    _n[0] += 1
-    _js.__fc_sound(_json.dumps({"op": "play", "id": "ps%d" % _n[0]}), to_js(data))
-`;function e(l){return{"winsound.py":p,"_fcshell.py":f,"msvcrt.py":o,"playsound.py":m,"_forgecode.py":n,"webbrowser.py":a,"multiprocessing/__init__.py":_,"multiprocessing/pool.py":d,"multiprocessing/dummy/__init__.py":c,"multiprocessing/queues.py":u,"turtle.py":l}}var s=String.raw`"""ForgeCode の turtle (タートルグラフィックス)
+for _n in ("flask", "werkzeug.serving", "wsgiref.simple_server", "http.server", "bottle", "anyio.to_thread"):
+    on_import(_n, _hook_web(_n))
+`;function c(y){return{"winsound.py":o,"_fcshell.py":e,"_fctest.py":a,"_fcprof.py":_,"_fcweb.py":d,"uvicorn.py":p,"msvcrt.py":s,"playsound.py":f,"_forgecode.py":w,"webbrowser.py":l,"multiprocessing/__init__.py":t,"multiprocessing/pool.py":r,"multiprocessing/dummy/__init__.py":i,"multiprocessing/queues.py":n,"turtle.py":y}}var u=String.raw`"""ForgeCode の turtle (タートルグラフィックス)
 
 ブラウザ用に作り直したもので、ふつうの turtle とほぼ同じように使えます。
 描いた絵は出力パネルに表示されます。キー操作 (onkey)・クリック (onclick)・タイマー (ontimer) も使えます。
@@ -2994,7 +4284,7 @@ ScrolledCanvas = None
 
 def write_docstringdict(filename="turtle_docstringdict"):
     pass
-`;var g=String.raw`"""pygame (ForgeCode 互換版)
+`;var x=String.raw`"""pygame (ForgeCode 互換版)
 ブラウザの中で動くように作り直した pygame です。ゲームの画面は出力に表示され、キー・タップで操作できます。
 """
 import sys as _sys
@@ -3012,7 +4302,7 @@ ver = __version__
 vernum = (2, 5, 2)
 version = _sys.modules[__name__]
 SDL = (2, 30, 0)
-`,y=String.raw`"""pygame の土台 (初期化・エラー・画面とのやりとり)"""
+`,b=String.raw`"""pygame の土台 (初期化・エラー・画面とのやりとり)"""
 import json as _json
 import js as _js
 import _forgecode as _fc
@@ -3123,7 +4413,7 @@ def _reset_all():
         _cv("reset")()
     except Exception:
         pass
-`,h=String.raw`"""pygame の定数"""
+`,v=String.raw`"""pygame の定数"""
 NOEVENT = 0
 QUIT = 256
 ACTIVEEVENT = 32768
@@ -3364,11 +4654,11 @@ K_MENU = 1073741942
 K_POWER = 1073741926
 K_EURO = 1073741876
 K_AC_BACK = 1073742094
-`,w=String.raw`"""from pygame.locals import * で使う定数"""
+`,k=String.raw`"""from pygame.locals import * で使う定数"""
 from pygame.constants import *
 from pygame.rect import Rect, FRect
 from pygame.color import Color
-`,x=String.raw`"""pygame.Rect (長方形)"""
+`,N=String.raw`"""pygame.Rect (長方形)"""
 
 
 def _parse(args):
@@ -3691,7 +4981,7 @@ class FRect(Rect):
 
 
 RectType = Rect
-`,v=String.raw`"""pygame.Color (色)"""
+`,E=String.raw`"""pygame.Color (色)"""
 THECOLORS = {
     "aliceblue": (240, 248, 255), "antiquewhite": (250, 235, 215), "aqua": (0, 255, 255), "aquamarine": (127, 255, 212),
     "azure": (240, 255, 255), "beige": (245, 245, 220), "bisque": (255, 228, 196), "black": (0, 0, 0),
@@ -3900,7 +5190,7 @@ def css(c, alpha=True):
     if not alpha or a >= 255:
         return "rgb(%d,%d,%d)" % (r, g, b)
     return "rgba(%d,%d,%d,%.4f)" % (r, g, b, a / 255.0)
-`,k=String.raw`"""pygame.Surface (絵を描く板)"""
+`,T=String.raw`"""pygame.Surface (絵を描く板)"""
 import math as _m
 import pygame._base as _b
 from pygame._base import _q, _flush, _cv, error
@@ -4168,7 +5458,7 @@ def _adopt(canvas, alpha=True):
     s._clip = None
     s._display = False
     return s
-`,b=String.raw`"""pygame.display (ゲームの画面)"""
+`,S=String.raw`"""pygame.display (ゲームの画面)"""
 import os as _os
 import re as _re
 import sys as _sys
@@ -4359,7 +5649,7 @@ def Info():
 
 def _reset():
     _st.update(surf=None, caption="pygame", key=None, init=False, sent_keys=False)
-`,N=String.raw`"""pygame.draw (図形を描く)"""
+`,O=String.raw`"""pygame.draw (図形を描く)"""
 import math as _m
 from pygame._base import _q
 from pygame.rect import Rect
@@ -4444,7 +5734,7 @@ def polygon(surface, color, points, width=0):
     _q(["poly", surface._sid, surface._css(color), flat, width])
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
     return _bound(surface, min(xs), min(ys), max(xs), max(ys))
-`,E=String.raw`"""pygame.gfxdraw (よく使うものだけ)"""
+`,R=String.raw`"""pygame.gfxdraw (よく使うものだけ)"""
 from pygame import draw as _d
 from pygame.rect import Rect
 
@@ -4544,7 +5834,7 @@ def bezier(surface, points, steps, color):
         y = sum(comb(n, k) * (1 - t) ** (n - k) * t ** k * points[k][1] for k in range(n + 1))
         pts.append((x, y))
     _d.lines(surface, color, False, pts)
-`,S=String.raw`"""pygame.event (キー・マウスなどの出来事)"""
+`,F=String.raw`"""pygame.event (キー・マウスなどの出来事)"""
 import time as _t
 import heapq as _hq
 import _forgecode as _fc
@@ -4799,7 +6089,7 @@ def _set_timer(ev, millis, loops=0):
 def _reset():
     _queue.clear()
     _st.update(blocked=set(), allowed=None, grab=False, custom=USEREVENT, timers=[], seq=0, last_pump=0.0)
-`,T=String.raw`"""ブラウザのキー → pygame のキー"""
+`,K=String.raw`"""ブラウザのキー → pygame のキー"""
 from pygame.constants import *
 
 PRESSED = set()
@@ -4870,7 +6160,7 @@ for _n, _v in list(globals().items()):
         NAMES.setdefault(_v, _n[2:].lower())
 NAMES.update({K_UP: "up", K_DOWN: "down", K_LEFT: "left", K_RIGHT: "right", K_SPACE: "space", K_RETURN: "return", K_ESCAPE: "escape",
               K_LSHIFT: "left shift", K_RSHIFT: "right shift", K_LCTRL: "left ctrl", K_RCTRL: "right ctrl"})
-`,O=String.raw`"""pygame.key (キーボード)"""
+`,P=String.raw`"""pygame.key (キーボード)"""
 from pygame.constants import *
 from pygame import _keys
 
@@ -4967,7 +6257,7 @@ def _reset():
     _keys.JUST_UP.clear()
     _keys.MOD[0] = 0
     _keys.REPEAT[0] = _keys.REPEAT[1] = 0
-`,R=String.raw`"""pygame.mouse (マウス・タップ)"""
+`,I=String.raw`"""pygame.mouse (マウス・タップ)"""
 _st = {"pos": (0, 0), "rel": (0, 0), "buttons": set(), "just_down": set(), "just_up": set(), "visible": True, "focused": True}
 
 
@@ -5046,7 +6336,7 @@ def set_system_cursor(*a):
 
 def _reset():
     _st.update(pos=(0, 0), rel=(0, 0), buttons=set(), just_down=set(), just_up=set(), visible=True)
-`,K=String.raw`"""pygame.time (時間)"""
+`,L=String.raw`"""pygame.time (時間)"""
 import time as _t
 import _forgecode as _fc
 
@@ -5115,7 +6405,7 @@ class Clock:
 
 def _reset():
     _start[0] = _t.monotonic()
-`,F=String.raw`"""pygame.font (文字)"""
+`,A=String.raw`"""pygame.font (文字)"""
 import os as _os
 import math as _m
 import pygame._base as _b
@@ -5351,7 +6641,7 @@ def SysFont(name, size, bold=False, italic=False, constructor=None):
     f._bold = bool(bold)
     f._italic = bool(italic)
     return f
-`,A=String.raw`"""pygame.image (画像の読み込み・保存)"""
+`,C=String.raw`"""pygame.image (画像の読み込み・保存)"""
 import os as _os
 import io as _io
 import zlib as _zlib
@@ -5459,7 +6749,7 @@ fromstring = frombytes
 
 def frombuffer(data, size, format="RGBA", pitch=-1):
     return frombytes(data, size, format)
-`,L=String.raw`"""pygame.transform (拡大・回転・反転)"""
+`,z=String.raw`"""pygame.transform (拡大・回転・反転)"""
 import math as _m
 from pygame._base import _q
 from pygame.surface import Surface
@@ -5560,7 +6850,7 @@ def average_color(surface, rect=None, consider_alpha=False):
 
 def threshold(*a, **k):
     return 0
-`,I=String.raw`"""pygame.mixer (音): 画面側の Web Audio で鳴らします"""
+`,q=String.raw`"""pygame.mixer (音): 画面側の Web Audio で鳴らします"""
 import os as _os
 import json as _json
 import js as _js
@@ -5804,7 +7094,7 @@ class _Music:
 
 
 music = _Music()
-`,P=String.raw`"""pygame.math (ベクトル)"""
+`,D=String.raw`"""pygame.math (ベクトル)"""
 import math as _m
 
 
@@ -6218,7 +7508,7 @@ class Vector3(_Vec):
         r, t, p = s
         t, p = _m.radians(t), _m.radians(p)
         self.x, self.y, self.z = r * _m.sin(t) * _m.cos(p), r * _m.sin(t) * _m.sin(p), r * _m.cos(t)
-`,C=String.raw`"""pygame.sprite (スプライトとグループ)"""
+`,M=String.raw`"""pygame.sprite (スプライトとグループ)"""
 import math as _m
 from pygame.rect import Rect
 
@@ -6691,7 +7981,7 @@ def spritecollideany(sprite, group, collided=None):
         if test(sprite, s):
             return s
     return None
-`,z=String.raw`"""pygame.mask (画素単位の当たり判定)"""
+`,j=String.raw`"""pygame.mask (画素単位の当たり判定)"""
 from pygame.rect import Rect
 
 
@@ -6869,7 +8159,7 @@ def from_threshold(surface, color, threshold=(0, 0, 0, 255), othersurface=None, 
                 row |= 1 << x
         m._rows[y] = row
     return m
-`,D=String.raw`"""pygame.surfarray (numpy の配列とのやりとり)"""
+`,B=String.raw`"""pygame.surfarray (numpy の配列とのやりとり)"""
 from pygame._base import _cv, _flush
 from pygame.surface import Surface
 
@@ -6940,7 +8230,7 @@ def get_arraytypes():
 
 def use_arraytype(t):
     pass
-`,M={"pygame/joystick.py":String.raw`"""pygame.joystick (この環境ではつながりません)"""
+`,U={"pygame/joystick.py":String.raw`"""pygame.joystick (この環境ではつながりません)"""
 
 
 def init():
@@ -7089,7 +8379,7 @@ class Font:
 
 
 SysFont = lambda name, size, bold=False, italic=False: Font(None, size)
-`};function t(){return{"pygame/__init__.py":g,"pygame/_base.py":y,"pygame/constants.py":h,"pygame/locals.py":w,"pygame/rect.py":x,"pygame/color.py":v,"pygame/surface.py":k,"pygame/display.py":b,"pygame/draw.py":N,"pygame/gfxdraw.py":E,"pygame/event.py":S,"pygame/_keys.py":T,"pygame/key.py":O,"pygame/mouse.py":R,"pygame/time.py":K,"pygame/font.py":F,"pygame/image.py":A,"pygame/transform.py":L,"pygame/mixer.py":I,"pygame/math.py":P,"pygame/sprite.py":C,"pygame/mask.py":z,"pygame/surfarray.py":D,...M}}var q=String.raw`"""tkinter の定数"""
+`};function m(){return{"pygame/__init__.py":x,"pygame/_base.py":b,"pygame/constants.py":v,"pygame/locals.py":k,"pygame/rect.py":N,"pygame/color.py":E,"pygame/surface.py":T,"pygame/display.py":S,"pygame/draw.py":O,"pygame/gfxdraw.py":R,"pygame/event.py":F,"pygame/_keys.py":K,"pygame/key.py":P,"pygame/mouse.py":I,"pygame/time.py":L,"pygame/font.py":A,"pygame/image.py":C,"pygame/transform.py":z,"pygame/mixer.py":q,"pygame/math.py":D,"pygame/sprite.py":M,"pygame/mask.py":j,"pygame/surfarray.py":B,...U}}var V=String.raw`"""tkinter の定数"""
 NO = FALSE = OFF = 0
 YES = TRUE = ON = 1
 N = "n"
@@ -7166,7 +8456,7 @@ PAGES = "pages"
 READABLE = 2
 WRITABLE = 4
 EXCEPTION = 8
-`,B=String.raw`"""tkinter (ForgeCode 互換版)
+`,W=String.raw`"""tkinter (ForgeCode 互換版)
 ブラウザの中で動くように作り直した tkinter です。ウィンドウは出力の中に表示され、ボタン・入力欄・キャンバスが使えます。
 """
 import sys as _sys
@@ -10080,7 +11370,7 @@ def _test():
 
 
 __all__ = [n for n in dir() if not n.startswith("_") and n not in ("TYPE_CHECKING",)]
-`,U=String.raw`"""tkinter.ttk (ForgeCode 互換版)"""
+`,H=String.raw`"""tkinter.ttk (ForgeCode 互換版)"""
 import tkinter as _tk
 from tkinter import (Widget, Frame as _F, LabelFrame as _LF, Label as _L, Button as _B, Entry as _E, Checkbutton as _C, Radiobutton as _R,
                      Scale as _S, Scrollbar as _SB, Spinbox as _SP, Menubutton as _MB, OptionMenu as _OM, PanedWindow as _PW, Misc, Variable,
@@ -10565,7 +11855,7 @@ def tclobjs_to_py(adict):
 
 def setup_master(master=None):
     return master or _tk._get_root()
-`,j={"tkinter/messagebox.py":String.raw`"""tkinter.messagebox (画面にダイアログを出します)"""
+`,G={"tkinter/messagebox.py":String.raw`"""tkinter.messagebox (画面にダイアログを出します)"""
 import _forgecode as _fc
 
 ERROR = "error"
@@ -10936,4 +12226,4 @@ class TclError(Exception):
 
 def create(*a, **k):
     raise TclError("この環境では Tcl は使えません")
-`};function r(){return{"tkinter/__init__.py":B,"tkinter/constants.py":q,"tkinter/ttk.py":U,...j}}var $=new Set(["pygame","tkinter","_tkinter","turtle","webbrowser","multiprocessing","winsound","playsound","msvcrt","_fcshell"]);function ee(){return{...e(s),...t(),...r()}}var te={bs4:"beautifulsoup4",dotenv:"python-dotenv",jwt:"PyJWT",docx:"python-docx",pptx:"python-pptx",serial:"pyserial",slugify:"python-slugify",dateutil:"python-dateutil",yaml:"pyyaml",PIL:"pillow",sklearn:"scikit-learn",skimage:"scikit-image",cv2:"opencv-python",Crypto:"pycryptodome",Cryptodome:"pycryptodomex",OpenSSL:"pyopenssl",attr:"attrs",magic:"python-magic",jose:"python-jose",multipart:"python-multipart",fitz:"pymupdf",websocket:"websocket-client",pkg_resources:"setuptools",sentence_transformers:"sentence-transformers",Levenshtein:"levenshtein",github:"PyGithub",googletrans:"googletrans",wikipedia:"wikipedia",emoji:"emoji",termcolor:"termcolor",colorama:"colorama",tabulate:"tabulate",faker:"Faker",markdown:"markdown",toml:"toml",ujson:"ujson",simplejson:"simplejson",more_itertools:"more-itertools",typing_extensions:"typing-extensions"},re={PyQt5:"PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PyQt6:"PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PySide2:"PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PySide6:"PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",wx:"wxPython (ウィンドウを出す GUI) はブラウザでは使えません",kivy:"kivy (アプリの画面) はブラウザでは使えません",pyautogui:"pyautogui (パソコンの操作) はブラウザでは使えません",pynput:"pynput (キーボード・マウスの操作) はブラウザでは使えません",keyboard:"keyboard (キーボードの操作) はブラウザでは使えません",mouse:"mouse (マウスの操作) はブラウザでは使えません",selenium:"selenium (ブラウザの自動操作) はこの環境では使えません",discord:"discord.py (常時接続の通信) はブラウザでは使えません",telegram:"Telegram のボット (常時接続の通信) はブラウザでは使えません",torch:"PyTorch はブラウザでは使えません",tensorflow:"TensorFlow はブラウザでは使えません"},V="314.0.8",le=`https://cdn.jsdelivr.net/pyodide/v${V}/full/`;export{i as a,$ as b,ee as c,te as d,re as e,le as f};
+`};function g(){return{"tkinter/__init__.py":W,"tkinter/constants.py":V,"tkinter/ttk.py":H,...G}}var me=new Set(["pygame","tkinter","_tkinter","turtle","webbrowser","multiprocessing","winsound","playsound","msvcrt","_fcshell","_fctest","_fcprof","_fcweb","_fcnb","uvicorn"]);function ge(){return{...c(u),...m(),...g()}}var he={bs4:"beautifulsoup4",dotenv:"python-dotenv",jwt:"PyJWT",docx:"python-docx",pptx:"python-pptx",serial:"pyserial",slugify:"python-slugify",dateutil:"python-dateutil",yaml:"pyyaml",PIL:"pillow",sklearn:"scikit-learn",skimage:"scikit-image",cv2:"opencv-python",Crypto:"pycryptodome",Cryptodome:"pycryptodomex",OpenSSL:"pyopenssl",attr:"attrs",magic:"python-magic",jose:"python-jose",multipart:"python-multipart",fitz:"pymupdf",websocket:"websocket-client",pkg_resources:"setuptools",sentence_transformers:"sentence-transformers",Levenshtein:"levenshtein",github:"PyGithub",googletrans:"googletrans",wikipedia:"wikipedia",emoji:"emoji",termcolor:"termcolor",colorama:"colorama",tabulate:"tabulate",faker:"Faker",markdown:"markdown",toml:"toml",ujson:"ujson",simplejson:"simplejson",more_itertools:"more-itertools",typing_extensions:"typing-extensions"},we={PyQt5:"PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PyQt6:"PyQt (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PySide2:"PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",PySide6:"PySide (ウィンドウを出す GUI) はブラウザでは使えません。画面は tkinter で作れます",wx:"wxPython (ウィンドウを出す GUI) はブラウザでは使えません",kivy:"kivy (アプリの画面) はブラウザでは使えません",pyautogui:"pyautogui (パソコンの操作) はブラウザでは使えません",pynput:"pynput (キーボード・マウスの操作) はブラウザでは使えません",keyboard:"keyboard (キーボードの操作) はブラウザでは使えません",mouse:"mouse (マウスの操作) はブラウザでは使えません",selenium:"selenium (ブラウザの自動操作) はこの環境では使えません",discord:"discord.py (常時接続の通信) はブラウザでは使えません",telegram:"Telegram のボット (常時接続の通信) はブラウザでは使えません",torch:"PyTorch はブラウザでは使えません",tensorflow:"TensorFlow はブラウザでは使えません"},Y="314.0.8",xe=`https://cdn.jsdelivr.net/pyodide/v${Y}/full/`;export{h as a,me as b,ge as c,he as d,we as e,xe as f};
