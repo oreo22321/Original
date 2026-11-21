@@ -1,12 +1,12 @@
 {
   "name": "bothost",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Discord などの bot を 24 時間動かしておくためのサーバーと管理画面",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "engines": {
     "node": ">=20"

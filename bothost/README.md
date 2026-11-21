@@ -1,40 +1,96 @@
 # BotHost — bot を 24 時間動かしておくサービス
 
-Discord などの bot のコードを置いて、ブラウザから **起動・停止・ログの確認・ファイルの編集** ができる、自分で動かせる bot ホスティングです。外部のライブラリは使っていないので、Node.js があれば `node server.js` だけで動きます。
+Discord などの bot のコードを置いて、ブラウザから **起動・停止・ログの確認・ファイルの編集** ができる、自分で持てる bot ホスティングです。外部のライブラリを使っていないので、Node.js があれば `node server.js` だけで動きます。
+
+> **iPhone で `localhost` を開いても繋がりません。** `localhost` は「その端末自身」のことなので、iPhone で開くと iPhone の中を探しに行きます。BotHost はサーバー (24 時間動いているコンピューター) の上で動かすものなので、下の「スマホだけでサーバーに置く」で Render に置いて、Render がくれる `https://〜.onrender.com` の URL を開いてください。
+
+## スマホだけでサーバーに置く (Render・無料)
+
+PC はいりません。iPhone の Safari だけでできます。
+
+### 1. バックアップ用の置き場所を作る (2 分)
+
+Render の無料プランは、サーバーが再起動するとファイルが消えます。そこで BotHost は、アカウントや bot を **GitHub に自動でバックアップ** して、再起動のときに戻します。
+
+1. GitHub で **新しいリポジトリ** を作る (名前は例えば `bothost-data`。**Private** にする。中身は空でよい)
+2. GitHub の **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**
+   - Repository access: **Only select repositories** → さっきの `bothost-data` だけ
+   - Permissions → Repository permissions → **Contents: Read and write**
+   - 作ったトークン (`github_pat_…`) をコピーしておく
+
+### 2. Render に置く (5 分)
+
+1. [Render](https://render.com) に GitHub でサインアップ
+2. 下のボタンを押す (このリポジトリの `render.yaml` が読み込まれます)
+
+   [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/oreo22321/Original)
+
+   ※ ボタンは `main` ブランチを使います。BotHost の変更が `main` に入ってから押してください。
+3. 聞かれた値を入れる
+   - `BOTHOST_BACKUP_REPO`: `あなたの GitHub の名前/bothost-data`
+   - `BOTHOST_BACKUP_TOKEN`: 1 でコピーしたトークン
+4. **Apply** → 数分待つと `https://bothost-xxxx.onrender.com` のような URL ができます
+5. その URL を開いて、**最初のアカウントを作る** (最初の人が管理者になり、ほかの人は登録できません)
+
+Safari の共有ボタン →「ホーム画面に追加」で、アプリのように開けます。
+
+### 無料プランについて
+
+- 無料プランは、外からのアクセスが 15 分ないと止まります。BotHost は **bot を動かしている間、10 分ごとに自分にアクセスして止まらないように** します (`RENDER_EXTERNAL_URL` を見て自動でオン)。
+- それでも Render の都合でサーバーが再起動することがあります。そのときは **GitHub のバックアップから戻して、動いていた bot を自動でまた起動** します。ライブラリは起動のときに入れ直すので、再起動の直後は少し時間がかかります。
+- 無料プランはメモリが少ない (512 MB) ので、動かす bot は 1〜2 個にしてください。
+- 無料プランの細かい条件は変わることがあります。[Render の説明](https://render.com/docs/free) も見てください。
 
 ## できること
 
-- **アカウント**: 登録・ログイン (パスワードは scrypt で保存)。最初に登録した人が管理者になります
-- **bot を作る**: テンプレートから選ぶだけ
-  - Discord bot (Python / discord.py) — `!ping` `!hello` に返事
-  - Discord bot (Node.js / discord.js) — 同じ
-  - 空の Python / 空の Node.js — Discord 以外の bot や定期処理も
-- **起動・停止・再起動**、状態 (動作中 / 準備中 / 再起動待ち / エラーで停止) の表示
-- **コンソール**: bot の出力 (stdout / stderr) がリアルタイムに流れる。`input()` 用に標準入力も送れる。ログの保存・消去
-- **ファイル**: 一覧・編集 (行番号・Tab・自動の字下げ・Ctrl/⌘+S で保存)・新規作成・アップロード・名前の変更・削除
-- **環境変数**: `DISCORD_TOKEN` などのトークンを、コードに書かずに渡せる。保存した値は画面にも API にも出しません
-- **ライブラリの自動インストール**: `requirements.txt` (pip) / `package.json` (npm) があれば起動の前に入れます。中身が変わったときだけ入れ直すので 2 回目からは速い
-- **落ちたら自動で再起動**: 2 秒・4 秒・8 秒…と待ってから再起動。5 分で 5 回落ちたらあきらめて「エラーで停止」に
-- **使用量**: CPU・メモリ・稼働時間。メモリの上限を超えたら止めます
-- **サーバーを再起動しても**、動かしていた bot は自動でまた動きます
-- スマホでも使えます (ライト / ダークモード)
+**bot**
+- テンプレートから作る: Discord bot (Python / discord.py)・**スラッシュコマンド** (Python)・Discord bot (Node.js / discord.js)・空の Python・空の Node.js
+- **ZIP で読み込み・書き出し** (自分のコードをまとめて入れる / バックアップ)。ファイルのドラッグ & ドロップも
+- 起動・停止・再起動。状態 (動作中 / 準備中 / 再起動待ち / エラーで停止) と、再起動までの秒数
 
-## 動かし方
+**コンソール**
+- bot の出力がリアルタイムに流れる (100ms ごとにまとめて送るので、たくさん出しても重くならない)
+- **色付きの出力 (ANSI)** をそのまま色で表示
+- **絞り込み**・**エラーだけ表示**・ダウンロード・消去
+- ログはファイルにも保存するので、**サーバーを再起動しても残る**
+- `input()` 用に標準入力を送れる
+
+**ファイル**
+- フォルダーの**ツリー**、編集、新規作成、アップロード、名前の変更、削除
+- エディタ: **色分け (Python / JavaScript / JSON)**、行番号、Tab / Shift+Tab (複数行もまとめて)、自動の字下げ、Ctrl/⌘+S で保存
+
+**Discord**
+- トークンを入れて「確認」すると、**正しいかを調べて、bot の名前・アイコン・参加サーバー数を表示し、サーバーへの招待リンクを作る**
+- MESSAGE CONTENT INTENT がオフなら教える
+- トークンに `Bot ` や空白が付いていても直す
+
+**安定して動かす**
+- 落ちたら **自動で再起動** (2 秒・4 秒・8 秒…と待つ。5 分で 5 回落ちたらあきらめる)
+- **落ちたら Discord に通知** (Webhook。同じ bot は 10 分に 1 回まで、あきらめたときは必ず)
+- **決めた時間ごとに再起動** (6 時間・12 時間・1 日…。メモリが少しずつ増える bot 向け)
+- メモリの上限を超えたら止める。CPU・メモリ・稼働時間と、**メモリのグラフ**
+- ライブラリ (`requirements.txt` / `package.json`) は起動の前に自動で入れる。中身が変わったときだけ。**入れ直し**ボタンも
+- サーバーが再起動したら、動かしていた bot をまた起動。サーバーが突然落ちて取り残された bot のプロセスは、次の起動で片付ける
+
+**管理 (最初に登録した人)**
+- サーバーの状態 (動いている bot・メモリ・保存容量)
+- 新しい登録を受け付けるかの切り替え、ユーザーの削除
+- バックアップの状態と「今すぐバックアップ」
+
+## 自分のパソコンや VPS で動かす
 
 ```sh
 cd bothost
 node server.js
-# → http://localhost:3000 を開いて、アカウントを作る
+# → http://localhost:3000 (同じパソコンのブラウザで開く)
 ```
 
-Discord bot を動かすまで:
+Docker で:
 
-1. 「＋ 新しい bot」→「Discord bot (Python)」か「Discord bot (Node.js)」を選ぶ
-2. [Discord Developer Portal](https://discord.com/developers/applications) でアプリを作り、**Bot → Reset Token** でトークンをコピー
-3. 同じページの **Privileged Gateway Intents → MESSAGE CONTENT INTENT** をオン
-4. **OAuth2 → URL Generator** で `bot` にチェックして、出た URL から自分のサーバーに招待
-5. BotHost の **設定 → 環境変数** に `DISCORD_TOKEN` = トークン を入れて保存
-6. **▶ 起動**。コンソールに「ログインしました」と出たら、Discord で `!ping` と送る
+```sh
+docker build -t bothost bothost
+docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless-stopped bothost
+```
 
 ## 設定 (環境変数)
 
@@ -42,31 +98,35 @@ Discord bot を動かすまで:
 | --- | --- | --- |
 | `PORT` | `3000` | 待ち受けるポート |
 | `HOST` | `0.0.0.0` | 待ち受けるアドレス |
-| `BOTHOST_DATA` | `./data` | データ (アカウント・bot のファイル) を置く場所 |
+| `BOTHOST_DATA` | `./data` | データ (アカウント・bot のファイル・ログ) を置く場所 |
 | `BOTHOST_MODE` | `process` | `process`: そのまま動かす / `docker`: bot ごとにコンテナで動かす |
-| `BOTHOST_REGISTRATION` | `open` | `first-only` にすると、最初の 1 人 (管理者) のあとは登録できなくなる |
+| `BOTHOST_REGISTRATION` | `first-only` | `first-only`: 最初の 1 人 (管理者) のあとは、管理画面で許可するまで登録できない / `open`: 誰でも登録できる |
 | `BOTHOST_MAX_BOTS` | `5` | 1 人が作れる bot の数 (管理者は無制限) |
 | `BOTHOST_MAX_DISK_MB` | `500` | bot のファイル全体の上限 |
 | `BOTHOST_SECURE_COOKIE` | なし | `1` にするとクッキーに Secure を付ける (HTTPS で公開するとき) |
+| `BOTHOST_TRUST_PROXY` | なし | `1` にするとリバースプロキシの `X-Forwarded-For` を信じる (Render では自動) |
 | `BOTHOST_PYTHON` | `python3` | process モードで使う Python |
+| `BOTHOST_BACKUP_REPO` | なし | バックアップ先の GitHub リポジトリ (`名前/リポジトリ`) |
+| `BOTHOST_BACKUP_TOKEN` | なし | そのリポジトリに書けるトークン (Contents: Read and write) |
+| `BOTHOST_BACKUP_BRANCH` | 既定のブランチ | バックアップを置くブランチ |
+| `BOTHOST_BACKUP_FILE` | `bothost-backup.json.gz` | バックアップのファイル名 |
+| `BOTHOST_KEEP_AWAKE_URL` | `RENDER_EXTERNAL_URL` | bot を動かしている間、10 分ごとにアクセスする自分の URL |
+| `BOTHOST_KEEP_AWAKE` | なし | `0` にすると上をオフ |
+
+## GitHub にバックアップ
+
+`BOTHOST_BACKUP_REPO` と `BOTHOST_BACKUP_TOKEN` を設定すると:
+
+- 変更があれば **1 分ごと** と **サーバーを止めるとき** に、アカウント・bot の設定・bot のファイルを 1 つのファイル (gzip した JSON) にして GitHub に保存します。ライブラリのフォルダー (`.deps`・`node_modules`) とログは入れません。
+- 起動したときに **データがなければ** (新しいサーバー・ファイルが消えた) GitHub から戻します。データがあるときは上書きしません。
+- バックアップには bot のトークン (環境変数) も入るので、**リポジトリは必ず Private** にしてください。
 
 ## 安全のために (大事)
 
-- **`process` モード** は bot がサーバーと同じマシン・同じユーザーでそのまま動きます。手軽ですが、bot のコードはサーバーの中のファイルを読めます。**自分と信頼できる人だけで使う** ときに使ってください (`BOTHOST_REGISTRATION=first-only` がおすすめ)。
-- **知らない人にも使わせる** なら `BOTHOST_MODE=docker` にしてください。bot ごとに Docker コンテナで動かし、メモリ・CPU・プロセス数に上限を付け、権限を落とし (`--cap-drop ALL`)、bot のフォルダーだけを見せます。サーバーに Docker が必要で、`python:3.12-slim` / `node:22-slim` のイメージを使います。
-- 公開するときは HTTPS (Caddy や nginx などのリバースプロキシ) の後ろに置き、`BOTHOST_SECURE_COOKIE=1` にしてください。
-- ファイルの API はフォルダーの外 (`../`・絶対パス・外を指すシンボリックリンク) を扱いません。変更する API には `X-BotHost: 1` ヘッダーが必須です (CSRF 対策)。
-
-## サーバーに置く
-
-VPS などで:
-
-```sh
-docker build -t bothost bothost
-docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless-stopped bothost
-```
-
-(このコンテナは `process` モードです。`docker` モードにするには、ホストの Docker を使えるようにしたうえで、データの場所をホストと同じパスにしてください。)
+- **`process` モード** は bot がサーバーと同じマシン・同じユーザーでそのまま動きます。手軽ですが、bot のコードはサーバーの中のファイルを読めます。**自分と信頼できる人だけで使う** ときに使ってください (そのため、既定では最初の 1 人しか登録できません)。
+- **知らない人にも使わせる** なら `BOTHOST_MODE=docker` にしてください。bot ごとに Docker コンテナで動かし、メモリ・CPU・プロセス数に上限を付け、権限を落とし (`--cap-drop ALL`)、bot のフォルダーだけを見せます。サーバーに Docker が必要です (Render の無料プランでは使えません)。
+- 公開するときは HTTPS の後ろに置き、`BOTHOST_SECURE_COOKIE=1` にしてください (Render の設定では入っています)。
+- 環境変数・Webhook の URL は画面にも API にも返しません。ファイルの API はフォルダーの外 (`../`・絶対パス・外を指すシンボリックリンク・ZIP の中の `../`) を扱いません。変更する API には `X-BotHost: 1` ヘッダーが必須です (CSRF 対策)。
 
 ## テスト
 
@@ -75,21 +135,26 @@ cd bothost
 npm test
 ```
 
-登録・ログイン・ほかの人の bot が見えないこと・ファイルの読み書きとフォルダーの外への拒否・環境変数を返さないこと・起動 → ログ (SSE) → 標準入力 → 使用量 → 停止・自動の再起動とあきらめ・ライブラリのインストール (2 回目はしない)・サーバー再起動後の再開・削除、を実際にサーバーを立てて確かめます。
+実際にサーバーを立てて、37 項目を確かめます。登録と管理者、ほかの人の bot が見えないこと、フォルダーの外への拒否、起動 → ログ → 標準入力 → 停止、自動の再起動とあきらめ、Discord のトークン確認と招待リンク (偽物の Discord で)、落ちたときの通知、ZIP、GitHub へのバックアップと復元 (偽物の GitHub で)、ログの保存と間引き、取り残されたプロセスの片付けなどです。
 
 ## つくり
 
 ```
+render.yaml            Render に置くための設定 (リポジトリの一番上)
 bothost/
-├── server.js          HTTP サーバー・API・ログのリアルタイム配信 (Server-Sent Events)
+├── server.js          HTTP サーバー・API・リアルタイム配信 (Server-Sent Events)
 ├── lib/
-│   ├── runner.js      bot のプロセス管理 (インストール・起動・停止・自動再起動・使用量)
+│   ├── runner.js      bot のプロセス管理 (インストール・起動・停止・自動再起動・ログ・使用量)
 │   ├── files.js       bot のファイル操作 (フォルダーの外に出ない)
+│   ├── zip.js         ZIP の読み書き
+│   ├── backup.js      GitHub へのバックアップと復元
+│   ├── discord.js     トークンの確認・招待リンク・Webhook の通知
 │   ├── auth.js        パスワード・セッション
-│   └── store.js       データの保存 (JSON)
+│   └── store.js       データの保存 (JSON。1 つ前の版も残す)
 ├── public/            画面 (HTML / CSS / JS。フレームワークなし)
 ├── templates/         新しい bot のひな形
-└── test/              テスト
+├── test/              テスト
+└── Dockerfile
 ```
 
 ### API
@@ -98,13 +163,18 @@ bothost/
 
 | メソッド | パス | 内容 |
 | --- | --- | --- |
+| GET | `/api/health` | 動いているか (ログイン不要) |
 | POST | `/api/register` `/api/login` `/api/logout` | アカウント |
 | GET | `/api/bots` | 自分の bot の一覧 |
 | POST | `/api/bots` | 作る (`{ name, template }`) |
-| GET / PATCH / DELETE | `/api/bots/:id` | 見る / 設定を変える (`name` `startCommand` `autoRestart` `memoryLimitMB` `cpuLimit` `env`) / 削除 |
-| POST | `/api/bots/:id/start` `stop` `restart` | 起動・停止・再起動 |
+| GET / PATCH / DELETE | `/api/bots/:id` | 見る / 設定を変える (`name` `startCommand` `autoRestart` `memoryLimitMB` `cpuLimit` `restartEveryHours` `notifyWebhook` `env`) / 削除 |
+| POST | `/api/bots/:id/start` `stop` `restart` `reinstall` | 起動・停止・再起動・ライブラリの入れ直し |
 | POST | `/api/bots/:id/stdin` | 標準入力に送る (`{ text }`) |
 | GET | `/api/bots/:id/events` | ログ・状態・使用量のリアルタイム配信 (SSE) |
+| GET / DELETE | `/api/bots/:id/logs.txt` `/api/bots/:id/logs` | ログのダウンロード / 消去 |
+| POST | `/api/bots/:id/discord-check` `notify-test` | トークンの確認 / テスト通知 |
 | GET | `/api/bots/:id/files` | ファイルの一覧 |
 | GET / PUT / DELETE | `/api/bots/:id/file?path=` | ファイルを読む / 書く (本文がそのまま中身) / 消す |
 | POST | `/api/bots/:id/rename` | 名前を変える (`{ from, to }`) |
+| GET / POST | `/api/bots/:id/export` `/api/bots/:id/import?replace=1` | ZIP で書き出す / 読み込む |
+| GET / PATCH / DELETE / POST | `/api/admin` `/api/admin/settings` `/api/admin/users/:id` `/api/admin/backup` | 管理者 |

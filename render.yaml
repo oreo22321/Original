@@ -1,0 +1,23 @@
+# Render (https://render.com) に BotHost を置くための設定です。
+# README の「スマホだけでサーバーに置く」の「Deploy to Render」ボタンから使います。
+services:
+  - type: web
+    name: bothost
+    runtime: docker
+    plan: free
+    dockerContext: ./bothost
+    dockerfilePath: ./bothost/Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      # 最初の 1 人 (管理者) のあとは、管理画面で許可するまで誰も登録できません
+      - key: BOTHOST_REGISTRATION
+        value: first-only
+      - key: BOTHOST_SECURE_COOKIE
+        value: "1"
+      # 無料プランはサーバーが再起動するとファイルが消えるので、GitHub にバックアップします
+      # 例: あなたの名前/bothost-data (先に空のプライベートリポジトリを作っておく)
+      - key: BOTHOST_BACKUP_REPO
+        sync: false
+      # GitHub の Fine-grained token (そのリポジトリの Contents: Read and write だけ)
+      - key: BOTHOST_BACKUP_TOKEN
+        sync: false

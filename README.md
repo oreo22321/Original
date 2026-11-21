@@ -11,6 +11,8 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 - **頼む**: 内蔵の AI (Forge AI) が、直す・説明する・コメントや型ヒントを付ける・コードを作る・質問に答える。端末内の AI モデルをダウンロードすると、エラー検知・実行エラーの修正・続きの提案も AI が行います
 - **見やすい**: VS Code と同じ配色 (Dark Modern / Light Modern) で、変数・関数・クラス・モジュール・定数を色分け
 
+> このリポジトリには、Discord などの bot を 24 時間動かしておくサービス **BotHost** も入っています → [bothost/README.md](bothost/README.md)
+
 ## できること
 
 ### エディタ

@@ -92,4 +92,51 @@ function dirSize(root) {
   return total;
 }
 
-module.exports = { list, read, write, remove, rename, copyTemplate, dirSize, resolveInside, PathError };
+// ZIP 用: ライブラリのフォルダーを除いた全部のファイル
+function collect(root, maxFile = 20 * 1024 * 1024) {
+  const out = [];
+  const walk = (dir, prefix) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { if (!HIDDEN_DIRS.has(e.name)) walk(full, rel); continue; }
+      if (!e.isFile()) continue;
+      const st = fs.statSync(full);
+      if (st.size > maxFile) continue;
+      out.push({ name: rel, data: fs.readFileSync(full), mtime: st.mtime });
+    }
+  };
+  walk(root, '');
+  return out;
+}
+
+// ZIP の中身を入れる。全部が 1 つのフォルダーに入っているなら、そのフォルダーは外します
+function importEntries(root, entries, { replace = false } = {}) {
+  const files = entries.filter((e) => !/(^|\/)(__MACOSX|\.DS_Store)(\/|$)/.test(e.name));
+  const tops = new Set(files.map((e) => e.name.split('/')[0]));
+  const strip = tops.size === 1 && files.every((e) => e.name.includes('/')) ? [...tops][0] + '/' : '';
+  // 先に全部の名前を確かめてから書く (途中までだけ入るのを防ぐ)
+  const plan = files.map((e) => {
+    const rel = strip ? e.name.slice(strip.length) : e.name;
+    const parts = rel.split('/');
+    if (parts.some((p) => HIDDEN_DIRS.has(p))) return null;
+    return { rel, data: e.data, full: resolveInside(root, rel) };
+  }).filter(Boolean);
+  if (replace) {
+    for (const name of fs.readdirSync(root)) {
+      if (HIDDEN_DIRS.has(name)) continue;
+      fs.rmSync(path.join(root, name), { recursive: true, force: true });
+    }
+  }
+  for (const f of plan) {
+    fs.mkdirSync(path.dirname(f.full), { recursive: true });
+    fs.writeFileSync(f.full, f.data);
+  }
+  return plan.length;
+}
+
+module.exports = {
+  list, read, write, remove, rename, copyTemplate, dirSize, resolveInside, collect, importEntries, PathError, HIDDEN_DIRS,
+};
