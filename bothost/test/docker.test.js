@@ -69,7 +69,8 @@ test('docker モード', { skip: !hasImages && 'Docker (と python / node のイ
       ].join('\n'),
     }, { env: { GREETING: 'やあ' } });
     await app.runner.start(bot);
-    await until(() => logs(bot).some((l) => l.startsWith('hello')));
+    // 1 行ずつ届くので、最後の行 (rootfs: …) まで待ってから確かめる
+    await until(() => logs(bot).some((l) => l.startsWith('rootfs:')));
     const L = logs(bot);
     // サーバーが root なら bot ごとのユーザー、そうでなければサーバーと同じユーザー (どちらでも root ではない)
     const uid = app.runner.isolate ? botUid(bot.id) : process.getuid();
