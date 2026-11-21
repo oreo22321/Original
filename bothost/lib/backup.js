@@ -81,7 +81,10 @@ class Backup {
 
   start() {
     if (!this.enabled || this.timer) return;
-    this.timer = setInterval(() => { if (this.dirty && !this.blocked) this.run().catch(() => {}); }, this.intervalMs);
+    this.timer = setInterval(() => {
+      if (this.blocked) this.retryBlocked().catch(() => {});
+      else if (this.dirty) this.run().catch(() => {});
+    }, this.intervalMs);
     this.timer.unref();
   }
 
@@ -295,11 +298,47 @@ class Backup {
     return this.running;
   }
 
+  fetchBackup() { return this.method === 'git' ? this.gitFetch() : this.apiFetch(); }
+
+  // 保存を止めている間 (起動のときに戻せなかった) は、1 分ごとに確かめ直す:
+  //   GitHub にまだバックアップがない → 上書きするものがないので再開
+  //   こちらのデータが空 → バックアップから戻して再開
+  //   どちらにもデータがある → 勝手には選ばない (管理画面の「今すぐバックアップ」で決める)
+  async retryBlocked() {
+    if (!this.blocked || this.retrying) return;
+    this.retrying = true;
+    try {
+      const gz = await this.fetchBackup();
+      this.status.connected = true;
+      if (!gz) {
+        this.blocked = null;
+        this.status.lastError = null;
+      } else if (!this.store.users.length && !this.store.bots.length) {
+        this.apply(gz);
+        this.blocked = null;
+        this.status.lastError = null;
+        if (this.onRestored) this.onRestored();
+      } else {
+        this.blocked = 'GitHub のバックアップと、このサーバーの両方にデータがあるので、上書きしないように保存を止めています。このサーバーのデータで上書きしてよければ、管理画面の「今すぐバックアップ」を押してください。';
+      }
+    } catch (e) {
+      this.status.lastError = friendly(e);
+      this.status.connected = false;
+    } finally {
+      this.retrying = false;
+    }
+  }
+
   // データがなければ (新しいサーバー・ファイルが消えた) GitHub から戻す
   async restoreIfEmpty(dbFile) {
     if (!this.enabled || fs.existsSync(dbFile)) return false;
-    const gz = this.method === 'git' ? await this.gitFetch() : await this.apiFetch();
+    const gz = await this.fetchBackup();
     if (!gz) return false;
+    this.apply(gz);
+    return true;
+  }
+
+  apply(gz) {
     const data = JSON.parse(zlib.gunzipSync(gz).toString('utf8'));
     if (data.version !== 1 || !data.db) throw new Error('バックアップの形式が違います');
     for (const [id, files] of Object.entries(data.bots || {})) {
@@ -315,7 +354,6 @@ class Backup {
     this.store.replace(data.db);
     this.status.restoredAt = Date.now();
     this.dirty = false;
-    return true;
   }
 
   // 起動のとき: 戻せなければ何回か試す。それでもだめなら、古いデータで上書きしないようにバックアップを止める

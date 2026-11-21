@@ -665,6 +665,8 @@ function createApp(config = {}) {
       } catch (e) {
         console.error(`バックアップから戻せませんでした: ${backup.status.lastError}`);
       }
+      // 止めている間に GitHub から戻せたら、動かしていた bot をまた動かす
+      backup.onRestored = () => { console.log('GitHub のバックアップから戻しました'); resume(); };
       backup.start();
       // 繋がるかを確かめてログに出す (待たない)
       backup.check().then((ok) => console.log(ok

@@ -109,3 +109,42 @@ test('起動のときに戻せなかったら、古い・空のデータで上�
   const h = (await b('GET', '/api/health')).body;
   assert.strictEqual(h.backup.ok, false);
 });
+
+test('止めている間も確かめ直し、鍵が使えるようになったら自動で再開・復元する', async (t) => {
+  // (1) GitHub にまだバックアップがない → そのまま再開して保存する
+  const empty = path.join(tmp('bothost-bare3-'), 'data.git');
+  git('init', '-q', '--bare', '-b', 'main', empty);
+  const one = await start(t, { backup: { gitUrl: `file://${empty}-not-yet` }, restoreRetry: { tries: 1, waitMs: 1 } });
+  assert.ok(one.app.backup.info().blocked);
+  const a = client(one.base);
+  await a('POST', '/api/register', { username: 'first', password: 'password1' });
+  one.app.backup.gitUrl = `file://${empty}`; // 鍵を登録した、と同じ
+  await one.app.backup.retryBlocked();
+  assert.strictEqual(one.app.backup.info().blocked, null);
+  await one.app.backup.run();
+  assert.strictEqual(git('--git-dir', empty, 'rev-list', '--count', 'main'), '1');
+
+  // (2) バックアップがあり、こちらのデータは空 → 戻して、bot も動かす
+  const two = await start(t, { backup: { gitUrl: `file://${empty}-broken` }, restoreRetry: { tries: 1, waitMs: 1 } });
+  assert.ok(two.app.backup.info().blocked);
+  let resumed = false;
+  const orig = two.app.backup.onRestored;
+  two.app.backup.onRestored = () => { resumed = true; orig(); };
+  two.app.backup.gitUrl = `file://${empty}`;
+  await two.app.backup.retryBlocked();
+  assert.strictEqual(two.app.backup.info().blocked, null);
+  assert.ok(resumed);
+  assert.deepStrictEqual(two.app.store.users.map((u) => u.username), ['first']);
+
+  // (3) どちらにもデータがある → 勝手に上書きしない
+  const three = await start(t, { backup: { gitUrl: `file://${empty}-broken` }, restoreRetry: { tries: 1, waitMs: 1 } });
+  const c = client(three.base);
+  await c('POST', '/api/register', { username: 'other', password: 'password2' });
+  three.app.backup.gitUrl = `file://${empty}`;
+  await three.app.backup.retryBlocked();
+  assert.match(three.app.backup.info().blocked, /両方にデータがある/);
+  await assert.rejects(three.app.backup.run(), /両方にデータ/);
+  // 管理画面の「今すぐバックアップ」(force) なら上書きできる
+  assert.strictEqual((await c('POST', '/api/admin/backup')).status, 200);
+  assert.strictEqual(three.app.backup.info().blocked, null);
+});
