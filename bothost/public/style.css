@@ -453,3 +453,33 @@ main { max-width: 1120px; margin: 0 auto; padding: 28px 28px 64px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ===== v4: はじめ方・起動方法・Web 公開・ファイルの説明 ===== */
+.tpl-groups { display: grid; gap: 14px; max-height: min(56vh, 520px); overflow: auto; padding-right: 2px; }
+.tpl-group-title { font-size: 12.5px; font-weight: 700; color: var(--muted); margin: 0 0 6px 2px; letter-spacing: .02em; }
+.tpl.wide { grid-column: 1 / -1; }
+.launch-now { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.launch-now > .ic { color: var(--accent); flex: none; }
+.launch-now .k { font-size: 12.5px; color: var(--muted); font-weight: 600; margin-bottom: 3px; }
+code.cmd { display: block; font-family: var(--mono); font-size: 14px; font-weight: 600; word-break: break-all; color: var(--text); }
+.cands { display: grid; gap: 6px; margin-top: 8px; }
+.cand { display: flex; gap: 8px; align-items: center; text-align: left; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; color: var(--text); min-width: 0; }
+.cand:hover:not(:disabled) { border-color: var(--accent); }
+.cand:disabled { opacity: .55; cursor: not-allowed; }
+.cand code { font-family: var(--mono); font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
+.cand .hint { font-size: 12.5px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.web-url { margin-top: 12px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.file-info { gap: 14px; }
+.file-info .banner { text-align: left; max-width: 520px; }
+.preview { max-width: 100%; max-height: 46vh; border-radius: 10px; background: var(--surface-2); }
+audio.preview { width: min(420px, 100%); }
+input.needs { border-color: var(--warn); background: var(--warn-soft); }
+@media (max-width: 640px) {
+  .cand code { max-width: 100%; }
+  .cand .hint { display: none; }
+}
+.rt-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.rt { display: inline-flex; gap: 5px; align-items: center; padding: 5px 10px; border-radius: 999px; background: var(--surface-2); font-size: 13px; color: var(--muted); }
+.rt.ok { color: var(--text); }
+.rt.ok .ic { color: var(--ok); }
+.no-file.file-info { align-content: center; }

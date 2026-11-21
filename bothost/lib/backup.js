@@ -11,13 +11,18 @@
 //   api … GitHub のトークンで、ファイルの API (contents) を使う (BOTHOST_BACKUP_TOKEN)
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const path = require('path');
 const zlib = require('zlib');
 const { execFile } = require('child_process');
 const { HIDDEN_DIRS } = require('./files');
 const secret = require('./secret');
 
-const MAX_FILE = 5 * 1024 * 1024;
+// 大きなファイル (この大きさ以上) は、別のファイル (blobs/…) にして置く (git のときだけ)。
+// 中身が変わらなければ、送り直さない
+const BLOB_MIN = 256 * 1024;
+const MAX_FILE_GIT = 95 * 1024 * 1024; // GitHub の 1 ファイルの上限 (100 MB) より少し小さく
+const MAX_FILE_API = 20 * 1024 * 1024; // トークン (API) のときは全部を 1 つのファイルに入れるので小さめに
 // GitHub の SSH のホスト鍵 (起動のときに https://api.github.com/meta から取り直します。取れないときの予備)
 const GITHUB_HOST_KEYS = ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl'];
 
@@ -64,7 +69,11 @@ class Backup {
     this.running = null;
     this.sha = null;
     this.sshDir = null;
-    this.status = { lastAt: null, lastError: null, lastSize: null, restoredAt: null, connected: null };
+    this.repoDir = null; // git の作業場所 (前に送ったものを覚えておき、変わった分だけ送る)
+    this.workDir = opts.workDir || null;
+    this.blobCache = new Map(); // ファイルの場所 → { size, mtime, id }
+    this.pushes = 0;
+    this.status = { lastAt: null, lastError: null, lastSize: null, restoredAt: null, connected: null, skipped: [] };
     this.timer = null;
   }
 
@@ -153,41 +162,90 @@ class Backup {
 
   get gitBranch() { return this.branch || 'main'; }
 
-  async gitPush(gz) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bothost-bk-'));
-    try {
-      await run('git', ['init', '-q', '-b', this.gitBranch, dir]);
-      const full = path.join(dir, this.file);
-      fs.mkdirSync(path.dirname(full), { recursive: true });
-      fs.writeFileSync(full, gz);
-      fs.writeFileSync(path.join(dir, 'README.md'),
-        '# BotHost のバックアップ\n\nBotHost が自動で保存しています。手で書き換えないでください。\n'
-        + '中身にはアカウントや bot の設定 (トークンなどの環境変数を含む) が入っているので、このリポジトリは非公開のままにしてください。\n');
-      await run('git', ['-C', dir, 'add', '-A']);
-      await run('git', ['-C', dir, '-c', 'user.name=BotHost', '-c', 'user.email=bothost@users.noreply.github.com',
-        'commit', '-q', '-m', `BotHost のバックアップ (${new Date().toISOString()})`]);
-      // いつも最新の 1 つだけ (履歴を積み上げない)
-      await this.git((url) => ['-C', dir, 'push', '-q', '-f', url, `HEAD:refs/heads/${this.gitBranch}`]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+  // 送る準備をした git の作業場所 (なければ作って、GitHub にあるものを取ってくる)
+  async gitRepo() {
+    if (this.repoDir && fs.existsSync(path.join(this.repoDir, '.git'))) return this.repoDir;
+    const dir = this.workDir ? path.join(this.workDir, 'backup-git') : fs.mkdtempSync(path.join(os.tmpdir(), 'bothost-bk-'));
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    await run('git', ['init', '-q', '-b', this.gitBranch, dir]);
+    // 前のバックアップを取ってくる (同じ中身は送らずにすむ)。まだなければそれでよい
+    try { await this.git((url) => ['-C', dir, 'fetch', '-q', '--depth', '1', url, `refs/heads/${this.gitBranch}`]); } catch { /* 空 */ }
+    this.repoDir = dir;
+    return dir;
+  }
+
+  blobId(data) {
+    return crypto.createHmac('sha256', this.key || 'bothost-blob').update(data).digest('hex').slice(0, 40);
+  }
+
+  async gitPush() {
+    const dir = await this.gitRepo();
+    const blobDir = path.join(dir, 'blobs');
+    fs.mkdirSync(blobDir, { recursive: true });
+    const used = new Set();
+    let blobBytes = 0;
+    const blob = (full, st) => {
+      const c = this.blobCache.get(full);
+      let id = c && c.size === st.size && c.mtime === st.mtimeMs ? c.id : null;
+      if (!id || !fs.existsSync(path.join(blobDir, id))) {
+        const data = fs.readFileSync(full);
+        id = this.blobId(data);
+        const file = path.join(blobDir, id);
+        if (!fs.existsSync(file)) fs.writeFileSync(file, this.key ? secret.encryptStable(this.key, data, id) : data);
+        this.blobCache.set(full, { size: st.size, mtime: st.mtimeMs, id });
+      }
+      used.add(id);
+      blobBytes += st.size;
+      return id;
+    };
+    const gz = this.bundle(blob);
+    fs.writeFileSync(path.join(dir, this.file), gz);
+    for (const n of fs.readdirSync(blobDir)) if (!used.has(n)) fs.rmSync(path.join(blobDir, n), { force: true });
+    fs.writeFileSync(path.join(dir, 'README.md'),
+      '# BotHost のバックアップ\n\nBotHost が自動で保存しています。手で書き換えないでください。\n'
+      + '中身にはアカウントや bot の設定 (トークンなどの環境変数を含む) が入っているので、このリポジトリは非公開のままにしてください。\n'
+      + '大きなファイルは blobs/ に分けて置いています。\n');
+    await run('git', ['-C', dir, 'add', '-A']);
+    const tree = (await run('git', ['-C', dir, 'write-tree'])).trim();
+    // いつも最新の 1 つだけ (前のコミットにつなげない = 履歴を積み上げない)
+    const commit = (await run('git', ['-C', dir, '-c', 'user.name=BotHost', '-c', 'user.email=bothost@users.noreply.github.com',
+      'commit-tree', tree, '-m', `BotHost のバックアップ (${new Date().toISOString()})`])).trim();
+    await run('git', ['-C', dir, 'update-ref', `refs/heads/${this.gitBranch}`, commit]);
+    await this.git((url) => ['-C', dir, 'push', '-q', '-f', url, `${commit}:refs/heads/${this.gitBranch}`]);
+    // 古いものを時々片付ける (この作業場所が大きくならないように)
+    if (++this.pushes % 20 === 0) {
+      await run('git', ['-C', dir, 'reflog', 'expire', '--expire=now', '--all']).catch(() => {});
+      await run('git', ['-C', dir, 'gc', '-q', '--prune=now']).catch(() => {});
     }
+    return gz.length + blobBytes;
   }
 
   async gitFetch() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bothost-rs-'));
+    const dir = this.workDir ? path.join(this.workDir, 'backup-git') : fs.mkdtempSync(path.join(os.tmpdir(), 'bothost-rs-'));
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
     try {
-      try {
-        await this.git((url) => ['clone', '-q', '--depth', '1', '--branch', this.gitBranch, url, path.join(dir, 'r')]);
-      } catch (e) {
-        // 空のリポジトリ・ブランチがない = まだバックアップがない
-        if (/not found in upstream|Remote branch .* not found|empty repository/i.test(e.stderr || '')) return null;
-        throw e;
-      }
-      const full = path.join(dir, 'r', this.file);
-      return fs.existsSync(full) ? fs.readFileSync(full) : null;
-    } finally {
+      await this.git((url) => ['clone', '-q', '--depth', '1', '--branch', this.gitBranch, url, dir]);
+    } catch (e) {
       fs.rmSync(dir, { recursive: true, force: true });
+      // 空のリポジトリ・ブランチがない = まだバックアップがない
+      if (/not found in upstream|Remote branch .* not found|empty repository/i.test(e.stderr || '')) return null;
+      throw e;
     }
+    try { fs.chmodSync(dir, 0o700); } catch { /* なくてもよい */ }
+    // 取ってきたものを、次に送るときの作業場所にする (変わった分だけ送れる)
+    this.repoDir = dir;
+    const full = path.join(dir, this.file);
+    if (!fs.existsSync(full)) return null;
+    return {
+      data: fs.readFileSync(full),
+      blob: (id) => {
+        if (!/^[0-9a-f]{40}$/.test(id)) return null;
+        const f = path.join(dir, 'blobs', id);
+        return fs.existsSync(f) ? fs.readFileSync(f) : null;
+      },
+    };
   }
 
   // ----- api (トークン) -----
@@ -245,8 +303,11 @@ class Backup {
   }
 
   // ----- 共通 -----
-  bundle() {
+  // 1 つのファイルにまとめる。blob を渡すと、大きなファイルは別に置く (git のとき)
+  bundle(blob = null) {
     const bots = {};
+    const skipped = [];
+    const maxFile = blob ? MAX_FILE_GIT : MAX_FILE_API;
     for (const bot of this.store.bots) {
       const root = path.join(this.botsDir, bot.id);
       const files = {};
@@ -257,16 +318,23 @@ class Backup {
           const rel = prefix ? `${prefix}/${e.name}` : e.name;
           const full = path.join(dir, e.name);
           if (e.isDirectory()) { if (!HIDDEN_DIRS.has(e.name)) walk(full, rel); continue; }
-          if (!e.isFile()) continue;
-          const st = fs.statSync(full);
-          if (st.size > MAX_FILE) continue;
-          files[rel] = fs.readFileSync(full).toString('base64');
+          if (!e.isFile() || /\.uploading-\d+-\d+$/.test(e.name)) continue;
+          let st;
+          try { st = fs.statSync(full); } catch { continue; }
+          if (st.size > maxFile) { skipped.push(`${bot.name}/${rel}`); continue; }
+          const x = (st.mode & 0o111) !== 0;
+          if (blob && st.size >= BLOB_MIN) files[rel] = { b: blob(full, st), ...(x ? { x: 1 } : {}) };
+          else {
+            const d = fs.readFileSync(full).toString('base64');
+            files[rel] = x ? { d, x: 1 } : d;
+          }
         }
       };
       walk(root, '');
       bots[bot.id] = files;
     }
-    const json = JSON.stringify({ version: 1, createdAt: Date.now(), db: this.store.data, bots });
+    this.status.skipped = skipped;
+    const json = JSON.stringify({ version: 2, createdAt: Date.now(), db: this.store.data, bots });
     const gz = zlib.gzipSync(json, { level: 9 });
     return this.key ? secret.encrypt(this.key, gz) : gz;
   }
@@ -297,11 +365,12 @@ class Backup {
     this.running = (async () => {
       this.dirty = false;
       try {
-        const gz = this.bundle();
-        if (this.method === 'git') await this.gitPush(gz); else await this.apiPush(gz);
+        let size;
+        if (this.method === 'git') size = await this.gitPush();
+        else { const gz = this.bundle(); await this.apiPush(gz); size = gz.length; }
         this.blocked = null;
         this.status.lastAt = Date.now();
-        this.status.lastSize = gz.length;
+        this.status.lastSize = size;
         this.status.lastError = null;
         this.status.connected = true;
       } catch (e) {
@@ -355,20 +424,34 @@ class Backup {
     return true;
   }
 
-  apply(buf) {
+  // バックアップを戻す。src は Buffer か { data, blob(id) }
+  apply(src) {
+    const buf = Buffer.isBuffer(src) ? src : src.data;
+    const readBlob = (!Buffer.isBuffer(src) && src.blob) || (() => null);
     const gz = secret.isEncrypted(buf) ? secret.decrypt(this.key, buf) : buf;
     const data = JSON.parse(zlib.gunzipSync(gz).toString('utf8'));
-    if (data.version !== 1 || !data.db) throw new Error('バックアップの形式が違います');
+    if ((data.version !== 1 && data.version !== 2) || !data.db) throw new Error('バックアップの形式が違います');
+    const missing = [];
     for (const [id, files] of Object.entries(data.bots || {})) {
       if (!/^[0-9a-f]+$/.test(id)) continue;
       const root = path.join(this.botsDir, id);
-      for (const [rel, b64] of Object.entries(files)) {
+      for (const [rel, v] of Object.entries(files)) {
         const full = path.resolve(root, rel);
         if (!full.startsWith(root + path.sep)) continue;
+        let content;
+        if (typeof v === 'string') content = Buffer.from(v, 'base64');
+        else if (v && typeof v.d === 'string') content = Buffer.from(v.d, 'base64');
+        else if (v && typeof v.b === 'string') {
+          const raw = readBlob(v.b);
+          if (!raw) { missing.push(rel); continue; }
+          content = secret.isEncrypted(raw) ? secret.decrypt(this.key, raw) : raw;
+        } else continue;
         fs.mkdirSync(path.dirname(full), { recursive: true });
-        fs.writeFileSync(full, Buffer.from(b64, 'base64'));
+        fs.writeFileSync(full, content);
+        if (v && v.x) { try { fs.chmodSync(full, 0o755); } catch { /* なくてもよい */ } }
       }
     }
+    if (missing.length) console.error(`バックアップの中に見つからないファイルがありました: ${missing.slice(0, 5).join(', ')}`);
     this.store.replace(data.db);
     this.status.restoredAt = Date.now();
     this.dirty = false;

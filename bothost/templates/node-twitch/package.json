@@ -1,0 +1,8 @@
+{
+  "name": "my-twitch-bot",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "tmi.js": "^1.8.5"
+  }
+}

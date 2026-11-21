@@ -31,6 +31,7 @@ function client(base) {
 }
 
 async function start(t, opts) {
+  require('../lib/auth').resetAttempts(); // 同じテストの中で何度もログインするので
   const dataDir = tmp('bothost-g-');
   const app = createApp({ dataDir, keepAwakeUrl: '', stopTimeoutMs: 1500, ...opts });
   await app.init();
@@ -216,4 +217,65 @@ test('セッション: トークンそのものは保存しない・パスワー
   let last;
   for (let i = 0; i < 12; i++) last = await c('POST', '/api/login', { username: 'sess', password: `wrong${i}` });
   assert.strictEqual(last.status, 429);
+});
+
+test('大きなファイル (.exe・.jar など) も分けて保存し、変わっていなければ送り直さない', async (t) => {
+  const bare = path.join(tmp('bothost-bare-'), 'data.git');
+  git('init', '-q', '--bare', '-b', 'main', bare);
+  const backup = { gitUrl: `file://${bare}`, secretKey: 'test-secret-key' };
+  const one = await start(t, { backup });
+  const a = client(one.base);
+  await a('POST', '/api/register', { username: 'owner', password: 'password-123' });
+  const { body: { bot } } = await a('POST', '/api/bots', { name: 'big' });
+  // 12 MB の「.exe」(前の版は 5 MB を超えるファイルを保存していなかった) と、実行できる印のあるファイル
+  const big = Buffer.alloc(12 * 1048576);
+  for (let i = 0; i < big.length; i += 997) big[i] = (i * 7) % 256;
+  const dir = path.join(one.dataDir, 'bots', bot.id);
+  fs.writeFileSync(path.join(dir, 'MyBot.exe'), big);
+  fs.writeFileSync(path.join(dir, 'run'), '#!/bin/sh\necho hi\n');
+  fs.chmodSync(path.join(dir, 'run'), 0o755);
+  await one.app.backup.run({ force: true });
+  const blobs = git('--git-dir', bare, 'ls-tree', '--name-only', 'main', 'blobs/').split('\n').filter(Boolean);
+  assert.strictEqual(blobs.length, 1, '大きなファイルは blobs/ に');
+  // 暗号化されている (中身がそのまま見えない)
+  const stored = execFileSync('git', ['--git-dir', bare, 'cat-file', 'blob', `main:${blobs[0]}`], { maxBuffer: 64 * 1048576 });
+  assert.ok(stored.subarray(0, 6).equals(Buffer.from('BHENC1')), '暗号化されている');
+  assert.ok(!stored.includes(big.subarray(0, 4096)));
+  const blobSha = git('--git-dir', bare, 'rev-parse', `main:${blobs[0]}`);
+
+  // 小さなファイルだけ変えて保存 → 大きなファイルは同じもの (送り直さない)
+  fs.writeFileSync(path.join(dir, 'config.json'), '{"a":1}');
+  await one.app.backup.run({ force: true });
+  assert.strictEqual(git('--git-dir', bare, 'rev-parse', `main:${blobs[0]}`), blobSha);
+  assert.strictEqual(git('--git-dir', bare, 'rev-list', '--count', 'main'), '1', '履歴は積み上げない');
+  await one.close();
+
+  // 2 台目: 空のサーバーで戻す → 大きなファイルも、実行できる印も戻る
+  const two = await start(t, { backup });
+  const dir2 = path.join(two.dataDir, 'bots', bot.id);
+  assert.ok(fs.readFileSync(path.join(dir2, 'MyBot.exe')).equals(big));
+  assert.ok(fs.statSync(path.join(dir2, 'run')).mode & 0o100, '実行できる印');
+  assert.strictEqual(fs.readFileSync(path.join(dir2, 'config.json'), 'utf8'), '{"a":1}');
+  // 消したファイルは、次の保存で blobs/ からも消える
+  fs.rmSync(path.join(dir2, 'MyBot.exe'));
+  await two.app.backup.run({ force: true });
+  assert.strictEqual(git('--git-dir', bare, 'ls-tree', '--name-only', 'main', 'blobs/'), '');
+});
+
+test('前の版 (version 1) のバックアップも戻せる', async (t) => {
+  const bare = path.join(tmp('bothost-bare-'), 'data.git');
+  git('init', '-q', '--bare', '-b', 'main', bare);
+  // version 1 の形 (ファイルは全部 base64 で中に入っている) を作って置く
+  const zlib = require('zlib');
+  const work = tmp('bothost-v1-');
+  git('init', '-q', '-b', 'main', work);
+  const data = { version: 1, createdAt: Date.now(), db: { users: [], bots: [{ id: 'abcdef', ownerId: 'u', name: 'old', runtime: 'python', startCommand: 'python3 main.py', env: {}, desired: 'stopped' }], sessions: {}, settings: {} }, bots: { abcdef: { 'main.py': Buffer.from('print("old")').toString('base64') } } };
+  fs.writeFileSync(path.join(work, 'bothost-backup.json.gz'), zlib.gzipSync(JSON.stringify(data)));
+  git('-C', work, 'add', '-A');
+  git('-C', work, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'v1');
+  git('-C', work, 'push', '-q', `file://${bare}`, 'main');
+  const one = await start(t, { backup: { gitUrl: `file://${bare}` } });
+  assert.strictEqual(one.app.store.bots[0].name, 'old');
+  assert.strictEqual(fs.readFileSync(path.join(one.dataDir, 'bots', 'abcdef', 'main.py'), 'utf8'), 'print("old")');
+  assert.ok(one.app.store.bots[0].port, '前の版の bot にも PORT が決まる');
 });

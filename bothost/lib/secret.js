@@ -18,6 +18,15 @@ function encrypt(key, plain) {
   return Buffer.concat([MAGIC, iv, cipher.getAuthTag(), body]);
 }
 
+// 同じ中身なら同じ暗号文になる暗号化 (大きなファイルのバックアップ用。変わっていないものを送り直さないため)
+// IV は中身から作るので、違う中身に同じ IV を使うことはありません
+function encryptStable(key, plain, seed) {
+  const iv = crypto.createHmac('sha256', key).update(`iv:${seed}`).digest().subarray(0, 12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const body = Buffer.concat([cipher.update(plain), cipher.final()]);
+  return Buffer.concat([MAGIC, iv, cipher.getAuthTag(), body]);
+}
+
 function isEncrypted(buf) {
   return buf.length > MAGIC.length + 28 && buf.subarray(0, MAGIC.length).equals(MAGIC);
 }
@@ -40,4 +49,4 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(String(token)).digest('base64url');
 }
 
-module.exports = { deriveKey, encrypt, decrypt, isEncrypted, hashToken };
+module.exports = { deriveKey, encrypt, encryptStable, decrypt, isEncrypted, hashToken };

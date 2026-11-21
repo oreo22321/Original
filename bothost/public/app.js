@@ -73,6 +73,13 @@ const ICONS = {
   zip: [['path', { d: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z' }], ['path', { d: 'M11 5h2M11 8h2M11 11h2M10.5 14h3v3h-3z' }]],
   python: [['path', { d: 'M12 3c-4 0-4 1.8-4 3v2h4v1H6c-2 0-3 1.5-3 4s1 4 3 4h2v-2.5c0-1.5 1-2.5 2.5-2.5h4c1.5 0 2.5-1 2.5-2.5V6c0-1.2-1-3-5-3z' }], ['path', { d: 'M12 21c4 0 4-1.8 4-3v-2h-4v-1h6c2 0 3-1.5 3-4s-1-4-3-4h-2v2.5c0 1.5-1 2.5-2.5 2.5h-4C8 12 7 13 7 14.5V18c0 1.2 1 3 5 3z' }]],
   node: [['path', { d: 'M12 2.8l8 4.6v9.2l-8 4.6-8-4.6V7.4z' }], ['path', { d: 'M12 8v8' }]],
+  java: [['path', { d: 'M5 10h12v4.5A5.5 5.5 0 0 1 11.5 20h-1A5.5 5.5 0 0 1 5 14.5z' }], ['path', { d: 'M17 11.5h1.5a2.5 2.5 0 0 1 0 5H16.5' }], ['path', { d: 'M9 3.5c-1 1.2 1 2 0 3.5M13 3.5c-1 1.2 1 2 0 3.5' }]],
+  dotnet: [['rect', { x: 3.5, y: 3.5, width: 17, height: 17, rx: 4 }], ['path', { d: 'M7.5 15.5h.01M10 15.5V9l4 6.5V9M16.5 9v6.5' }]],
+  windows: [['path', { d: 'M3.5 5.5l7-1v7h-7zM12.5 4.2l8-1.2v8.5h-8zM3.5 12.5h7v7l-7-1zM12.5 12.5h8V21l-8-1.2z' }]],
+  code: [['path', { d: 'M8.5 7 3.5 12l5 5M15.5 7l5 5-5 5M13.5 4.5l-3 15' }]],
+  globe: [['circle', { cx: 12, cy: 12, r: 8.5 }], ['path', { d: 'M3.5 12h17M12 3.5c2.5 2.5 3.5 5.5 3.5 8.5s-1 6-3.5 8.5c-2.5-2.5-3.5-5.5-3.5-8.5s1-6 3.5-8.5z' }]],
+  image: [['rect', { x: 3.5, y: 4.5, width: 17, height: 15, rx: 2 }], ['circle', { cx: 9, cy: 10, r: 1.8 }], ['path', { d: 'M20.5 16l-5-5-9 8.5' }]],
+  music: [['path', { d: 'M9 17.5V5.5l10-2v12' }], ['circle', { cx: 6.5, cy: 17.5, r: 2.5 }], ['circle', { cx: 16.5, cy: 15.5, r: 2.5 }]],
 };
 function icon(name, cls = '') {
   return h('svg:svg', { class: `ic ${cls}`.trim(), viewBox: '0 0 24 24', 'aria-hidden': 'true' },
@@ -125,7 +132,9 @@ function download(url) {
 }
 
 const STATUS_LABEL = { running: '動作中', stopped: '停止中', installing: '準備中', restarting: '再起動待ち', crashed: 'エラーで停止' };
-const RUNTIME_LABEL = { python: 'Python', node: 'Node.js' };
+// 言語・種類の表示 (サーバーの launch.js の KINDS)
+const kindLabel = (k) => (state.config && state.config.kinds && state.config.kinds[k] ? state.config.kinds[k].label : k || '');
+const kindIcon = (k) => (state.config && state.config.kinds && state.config.kinds[k] ? state.config.kinds[k].icon : 'code');
 const ACTIVE = ['running', 'installing', 'restarting'];
 
 const pill = (status) => h('span', { class: `pill ${status}` }, STATUS_LABEL[status] || status);
@@ -296,11 +305,53 @@ const HL = {
   json: /(\/\/[^\n]*)|("(?:\\.|[^"\\\n])*"?)|(@@@)|(-?\b\d+\.?\d*(?:[eE][+-]?\d+)?)\b|\b(true|false|null)\b/g,
 };
 const HL_CLASS = ['c', 's', 'd', 'n', 'k', 'b', 'f'];
+// ほかの言語は、コメント・文字列・キーワードの決まりから作る (グループは HL_CLASS の順)
+const W = (list) => `\\b(${list.split(' ').join('|')})\\b`;
+const NUM = '\\b(\\d[\\d_]*\\.?\\d*(?:[eE][+-]?\\d+)?[fFlLuU]*|0[xX][\\da-fA-F_]+)\\b';
+const FN = '\\b([A-Za-z_][\\w]*)(?=\\s*\\()';
+const STR = `("(?:\\\\.|[^"\\\\\\n])*"?|'(?:\\\\.|[^'\\\\\\n])*'?)`;
+const mk = (comment, str, special, kw, builtin, fn = FN) => new RegExp([comment, str, special || '(@@@@)', NUM, kw, builtin || '(@@@@)', fn || '(@@@@)'].join('|'), 'g');
+const CSTYLE = '(\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?(?:\\*\\/|$))';
+Object.assign(HL, {
+  bat: new RegExp(['((?:^|\\n)[ \\t@]*(?:rem\\b|::)[^\\n]*)', '("[^"\\n]*"?)', '(%~?[\\w:~,=-]*%?|![\\w]+!|(?:^|\\n)\\s*:[\\w]+)', NUM,
+    '\\b(echo|set|setlocal|endlocal|if|else|for|in|do|goto|call|exit|not|exist|defined|errorlevel|equ|neq|lss|leq|gtr|geq|cd|chdir|pushd|popd|start|pause|timeout|title|cls|chcp|color|shift|nul|off|on)\\b',
+    '\\b(python|py|pip|node|npm|npx|java|javaw|dotnet|ping|del|copy|move|mkdir|md|rd|rmdir|type|dir|where|cmd)\\b', '(@@@@)'].join('|'), 'gi'),
+  sh: mk("((?:^|\\s)#[^\\n]*)", STR, '(\\$\\{?[\\w@#?*!$-]+\\}?)', W('if then else elif fi for while until do done case esac function in return exit export local readonly set unset source shift break continue'), W('echo cd ls cat grep sed awk python3 python pip node npm npx java mkdir rm cp mv chmod sleep exec test true false'), '(@@@@)'),
+  java: mk(CSTYLE, STR, '(@\\w+)', W('abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import instanceof int interface long native new package private protected public return short static super switch synchronized this throw throws transient try var void volatile while record yield true false null val fun when object suspend'), W('String System Math List Map Integer Object Exception')),
+  cs: mk(CSTYLE, `(@?"(?:\\\\.|[^"\\\\\\n])*"?|'(?:\\\\.|[^'\\\\\\n])*'?|\\$"(?:\\\\.|[^"\\\\\\n])*"?)`, '(\\[\\w+(?:\\(.*?\\))?\\])', W('abstract as async await base bool break byte case catch char class const continue decimal default delegate do double else enum event explicit extern false finally fixed float for foreach goto if implicit in int interface internal is lock long namespace new null object operator out override params private protected public readonly ref return sbyte sealed short sizeof static string struct switch this throw true try typeof uint ulong unchecked unsafe ushort using var virtual void volatile while record init get set'), W('Console Task Math String List Dictionary Exception')),
+  go: mk(CSTYLE, '("(?:\\\\.|[^"\\\\\\n])*"?|`[^`]*`?|\'(?:\\\\.|[^\'\\\\\\n])*\'?)', null, W('break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var true false nil iota'), W('fmt log os string int bool error byte rune make len append new panic')),
+  rb: mk('(#[^\\n]*)', STR, '(:\\w+|@\\w+)', W('alias and begin break case class def defined do else elsif end ensure false for if in module next nil not or redo rescue retry return self super then true undef unless until when while yield require require_relative attr_accessor'), W('puts print p gets Integer String Array Hash')),
+  php: mk('(\\/\\/[^\\n]*|#[^\\n]*|\\/\\*[\\s\\S]*?(?:\\*\\/|$))', STR, '(\\$\\w+)', W('abstract and array as break case catch class clone const continue declare default do echo else elseif empty enddeclare endfor endforeach endif endswitch endwhile extends final finally fn for foreach function global goto if implements include include_once instanceof interface isset list match namespace new or print private protected public readonly require require_once return static switch throw trait try unset use var while yield true false null'), W('count strlen json_encode json_decode var_dump explode implode')),
+  lua: mk('(--\\[\\[[\\s\\S]*?(?:\\]\\]|$)|--[^\\n]*)', STR, null, W('and break do else elseif end false for function goto if in local nil not or repeat return then true until while'), W('print require pairs ipairs tostring tonumber string table math os io')),
+  yaml: mk('(#[^\\n]*)', STR, '((?:^|\\n)\\s*-?\\s*[\\w.-]+(?=\\s*:))', W('true false null yes no on off'), null, '(@@@@)'),
+  ini: mk('((?:^|\\n)\\s*[;#][^\\n]*)', STR, '((?:^|\\n)\\s*\\[[^\\]\\n]*\\]|(?:^|\\n)\\s*[\\w.-]+(?=\\s*=))', W('true false'), null, '(@@@@)'),
+  html: new RegExp(['(<!--[\\s\\S]*?(?:-->|$))', '("[^"]*"?|\'[^\']*\'?)', '(&\\w+;)', '(@@@@)', '(<\\/?[\\w-]+|\\/?>)', '\\b([\\w-]+)(?==)', '(@@@@)'].join('|'), 'g'),
+  css: mk('(\\/\\*[\\s\\S]*?(?:\\*\\/|$))', STR, '(#[\\w-]+|\\.[\\w-]+|@[\\w-]+)', '\\b(important|inherit|initial|none|auto)\\b', '([\\w-]+)(?=\\s*:)', '(@@@@)'),
+  md: new RegExp(['(<!--[\\s\\S]*?-->)', '(`[^`\\n]*`?|```[\\s\\S]*?(?:```|$))', '((?:^|\\n)#{1,6} [^\\n]*)', '(@@@@)', '(\\*\\*[^*\\n]+\\*\\*)', '(\\[[^\\]\\n]*\\]\\([^)\\n]*\\))', '(@@@@)'].join('|'), 'g'),
+  sql: new RegExp(['(--[^\\n]*|\\/\\*[\\s\\S]*?(?:\\*\\/|$))', STR, '(@@@@)', NUM, W('select from where insert into values update set delete create table drop alter index primary key foreign references not null and or join left right inner on group by order having limit offset as distinct union default integer text real blob varchar'), '(@@@@)', FN].join('|'), 'gi'),
+});
+HL.ts = HL.js;
+HL.kt = HL.java;
+HL.c = mk(CSTYLE, STR, '(#\\s*\\w+)', W('auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while class public private protected template typename namespace using new delete true false nullptr'), null);
+HL.rs = mk(CSTYLE, STR, '(#!?\\[[^\\]]*\\]|\\w+!)', W('as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while'), W('Some None Ok Err String Vec Option Result'));
+const LANG_OF = {
+  py: 'python', pyw: 'python', js: 'js', mjs: 'js', cjs: 'js', ts: 'js', mts: 'js', tsx: 'js', jsx: 'js', json: 'json', jsonc: 'json',
+  bat: 'bat', cmd: 'bat', sh: 'sh', bash: 'sh', zsh: 'sh', env: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini', toml: 'ini', properties: 'ini',
+  java: 'java', kt: 'kt', kts: 'kt', gradle: 'java', cs: 'cs', go: 'go', rb: 'rb', php: 'php', lua: 'lua', yml: 'yaml', yaml: 'yaml',
+  html: 'html', htm: 'html', xml: 'html', csproj: 'html', svg: 'html', css: 'css', scss: 'css', md: 'md', sql: 'sql',
+  c: 'c', h: 'c', cpp: 'c', hpp: 'c', cc: 'c', rs: 'rs',
+};
+const LANG_LABEL = {
+  python: 'Python', js: 'JavaScript / TypeScript', json: 'JSON', bat: 'バッチ (.bat)', sh: 'シェル', ini: '設定ファイル', java: 'Java', kt: 'Kotlin', cs: 'C#',
+  go: 'Go', rb: 'Ruby', php: 'PHP', lua: 'Lua', yaml: 'YAML', html: 'HTML / XML', css: 'CSS', md: 'Markdown', sql: 'SQL', c: 'C / C++', rs: 'Rust',
+};
 function langOf(p) {
-  if (/\.py$/i.test(p)) return 'python';
-  if (/\.(m|c)?js$|\.ts$/i.test(p)) return 'js';
-  if (/\.json$/i.test(p)) return 'json';
-  return null;
+  const base = p.split('/').pop().toLowerCase();
+  if (base === 'dockerfile' || base === 'procfile' || base === 'makefile') return 'sh';
+  if (base === '.env' || base.startsWith('.env.') || base === '.replit') return 'ini';
+  if (base === 'gemfile') return 'rb';
+  const ext = base.includes('.') ? base.split('.').pop() : '';
+  return LANG_OF[ext] || null;
 }
 function esc(s) { return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 function highlight(text, lang) {
@@ -539,7 +590,7 @@ function botCard(b) {
     const bot = state.bots.get(b.id) || b;
     const active = ACTIVE.includes(bot.status);
     fill(top, avatar(bot), h('div', { class: 'grow' }, h('div', { class: 'name' }, bot.name), meta), pill(bot.status));
-    fill(meta, h('span', {}, RUNTIME_LABEL[bot.runtime] || bot.runtime), '·', h('span', {}, bot.status === 'running' ? `稼働 ${uptime(bot.startedAt)}` : bot.lastCrashAt ? `最後に落ちた: ${ago(bot.lastCrashAt)}` : '停止中'));
+    fill(meta, h('span', {}, kindLabel(bot.runtime)), '·', h('span', {}, bot.status === 'running' ? `稼働 ${uptime(bot.startedAt)}` : bot.lastCrashAt ? `最後に落ちた: ${ago(bot.lastCrashAt)}` : '停止中'));
     fill(bars, h('span', {}, 'メモリ'), h('span', { class: 'nowrap' }, bot.stats ? `${bot.stats.memoryMB} / ${bot.memoryLimitMB} MB` : `— / ${bot.memoryLimitMB} MB`), memBar(bot));
     fill(footText, bot.stats && bot.stats.cpuPercent !== null && bot.stats.cpuPercent !== undefined ? `CPU ${bot.stats.cpuPercent}%` : bot.autoRestart ? '落ちたら自動で再起動' : '');
     fill(actions, active
@@ -608,33 +659,91 @@ async function renderDashboard() {
 
 function openNewBot() {
   const templates = state.config.templates;
-  let chosen = templates[0].id;
+  let chosen = 'upload';
   const name = h('input', { type: 'text', placeholder: '例: my-bot', maxlength: 40 });
   const err = h('div', { class: 'error-text' });
-  const tplWrap = h('div', { class: 'templates', role: 'radiogroup', 'aria-label': 'テンプレート' });
-  const tplIcon = (t) => (t.id.includes('discord') ? 'chat' : t.runtime === 'node' ? 'node' : 'python');
-  const drawTpl = () => fill(tplWrap, templates.map((t) => h('button', {
-    type: 'button', class: 'tpl' + (t.id === chosen ? ' on' : ''), role: 'radio', 'aria-checked': String(t.id === chosen), onclick: () => { chosen = t.id; drawTpl(); },
-  }, icon(tplIcon(t)), h('span', {}, h('b', {}, t.label), h('span', { class: 'd' }, t.desc || '')))));
+  const tplWrap = h('div', { class: 'tpl-groups', role: 'radiogroup', 'aria-label': 'はじめ方' });
+  const tplIcon = (t) => (t.id === 'upload' ? 'upload' : t.id.includes('discord') || t.group === 'ほかのアプリ' ? 'chat' : t.web ? 'globe' : kindIcon(t.kind));
+  const groups = [['自分のファイルで', [{ id: 'upload', label: 'ファイルから作る', desc: 'ZIP・.py・.js・.exe・.jar・.bat など。起動方法は自動で見つけます' }]]];
+  for (const t of templates) {
+    let g = groups.find((x) => x[0] === t.group);
+    if (!g) groups.push((g = [t.group, []]));
+    g[1].push(t);
+  }
+  const drawTpl = () => fill(tplWrap, groups.map(([g, list]) => h('div', { class: 'tpl-group' },
+    h('div', { class: 'tpl-group-title' }, g),
+    h('div', { class: 'templates' }, list.map((t) => h('button', {
+      type: 'button', class: 'tpl' + (t.id === chosen ? ' on' : '') + (t.id === 'upload' ? ' wide' : ''), role: 'radio', 'aria-checked': String(t.id === chosen), onclick: () => { chosen = t.id; drawTpl(); },
+    }, icon(tplIcon(t)), h('span', {}, h('b', {}, t.label), h('span', { class: 'd' }, t.desc || ''))))))));
   drawTpl();
   const create = async (close, btn) => {
+    let picked = null;
+    if (chosen === 'upload') {
+      picked = await pickFiles();
+      if (!picked || !picked.length) return;
+    }
     if (btn) btn.disabled = true;
     try {
-      const { bot } = await api('POST', '/api/bots', { name: name.value.trim() || 'my-bot', template: chosen });
+      const base = picked && picked.length === 1 ? picked[0].name.replace(/\.[^.]+$/, '') : 'my-bot';
+      const { bot } = await api('POST', '/api/bots', { name: name.value.trim() || base.slice(0, 40) || 'my-bot', template: chosen === 'upload' ? null : chosen, timezone: browserTimezone() });
       putBot(bot);
       close();
-      const isDiscord = chosen.includes('discord');
-      go(`#/bots/${bot.id}/${isDiscord ? 'settings' : 'console'}`);
-      if (isDiscord) toast('次に Discord のトークンを入れてください');
+      if (picked) {
+        const launch = await uploadInto(bot.id, picked, { replace: true });
+        go(`#/bots/${bot.id}/console`);
+        if (launch && launch.problem) toast(launch.problem, true);
+        else if (launch && launch.command) toast(`起動方法を見つけました: ${launch.command}。「起動」を押してください`);
+        return;
+      }
+      const t = templates.find((x) => x.id === chosen);
+      const needsEnv = t && t.env && t.env.length;
+      go(`#/bots/${bot.id}/${needsEnv ? 'settings' : 'console'}`);
+      if (chosen.includes('discord')) toast('次に Discord のトークンを入れてください');
+      else if (needsEnv) toast(`次に ${t.env.join('・')} を入れてください`);
     } catch (e) { err.textContent = e.message; if (btn) btn.disabled = false; }
   };
   const close = modal('新しい bot', [
     h('label', { class: 'field' }, h('span', {}, '名前'), name),
-    h('div', { class: 'field' }, h('span', { class: 'label' }, 'テンプレート'), tplWrap),
-    h('p', { class: 'hint', style: 'margin:0' }, '自分のコードは、作ったあとに「ファイル」で ZIP を読み込めます。'),
+    h('div', { class: 'field' }, h('span', { class: 'label' }, 'はじめ方'), tplWrap),
     err,
   ], (c) => [h('button', { class: 'btn', onclick: c }, 'やめる'), h('button', { class: 'btn primary', onclick: (e) => create(c, e.currentTarget) }, '作る')]);
   name.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) create(close); });
+}
+
+function browserTimezone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { return null; }
+}
+
+// ファイルを選ぶ (いくつでも。種類は問わない)
+function pickFiles() {
+  return new Promise((resolve) => {
+    const input = h('input', { type: 'file', multiple: true, style: 'display:none' });
+    input.addEventListener('change', () => { resolve([...input.files]); input.remove(); });
+    input.addEventListener('cancel', () => { resolve(null); input.remove(); });
+    document.body.append(input);
+    input.click();
+  });
+}
+
+// bot にファイルを入れる (ZIP 1 つなら中身を展開)。終わったら、見つけた起動方法を返す
+async function uploadInto(id, list, { replace = false } = {}) {
+  const max = (state.config.maxUploadMB || 100) * 1048576;
+  const big = list.find((f) => f.size > max);
+  if (big) { toast(`${big.name} は大きすぎます (${state.config.maxUploadMB} MB まで)`, true); return null; }
+  if (list.length === 1 && /\.zip$/i.test(list[0].name)) {
+    toast(`${list[0].name} を読み込んでいます…`);
+    const res = await api('POST', `/api/bots/${id}/import${replace ? '?replace=1' : ''}`, list[0]);
+    toast(`${res.count} 個のファイルを読み込みました`);
+    return res.launch;
+  }
+  let n = 0;
+  for (const f of list) {
+    if (list.length > 1 || f.size > 1048576) toast(`アップロード中… ${f.name} (${n + 1}/${list.length})`);
+    const rel = f.webkitRelativePath || f.name;
+    try { await api('PUT', `/api/bots/${id}/file?path=${encodeURIComponent(rel)}`, f); n++; } catch (e) { toast(`${f.name}: ${e.message}`, true); }
+  }
+  if (n) toast(`${n} 個のファイルを入れました`);
+  try { return (await api('GET', `/api/bots/${id}`)).launch; } catch { return null; }
 }
 
 // ================= bot の画面 =================
@@ -653,7 +762,7 @@ function sparkline(points, limit) {
 async function renderBot(id, tab) {
   tab = ['console', 'files', 'settings'].includes(tab) ? tab : 'console';
   if (!state.bots.size) await loadBots().catch(() => {});
-  let { bot } = await api('GET', `/api/bots/${id}`);
+  let { bot, launch } = await api('GET', `/api/bots/${id}`);
   putBot(bot);
 
   const hero = h('div', { class: 'bot-hero' });
@@ -674,7 +783,8 @@ async function renderBot(id, tab) {
       h('div', { class: 'title' },
         h('h1', {}, bot.name, pill(live.status)),
         h('div', { class: 'meta' },
-          h('span', { class: 'badge' }, icon(bot.runtime === 'node' ? 'node' : 'python', 'sm'), RUNTIME_LABEL[bot.runtime] || bot.runtime),
+          h('span', { class: 'badge' }, icon(kindIcon(bot.runtime), 'sm'), kindLabel(bot.runtime)),
+          bot.web && bot.web.enabled && h('span', { class: 'badge' }, icon('globe', 'sm'), 'Web 公開'),
           bot.discord && h('span', { class: 'badge accent' }, icon('chat', 'sm'), bot.discord.username),
           h('span', {}, bot.autoRestart ? '落ちたら自動で再起動' : '自動の再起動はオフ'),
           connEl)),
@@ -725,10 +835,17 @@ async function renderBot(id, tab) {
   es.onerror = () => { connEl.hidden = false; };
   state.cleanup.push(() => es.close());
 
-  const update = (b) => { bot = b; putBotConfig(b); drawHead(); };
-  if (tab === 'console') body.append(logView.el);
-  else if (tab === 'files') await renderFiles(id, bot, body, () => live.status);
-  else renderSettings(bot, body, update);
+  const update = (b, l) => { bot = b; if (l) launch = l; putBotConfig(b); drawHead(); };
+  if (tab === 'console') {
+    // 起動できない理由 (ファイルがない・32 ビットの .exe など) を先に知らせる
+    if (launch && launch.problem && !ACTIVE.includes(live.status)) {
+      body.append(h('div', { class: 'banner warn', style: 'margin-bottom:12px' }, icon('alert'),
+        h('div', { class: 'grow' }, h('b', {}, 'このままでは起動できません'), h('div', {}, launch.problem)),
+        h('a', { class: 'btn sm', href: `#/bots/${id}/files` }, 'ファイル'), h('a', { class: 'btn sm', href: `#/bots/${id}/settings` }, '設定')));
+    }
+    body.append(logView.el);
+  } else if (tab === 'files') await renderFiles(id, bot, body, () => live.status, (b, l) => update(b, l));
+  else renderSettings(bot, body, update, launch);
 }
 
 function createLogView(id) {
@@ -813,7 +930,34 @@ function createLogView(id) {
 }
 
 // ================= ファイル =================
-async function renderFiles(id, bot, body, getStatus) {
+// ファイルの種類 (一覧のアイコン・開き方)
+const PREVIEW = { image: /\.(png|jpe?g|gif|webp|bmp|ico)$/i, audio: /\.(mp3|wav|ogg|oga|opus|m4a|flac)$/i, video: /\.(mp4|webm|mov)$/i };
+const BINARY = /\.(exe|dll|jar|class|so|o|a|zip|7z|rar|gz|tgz|xz|bz2|whl|pyc|pyd|bin|dat|db|sqlite3?|pdf|ttf|otf|woff2?|msi|com|node|wasm)$/i;
+function fileIcon(p) {
+  if (PREVIEW.image.test(p)) return 'image';
+  if (PREVIEW.audio.test(p) || PREVIEW.video.test(p)) return 'music';
+  if (/\.(exe|bat|cmd|com)$/i.test(p)) return 'windows';
+  if (/\.(jar|class|java)$/i.test(p)) return 'java';
+  if (/\.(dll|cs|csproj)$/i.test(p)) return 'dotnet';
+  if (/\.(py|pyw)$/i.test(p)) return 'python';
+  if (/\.(js|mjs|cjs|ts|mts|tsx)$/i.test(p)) return 'node';
+  if (/\.zip$/i.test(p)) return 'zip';
+  if (/\.(sh|bash)$/i.test(p)) return 'terminal';
+  return 'file';
+}
+// 文字コード: UTF-8 → (日本語の Windows の) Shift_JIS → UTF-16 (BOM) の順に試す
+function decodeText(buf) {
+  const u8 = new Uint8Array(buf);
+  if (u8[0] === 0xff && u8[1] === 0xfe) return { text: new TextDecoder('utf-16le').decode(u8.subarray(2)), enc: 'UTF-16' };
+  if (u8[0] === 0xfe && u8[1] === 0xff) return { text: new TextDecoder('utf-16be').decode(u8.subarray(2)), enc: 'UTF-16' };
+  const bom = u8[0] === 0xef && u8[1] === 0xbb && u8[2] === 0xbf;
+  try { return { text: new TextDecoder('utf-8', { fatal: true }).decode(bom ? u8.subarray(3) : u8), enc: bom ? 'UTF-8 (BOM)' : 'UTF-8' }; } catch { /* UTF-8 ではない */ }
+  // 0 のバイトがあるなら、文字ではない
+  if (u8.subarray(0, 8000).includes(0)) return null;
+  try { return { text: new TextDecoder('shift_jis', { fatal: true }).decode(u8), enc: 'Shift_JIS' }; } catch { return null; }
+}
+
+async function renderFiles(id, bot, body, getStatus, onLaunch) {
   const listEl = h('div', { class: 'file-list card' });
   const editorEl = h('div', { class: 'editor card' });
   fill(body, h('div', { class: 'files' }, listEl, editorEl));
@@ -829,8 +973,18 @@ async function renderFiles(id, bot, body, getStatus) {
 
   const openMain = async () => {
     const { files } = await api('GET', `/api/bots/${id}/files`);
-    const main = files.find((f) => /^(main\.py|index\.js|bot\.py)$/.test(f.path)) || files[0];
+    const top = files.filter((f) => !f.path.includes('/'));
+    const main = files.find((f) => /^(main\.py|index\.js|bot\.py|index\.ts|start\.bat|bot\.js|app\.py)$/i.test(f.path))
+      || top.find((f) => !BINARY.test(f.path) && !f.path.startsWith('.')) || top[0] || files[0];
     if (main) await open(main.path); else { showEmpty(); await refresh(); }
+  };
+
+  // 起動方法が変わったら知らせる
+  const tellLaunch = async (l) => {
+    if (!l) return;
+    try { const { bot: b, launch } = await api('GET', `/api/bots/${id}`); bot = b; if (onLaunch) onLaunch(b, launch); } catch { /* あとで */ }
+    if (l.problem) toast(l.problem, true);
+    else if (l.auto && l.command) toast(`起動方法: ${l.command} (自動)`);
   };
 
   const importZip = async (file) => {
@@ -839,25 +993,24 @@ async function renderFiles(id, bot, body, getStatus) {
       [{ label: '足す', value: 'add' }, { label: '全部入れ替える', value: 'replace', primary: true }]);
     if (!mode) return;
     try {
-      const res = await api('POST', `/api/bots/${id}/import${mode === 'replace' ? '?replace=1' : ''}`, file);
-      toast(`${res.count} 個のファイルを読み込みました`);
+      const l = await uploadInto(id, [file], { replace: mode === 'replace' });
       dirty = false; current = null;
       await openMain();
+      tellLaunch(l);
     } catch (e) { toast(e.message, true); }
   };
 
   const uploadFiles = async (fileList) => {
     if (fileList.length === 1 && /\.zip$/i.test(fileList[0].name)) { await importZip(fileList[0]); return; }
-    let n = 0;
-    for (const f of fileList) {
-      try { await api('PUT', `/api/bots/${id}/file?path=${encodeURIComponent(f.name)}`, f); n++; } catch (e) { toast(`${f.name}: ${e.message}`, true); }
-    }
-    if (n) toast(`${n} 個のファイルを入れました`);
+    try { tellLaunch(await uploadInto(id, fileList)); } catch (e) { toast(e.message, true); }
     refresh();
   };
 
+  const sizes = new Map();
   const refresh = async () => {
     const { files, hidden } = await api('GET', `/api/bots/${id}/files`);
+    sizes.clear();
+    for (const f of files) sizes.set(f.path, f.size);
     const rows = [];
     const seenDirs = new Set();
     for (const f of files) {
@@ -880,7 +1033,7 @@ async function renderFiles(id, bot, body, getStatus) {
         style: `padding-left:${9 + (parts.length - 1) * 14}px`,
         title: f.path,
         onclick: async () => { if (await confirmLeave()) open(f.path); },
-      }, icon('file', 'sm'), h('span', { class: 'nm' }, parts[parts.length - 1]), h('span', { class: 'size' }, fmtSize(f.size))));
+      }, icon(fileIcon(f.path), 'sm'), h('span', { class: 'nm' }, parts[parts.length - 1]), h('span', { class: 'size' }, fmtSize(f.size))));
     }
     fill(listEl,
       h('div', { class: 'tools' },
@@ -904,7 +1057,7 @@ async function renderFiles(id, bot, body, getStatus) {
   listEl.addEventListener('drop', (e) => { e.preventDefault(); listEl.classList.remove('drop'); if (e.dataTransfer.files.length) uploadFiles([...e.dataTransfer.files]); });
 
   const newFile = () => {
-    const input = h('input', { type: 'text', placeholder: bot.runtime === 'python' ? '例: cogs/music.py' : '例: commands/ping.js', autocapitalize: 'off', spellcheck: 'false' });
+    const input = h('input', { type: 'text', placeholder: bot.runtime === 'python' ? '例: cogs/music.py' : bot.runtime === 'node' || bot.runtime === 'ts' ? '例: commands/ping.js' : '例: start.bat / config.json', autocapitalize: 'off', spellcheck: 'false' });
     const err = h('div', { class: 'error-text' });
     const make = async (close) => {
       const p = input.value.trim();
@@ -924,19 +1077,49 @@ async function renderFiles(id, bot, body, getStatus) {
     fill(editorEl, h('div', { class: 'no-file' }, icon('file', 'lg'), '左のファイルを選ぶと、ここで編集できます。'));
   };
 
-  const open = async (p) => {
-    let buf;
+  const fileUrl = (p, dl) => `/api/bots/${id}/file?path=${encodeURIComponent(p)}${dl ? '&download=1' : ''}`;
+  // このファイルで起動する (起動コマンドをこのファイルにする)
+  const runWith = async (command) => {
     try {
-      const res = await api('GET', `/api/bots/${id}/file?path=${encodeURIComponent(p)}`, undefined, { raw: true });
-      buf = await res.arrayBuffer();
-    } catch (e) { toast(e.message, true); return; }
-    let text = null;
-    if (buf.byteLength < 2 * 1024 * 1024) {
-      try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { text = null; }
+      const r = await api('PATCH', `/api/bots/${id}`, { startCommand: command, commandMode: 'manual' });
+      bot = r.bot;
+      if (onLaunch) onLaunch(r.bot, r.launch);
+      if (r.launch && r.launch.problem) toast(r.launch.problem, true); else toast(`起動方法を「${command}」にしました。「起動」で動きます`);
+    } catch (e) { toast(e.message, true); }
+  };
+  let objectUrl = null;
+  state.cleanup.push(() => { if (objectUrl) URL.revokeObjectURL(objectUrl); });
+
+  // テキストではないファイル: 説明・プレビュー・ダウンロード・このファイルで起動
+  const showBinary = async (p, size, actionsBar) => {
+    const box = h('div', { class: 'no-file file-info' }, icon(fileIcon(p), 'lg'), h('div', { class: 'hint' }, `読み込み中… (${fmtSize(size)})`));
+    fill(editorEl, h('div', { class: 'editor-bar' }, icon(fileIcon(p), 'sm'), h('span', { class: 'path' }, p), ...actionsBar), box);
+    let info = null;
+    try { info = await api('GET', `/api/bots/${id}/fileinfo?path=${encodeURIComponent(p)}`); } catch { /* 説明なし */ }
+    let preview = null;
+    const kind = PREVIEW.image.test(p) ? 'img' : PREVIEW.audio.test(p) ? 'audio' : PREVIEW.video.test(p) ? 'video' : null;
+    if (kind && size < 30 * 1048576) {
+      try {
+        const res = await api('GET', fileUrl(p), undefined, { raw: true });
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = URL.createObjectURL(await res.blob());
+        preview = kind === 'img' ? h('img', { src: objectUrl, alt: p, class: 'preview' }) : h(kind, { src: objectUrl, controls: true, class: 'preview' });
+      } catch { /* プレビューなし */ }
     }
-    current = { path: p, original: text };
+    fill(box,
+      preview || icon(fileIcon(p), 'lg'),
+      h('div', {}, h('b', {}, (info && info.info && info.info.text) || (kind ? '' : 'テキストではないファイル')), h('div', { class: 'hint' }, fmtSize(size))),
+      info && info.problem ? h('div', { class: 'banner warn' }, icon('alert'), h('div', {}, info.problem)) : null,
+      h('div', { class: 'row-end', style: 'justify-content:center' },
+        h('button', { class: 'btn', onclick: () => download(fileUrl(p, true)) }, icon('download', 'sm'), 'ダウンロード'),
+        info && info.command ? h('button', { class: 'btn primary', onclick: () => runWith(info.command) }, icon('play', 'sm'), 'このファイルで起動') : null));
+  };
+
+  const open = async (p) => {
+    current = { path: p, original: null };
     dirty = false;
     await refresh();
+    const size = sizes.get(p) ?? 0;
     const dirtyEl = h('span', { class: 'dirty' });
     const actionsBar = [
       h('button', {
@@ -959,11 +1142,22 @@ async function renderFiles(id, bot, body, getStatus) {
         },
       }, icon('trash', 'sm')),
     ];
-    if (text === null) {
-      fill(editorEl,
-        h('div', { class: 'editor-bar' }, h('span', { class: 'path' }, p), ...actionsBar),
-        h('div', { class: 'no-file' }, icon('file', 'lg'), `テキストではないファイルです (${fmtSize(buf.byteLength)})`));
-      return;
+    actionsBar.unshift(h('button', { class: 'btn sm icon', title: 'ダウンロード', 'aria-label': 'ダウンロード', onclick: () => download(fileUrl(p, true)) }, icon('download', 'sm')));
+    // 大きいファイル・バイナリは中身を読まずに説明を出す
+    if (size > 2 * 1048576 || BINARY.test(p) || PREVIEW.image.test(p) || PREVIEW.audio.test(p) || PREVIEW.video.test(p)) { await showBinary(p, size, actionsBar); return; }
+    let buf;
+    try { buf = await (await api('GET', fileUrl(p), undefined, { raw: true })).arrayBuffer(); } catch (e) { toast(e.message, true); return; }
+    const decoded = decodeText(buf);
+    if (!decoded) { await showBinary(p, buf.byteLength, actionsBar); return; }
+    // 改行は元のまま (Windows の \r\n なら、保存するときも \r\n)
+    const crlf = /\r\n/.test(decoded.text);
+    const text = decoded.text.replace(/\r\n/g, '\n');
+    current.original = text;
+    // 動かせるファイル (.py .js .bat .sh …) なら「このファイルで起動」
+    if (/\.(py|js|mjs|cjs|ts|bat|cmd|sh|rb|php|lua|pl)$/i.test(p)) {
+      const q = /\s/.test(p) ? `"${p}"` : p;
+      const cmdFor = /\.py$/i.test(p) ? `python3 ${q}` : /\.(js|mjs|cjs)$/i.test(p) ? `node ${q}` : /\.ts$/i.test(p) ? `tsx ${q}` : q;
+      actionsBar.unshift(h('button', { class: 'btn sm icon', title: 'このファイルで起動する', 'aria-label': 'このファイルで起動する', onclick: () => runWith(cmdFor) }, icon('play', 'sm')));
     }
     const lang = langOf(p);
     const gutter = h('div', { class: 'gutter', 'aria-hidden': 'true' });
@@ -997,7 +1191,7 @@ async function renderFiles(id, bot, body, getStatus) {
       saveBtn.disabled = true;
       try {
         const value = code.value;
-        await api('PUT', `/api/bots/${id}/file?path=${encodeURIComponent(p)}`, value);
+        await api('PUT', `/api/bots/${id}/file?path=${encodeURIComponent(p)}`, crlf ? value.replace(/\n/g, '\r\n') : value);
         current.original = value; dirty = code.value !== value; dirtyEl.textContent = dirty ? '● 未保存' : '';
         toast(ACTIVE.includes(getStatus()) ? '保存しました (反映するには「再起動」)' : '保存しました');
         refresh();
@@ -1045,9 +1239,11 @@ async function renderFiles(id, bot, body, getStatus) {
       }
     });
     fill(editorEl,
-      h('div', { class: 'editor-bar' }, icon('file', 'sm'), h('span', { class: 'path' }, p), dirtyEl, ...actionsBar, saveBtn),
+      h('div', { class: 'editor-bar' }, icon(fileIcon(p), 'sm'), h('span', { class: 'path' }, p), dirtyEl, ...actionsBar, saveBtn),
       h('div', { class: 'code-wrap' }, gutter, h('div', { class: 'code-area' }, pre, code)),
-      h('div', { class: 'editor-foot' }, pos, h('span', {}, lang === 'python' ? 'Python' : lang === 'js' ? 'JavaScript' : lang === 'json' ? 'JSON' : 'テキスト'), h('span', {}, 'UTF-8'), h('span', { class: 'grow' }), h('span', { class: 'hide-touch' }, 'Ctrl/⌘ + S で保存')));
+      h('div', { class: 'editor-foot' }, pos, h('span', {}, LANG_LABEL[lang] || 'テキスト'),
+        h('span', { title: decoded.enc === 'UTF-8' ? '' : '保存すると UTF-8 になります' }, decoded.enc === 'UTF-8' ? 'UTF-8' : `${decoded.enc} → 保存は UTF-8`),
+        crlf && h('span', {}, 'CRLF'), h('span', { class: 'grow' }), h('span', { class: 'hide-touch' }, 'Ctrl/⌘ + S で保存')));
     paint();
     updatePos();
   };
@@ -1056,11 +1252,11 @@ async function renderFiles(id, bot, body, getStatus) {
 }
 
 // ================= 設定 =================
-function renderSettings(bot, body, onSaved) {
+function renderSettings(bot, body, onSaved, launch) {
   const docker = state.config.mode === 'docker';
-  const isDiscord = (bot.template || '').includes('discord') || !!bot.env.DISCORD_TOKEN;
-  const saved = (b, msg) => { onSaved(b); bot = b; if (msg) toast(msg); };
-  const redraw = () => renderSettings(bot, body, onSaved);
+  const isDiscord = (bot.template || '').includes('discord') || bot.env.DISCORD_TOKEN !== undefined;
+  const saved = (b, msg, l) => { if (l) launch = l; onSaved(b, l); bot = b; if (msg) toast(msg); };
+  const redraw = () => renderSettings(bot, body, onSaved, launch);
   const section = (ic, title, hint, ...rest) => h('section', { class: 'section card' }, h('h2', {}, icon(ic), title), hint && h('p', { class: 'hint' }, hint), ...rest);
 
   const discordSection = () => {
@@ -1121,7 +1317,8 @@ function renderSettings(bot, body, onSaved) {
     const rows = [];
     const addRow = (key = '', existing = false) => {
       const k = h('input', { type: 'text', value: key, placeholder: '名前 (例: API_KEY)', spellcheck: 'false', autocapitalize: 'characters', 'aria-label': '名前' });
-      const v = h('input', { type: 'password', placeholder: existing ? '••••••（変えないなら空欄）' : '値', autocomplete: 'off', spellcheck: 'false', 'aria-label': '値' });
+      const empty = existing && bot.env[key] === false;
+      const v = h('input', { type: 'password', placeholder: empty ? 'まだ入っていません。値を入れてください' : existing ? '••••••（変えないなら空欄）' : '値', autocomplete: 'off', spellcheck: 'false', 'aria-label': '値', class: empty ? 'needs' : null });
       const row = { k, v, existing, original: key, removed: false };
       const show = h('button', { class: 'btn ghost icon', type: 'button', title: '表示', 'aria-label': '値を表示', onclick: () => { v.type = v.type === 'password' ? 'text' : 'password'; } }, icon('eye'));
       const el = h('div', { class: 'env-row' }, k, h('div', { class: 'env-val' }, v, show),
@@ -1159,6 +1356,78 @@ function renderSettings(bot, body, onSaved) {
         h('button', { class: 'btn primary', onclick: (e) => saveEnv(e.currentTarget) }, '環境変数を保存')));
   };
 
+  // 起動方法: 自動 (ファイルから見つける) か、自分で決める
+  const launchSection = () => {
+    const l = launch || {};
+    const manual = bot.commandMode !== 'auto';
+    const cmd = h('input', { type: 'text', value: bot.startCommand || '', class: 'mono', spellcheck: 'false', autocapitalize: 'off', placeholder: '例: python3 main.py / start.bat / bot.exe / java -jar bot.jar / npm start' });
+    const build = h('input', { type: 'text', value: bot.buildCommand || '', class: 'mono', spellcheck: 'false', autocapitalize: 'off', placeholder: l.build && !bot.buildCommand ? `自動: ${l.build}` : '例: npm run build (なければ空欄)' });
+    const patch = async (payload, msg, btn) => {
+      if (btn) btn.disabled = true;
+      try { const r = await api('PATCH', `/api/bots/${bot.id}`, payload); saved(r.bot, msg, r.launch); redraw(); } catch (e) { toast(e.message, true); if (btn) btn.disabled = false; }
+    };
+    const seg = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': '起動方法の決め方' },
+      h('button', { type: 'button', class: !manual ? 'on' : '', role: 'radio', 'aria-checked': String(!manual), onclick: () => manual && patch({ commandMode: 'auto' }, '起動方法を自動にしました') }, '自動で見つける'),
+      h('button', { type: 'button', class: manual ? 'on' : '', role: 'radio', 'aria-checked': String(manual), onclick: () => !manual && patch({ commandMode: 'manual', startCommand: l.command || bot.startCommand }, '起動方法を固定しました') }, '自分で決める'));
+    const now = h('div', { class: 'launch-now' },
+      icon(kindIcon(l.kind), 'lg'),
+      h('div', { class: 'grow' },
+        h('div', { class: 'k' }, !manual ? '自動で見つけた起動方法' : '起動コマンド'),
+        h('code', { class: 'cmd' }, l.command || '(見つかりません)'),
+        l.label && h('div', { class: 'hint' }, l.label)));
+    const cands = (l.candidates || []).filter((c) => c.command !== l.command);
+    return section('play', '起動方法', 'BotHost は、ファイルを見て起動方法を自動で決めます (Python・Node.js・TypeScript・Java (.jar)・.NET・Windows の .exe や .bat・シェル・Ruby・PHP・Lua など)。ライブラリ (requirements.txt・package.json など) も、起動の前に自動で入れます。',
+      seg, now,
+      l.problem && h('div', { class: 'banner warn', style: 'margin-top:10px' }, icon('alert'), h('div', {}, l.problem)),
+      l.note && !l.problem && h('div', { class: 'banner', style: 'margin-top:10px' }, icon('alert'), h('div', {}, l.note)),
+      cands.length ? h('details', { class: 'howto', open: !!l.problem }, h('summary', {}, `ほかの候補 (${cands.length})`),
+        h('div', { class: 'cands' }, cands.map((c) => h('button', {
+          type: 'button', class: 'cand', disabled: c.problem ? true : null, title: c.problem || '',
+          onclick: () => patch({ startCommand: c.command, commandMode: 'manual' }, `起動方法を「${c.command}」にしました`),
+        }, icon(kindIcon(c.kind), 'sm'), h('code', {}, c.command), h('span', { class: 'hint' }, c.problem || c.why))))) : null,
+      manual && h('label', { class: 'field', style: 'margin-top:12px' }, h('span', {}, '起動コマンド'), cmd,
+        h('small', {}, 'ファイル名だけ (start.bat・bot.exe・bot.jar・main.py) でも動きます。&& や | を使うとシェルで動かします。')),
+      h('label', { class: 'field', style: 'margin-top:12px' }, h('span', {}, '起動の前にビルド (TypeScript など)'), build,
+        h('small', {}, 'ファイルが変わったときだけ実行します。')),
+      h('div', { class: 'row-end' }, h('div', { class: 'grow' }),
+        h('button', {
+          class: 'btn primary', onclick: (e) => {
+            const payload = { buildCommand: build.value.trim() };
+            if (manual) payload.startCommand = cmd.value.trim();
+            patch(payload, '起動方法を保存しました (反映するには「再起動」)', e.currentTarget);
+          },
+        }, '保存')));
+  };
+
+  // Web 公開: bot が PORT で待ち受けているページ・Webhook を、インターネットから開けるようにする
+  const webSection = () => {
+    const on = bot.web && bot.web.enabled;
+    const url = on ? location.origin + bot.web.path : '';
+    const toggle = h('input', { type: 'checkbox', checked: on, role: 'switch' });
+    toggle.addEventListener('change', async () => {
+      try { const r = await api('PATCH', `/api/bots/${bot.id}`, { web: { enabled: toggle.checked } }); saved(r.bot, toggle.checked ? 'Web 公開をオンにしました' : 'Web 公開をオフにしました'); redraw(); } catch (e) { toast(e.message, true); toggle.checked = !toggle.checked; }
+    });
+    return section('globe', 'Web 公開 (Webhook)', 'LINE bot の Webhook や、「動いています」のページなど、bot をインターネットから開けるようにします。bot のプログラムは、環境変数 PORT の番号で待ち受けてください。',
+      h('label', { class: 'switch' }, toggle, h('span', {}, h('b', {}, 'Web 公開'), h('span', { class: 'hint' }, `bot の待ち受け番号: PORT=${bot.port || '—'}`))),
+      on && h('div', { class: 'web-url' },
+        h('code', { class: 'cmd' }, url),
+        h('div', { class: 'row-end', style: 'margin-top:8px' },
+          h('button', { class: 'btn sm', onclick: () => copyText(url, 'URL をコピーしました') }, icon('copy', 'sm'), 'コピー'),
+          h('a', { class: 'btn sm', href: url, target: '_blank', rel: 'noopener' }, icon('link', 'sm'), '開く'),
+          h('div', { class: 'grow' }),
+          h('button', {
+            class: 'btn sm danger', onclick: async () => {
+              if (!await confirmBox('URL を作り直す', '今の URL は使えなくなります。LINE などに登録した URL も変えてください。', '作り直す')) return;
+              try { const r = await api('PATCH', `/api/bots/${bot.id}`, { web: { regenerate: true } }); saved(r.bot, 'URL を作り直しました'); redraw(); } catch (e) { toast(e.message, true); }
+            },
+          }, 'URL を作り直す'))),
+      h('details', { class: 'howto' }, h('summary', {}, '待ち受け方の例'),
+        h('ul', {},
+          h('li', {}, 'Python (Flask): ', h('code', {}, "app.run(host='0.0.0.0', port=int(os.environ['PORT']))")),
+          h('li', {}, 'Node.js: ', h('code', {}, 'app.listen(process.env.PORT)')),
+          h('li', {}, 'LINE の Webhook URL: 上の URL の最後に ', h('code', {}, 'callback'), ' などのパスを付ける'))));
+  };
+
   const notifySection = () => {
     const url = h('input', { type: 'url', placeholder: bot.notify ? '設定済み (変えるときだけ入れる)' : 'https://discord.com/api/webhooks/…', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Webhook の URL' });
     const saveBtn = h('button', {
@@ -1178,8 +1447,10 @@ function renderSettings(bot, body, onSaved) {
 
   const generalSection = () => {
     const name = h('input', { type: 'text', value: bot.name, maxlength: 40 });
-    const cmd = h('input', { type: 'text', value: bot.startCommand, class: 'mono', spellcheck: 'false', autocapitalize: 'off' });
     const auto = h('input', { type: 'checkbox', checked: bot.autoRestart, role: 'switch' });
+    const zones = ['', 'Asia/Tokyo', 'UTC', 'Asia/Seoul', 'Asia/Shanghai', 'Asia/Singapore', 'Europe/London', 'Europe/Paris', 'America/New_York', 'America/Los_Angeles'];
+    if (bot.timezone && !zones.includes(bot.timezone)) zones.push(bot.timezone);
+    const tz = h('select', {}, zones.map((z) => h('option', { value: z, selected: (bot.timezone || '') === z ? true : null }, z === '' ? 'サーバーのまま (UTC)' : z === 'Asia/Tokyo' ? '日本 (Asia/Tokyo)' : z)));
     const presets = [0, 6, 12, 24, 48, 168];
     const every = h('select', {}, presets.map((v) => h('option', { value: v, selected: bot.restartEveryHours === v ? true : null },
       v === 0 ? 'しない' : v === 168 ? '1 週間ごと' : `${v} 時間ごと`)));
@@ -1188,7 +1459,7 @@ function renderSettings(bot, body, onSaved) {
     const cpu = h('input', { type: 'number', value: bot.cpuLimit, min: 0.1, max: 4, step: 0.1, inputmode: 'decimal' });
     const saveGeneral = async (btn) => {
       const payload = {
-        name: name.value, startCommand: cmd.value, autoRestart: auto.checked,
+        name: name.value, autoRestart: auto.checked, timezone: tz.value,
         restartEveryHours: Number(every.value), memoryLimitMB: Number(mem.value),
       };
       if (docker) payload.cpuLimit = Number(cpu.value);
@@ -1197,8 +1468,8 @@ function renderSettings(bot, body, onSaved) {
     };
     return section('settings', '基本', null,
       h('label', { class: 'field' }, h('span', {}, '名前'), name),
-      h('label', { class: 'field' }, h('span', {}, '起動コマンド'), cmd,
-        h('small', {}, `ふつうは ${state.config.runtimes[bot.runtime].defaultCommand}。${bot.runtime === 'python' ? 'requirements.txt' : 'package.json'} があれば、起動の前にライブラリを自動で入れます。`)),
+      h('label', { class: 'field' }, h('span', {}, 'タイムゾーン (bot の中の時刻)'), tz,
+        h('small', {}, '「毎朝 9 時に送る」のような bot は、日本にしておくと日本の時刻で動きます。')),
       h('label', { class: 'switch' }, auto, h('span', {}, h('b', {}, '落ちたら自動で再起動'),
         h('span', { class: 'hint' }, 'エラーで止まったら、少し待ってから起動し直します (5 分で 5 回落ちたらあきらめます)。'))),
       h('div', { class: 'two' },
@@ -1237,7 +1508,9 @@ function renderSettings(bot, body, onSaved) {
 
   fill(body, h('div', { class: 'settings' },
     isDiscord && discordSection(),
+    launchSection(),
     envSection(),
+    webSection(),
     notifySection(),
     generalSection(),
     maintenanceSection(),
@@ -1301,7 +1574,10 @@ async function renderAdmin() {
               },
             }, '削除'))))),
         section('server', 'サーバー',
-          kv([['バージョン', s.version], ['動かし方', s.mode === 'docker' ? 'docker (bot ごとにコンテナ)' : 'process'], ['Node.js', s.node]]))));
+          kv([['バージョン', s.version], ['動かし方', s.mode === 'docker' ? 'docker (bot ごとにコンテナ)' : 'process'], ['Node.js', s.node]]),
+          s.runtimes && h('div', { class: 'rt-list' }, s.runtimes.map((r) => h('span', { class: 'rt' + (r.ok ? ' ok' : '') },
+            icon(r.ok ? 'checkCircle' : 'x', 'sm'), h('span', {}, r.label))))),
+        s.runtimes && h('p', { class: 'hint', style: 'margin:0' }, 'ffmpeg (音楽 bot) と Bun は、使う bot があるときだけ自動で入れます。')));
   };
   await draw();
 }

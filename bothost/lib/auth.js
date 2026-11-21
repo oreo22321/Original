@@ -106,8 +106,11 @@ function allowLogin(ip, username) {
   return allowAttempt(`ip:${ip}`, 20) && allowAttempt(`user:${String(username || '').toLowerCase()}`, 10);
 }
 
+// テスト用: 試した回数の記録を消す
+function resetAttempts() { attempts.clear(); }
+
 module.exports = {
   hashPassword, verifyPassword, newId,
-  createSession, getSessionUser, destroySession, destroyUserSessions, pruneSessions, allowAttempt, allowLogin,
+  createSession, getSessionUser, destroySession, destroyUserSessions, pruneSessions, allowAttempt, allowLogin, resetAttempts,
   SESSION_DAYS,
 };

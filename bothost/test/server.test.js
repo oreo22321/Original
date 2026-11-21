@@ -103,10 +103,11 @@ test('BotHost の一通りの流れ', async (t) => {
     const r = await a('PATCH', `/api/bots/${botId}`, { env: { GREETING: 'やあ', 'BAD-KEY': 'x' } });
     assert.strictEqual(r.status, 400);
     const r2 = await a('PATCH', `/api/bots/${botId}`, { env: { GREETING: 'やあ', SECRET: 'tok' } });
-    assert.deepStrictEqual(r2.body.bot.env, { GREETING: true, SECRET: true });
+    // テンプレートが使う DISCORD_TOKEN は、最初から空の欄として入っている (false = まだ入れていない)
+    assert.deepStrictEqual(r2.body.bot.env, { DISCORD_TOKEN: false, GREETING: true, SECRET: true });
     assert.ok(!JSON.stringify(r2.body).includes('tok'));
     await a('PATCH', `/api/bots/${botId}`, { env: { SECRET: null } });
-    assert.deepStrictEqual((await a('GET', `/api/bots/${botId}`)).body.bot.env, { GREETING: true });
+    assert.deepStrictEqual((await a('GET', `/api/bots/${botId}`)).body.bot.env, { DISCORD_TOKEN: false, GREETING: true });
   });
 
   await t.test('ほかの人の bot は見えない', async () => {

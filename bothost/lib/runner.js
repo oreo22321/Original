@@ -8,10 +8,29 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+const launch = require('./launch');
+const { Tools, needsFfmpeg } = require('./tools');
+
+// 前の版との互換のため (新しい bot は、ファイルから自動で起動方法を見つけます)
 const RUNTIMES = {
   python: { defaultCommand: 'python3 main.py', image: 'python:3.12-slim' },
   node: { defaultCommand: 'node index.js', image: 'node:22-slim' },
 };
+// docker モードで使うイメージ (BOTHOST_DOCKER_IMAGE で 1 つにまとめることもできます)
+const DOCKER_IMAGES = {
+  python: 'python:3.12-slim', node: 'node:22-slim', ts: 'node:22-slim', bun: 'oven/bun:1-slim',
+  java: 'eclipse-temurin:25-jre', dotnet: 'mcr.microsoft.com/dotnet/aspnet:10.0', ruby: 'ruby:3.3-slim', php: 'composer:2',
+  perl: 'perl:5-slim', shell: 'ubuntu:24.04', binary: 'ubuntu:24.04', lua: 'ubuntu:24.04', batch: 'node:22-slim',
+};
+// 見つからないコマンドの説明
+const TOOL_LABEL = {
+  wine64: 'Windows の .exe を動かす Wine', java: 'Java', dotnet: '.NET', ruby: 'Ruby', bundle: 'Ruby (bundler)', php: 'PHP', composer: 'PHP (composer)',
+  'lua5.4': 'Lua', tsx: 'TypeScript (tsx)', python3: 'Python', node: 'Node.js', bun: 'Bun', go: 'Go',
+};
+function missingMessage(cmd) {
+  if (cmd === 'go') return 'Go のプログラムは、Linux 用にビルドしたファイルをアップロードしてください (GOOS=linux GOARCH=amd64 go build)。';
+  return `${TOOL_LABEL[cmd] || `「${cmd}」`} がこのサーバーに入っていないので動かせません。`;
+}
 
 const PASS_ENV = /^(https?_proxy|no_proxy|all_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|PIP_[A-Z_]+|UV_[A-Z_]+|npm_config_[a-z_]+)$/i;
 
@@ -39,27 +58,6 @@ const ANSI_KEEP = /\x1b\[[0-9;]*m/g; // 色は残す (画面で色を付ける)
 // eslint-disable-next-line no-control-regex
 const ANSI_OTHER = /\x1b(?:\[[0-9;?]*[A-Za-ln-z]|\][^\x07]*\x07|[()][A-Z0-9]|[=>78])/g;
 
-// "python3 main.py --name 'a b'" → ["python3", "main.py", "--name", "a b"] (シェルは通しません)
-function splitCommand(cmd) {
-  const out = [];
-  let cur = '';
-  let quote = null;
-  let has = false;
-  for (const ch of String(cmd)) {
-    if (quote) {
-      if (ch === quote) quote = null; else cur += ch;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch; has = true;
-    } else if (/\s/.test(ch)) {
-      if (cur || has) { out.push(cur); cur = ''; has = false; }
-    } else {
-      cur += ch;
-    }
-  }
-  if (cur || has) out.push(cur);
-  return out;
-}
-
 function fileHash(file) {
   try {
     return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -72,6 +70,27 @@ function readText(file) {
   try { return fs.readFileSync(file, 'utf8'); } catch { return null; }
 }
 
+// ビルドが要るか決めるための、ファイルの一覧 (大きさと更新時刻)。ビルドの出力先やライブラリは除く
+const BUILD_SKIP = new Set(['node_modules', '.deps', '.git', '.cache', '.npm', '.wine', '.local', '.gems', '.npm-global', 'dist', 'build', 'out', 'bin', 'obj', 'target', '.next']);
+function buildSignature(dir, command) {
+  const h = crypto.createHash('sha256').update(command);
+  let n = 0;
+  const walk = (d, rel) => {
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => (a.name < b.name ? -1 : 1));
+    for (const e of entries) {
+      if (++n > 5000) return;
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { if (!BUILD_SKIP.has(e.name)) walk(path.join(d, e.name), r); continue; }
+      try { const st = fs.statSync(path.join(d, e.name)); h.update(`${r}:${st.size}:${Math.floor(st.mtimeMs)}\n`); } catch { /* 消えた */ }
+    }
+  };
+  walk(dir, '');
+  return h.digest('hex');
+}
+
+
 class Runner extends EventEmitter {
   constructor(opts) {
     super();
@@ -82,6 +101,9 @@ class Runner extends EventEmitter {
     this.maxLogLines = opts.maxLogLines || 1000;
     this.maxLinesPerSec = opts.maxLinesPerSec || 200;
     this.python = opts.python || 'python3';
+    // ffmpeg・Bun など、使うときだけ入れる道具の置き場所
+    this.tools = opts.toolsDir ? new Tools(opts.toolsDir) : null;
+    this.dockerImage = opts.dockerImage || null;
     // サーバーが root なら、bot は bot ごとの別のユーザーで動かす
     // (サーバーの秘密・データ・ほかの bot のファイルを読めないように)
     this.isolate = opts.isolate ?? (typeof process.getuid === 'function' && process.getuid() === 0);
@@ -299,6 +321,36 @@ class Runner extends EventEmitter {
     this.savePids();
   }
 
+  // どう起動するか (自動のときは、ファイルから見つける)
+  plan(bot) {
+    const dir = this.dir(bot.id);
+    let command = bot.startCommand;
+    let build = bot.buildCommand || null;
+    let auto = false;
+    if (bot.commandMode === 'auto' || !command) {
+      const d = launch.detect(dir);
+      if (d.command) { command = d.command; auto = true; }
+      if (!build && d.build) build = d.build;
+    }
+    const r = launch.resolve(dir, command, { memoryMB: bot.memoryLimitMB || 256, has: (n) => this.hasCommand(n) });
+    if (!r.problem && r.argv && !this.hasCommand(r.argv[0])) r.problem = missingMessage(r.argv[0]);
+    if (!r.problem && this.mode === 'docker' && !this.dockerImage && (r.kind === 'wine' || r.kind === 'batch')) {
+      r.problem = 'docker モードで .exe や .bat を動かすには、BOTHOST_DOCKER_IMAGE に BotHost のイメージ (全部の言語が入ったもの) を指定してください。';
+    }
+    return { command, build, auto, ...r };
+  }
+
+  // コマンドがこのサーバーにあるか (後から入れられる道具も「ある」とする)
+  hasCommand(name) {
+    if (!name) return false;
+    if (name.includes('/')) return true;
+    if (this.mode === 'docker') return true;
+    if (this.tools && this.tools.available(name)) return true;
+    if (name === 'bunx' && this.tools && this.tools.available('bun')) return true;
+    const dirs = [this.tools && this.tools.bin, ...(process.env.PATH || '').split(':')].filter(Boolean);
+    return dirs.some((d) => { try { fs.accessSync(path.join(d, name), fs.constants.X_OK); return true; } catch { return false; } });
+  }
+
   // ----- 起動 -----
   async start(bot, { manual = true } = {}) {
     const s = this.state(bot.id);
@@ -313,33 +365,31 @@ class Runner extends EventEmitter {
     fs.mkdirSync(dir, { recursive: true });
     this.prepareDir(bot.id);
 
-    const rt = RUNTIMES[bot.runtime] || RUNTIMES.python;
-    const argv = splitCommand(bot.startCommand || rt.defaultCommand);
-    if (!argv.length) {
-      this.sys(bot.id, '起動コマンドが空です。設定タブで指定してください。');
+    const plan = this.plan(bot);
+    if (plan.problem) {
+      this.sys(bot.id, plan.problem);
       this.setStatus(bot.id, 'crashed');
       return;
     }
-    const entry = argv.find((a, i) => i > 0 && /\.(py|js|mjs|cjs)$/.test(a));
-    if (entry && !fs.existsSync(path.join(dir, entry))) {
-      this.sys(bot.id, `${entry} がありません。ファイルタブで作るか、設定タブの起動コマンドを直してください。`);
-      this.setStatus(bot.id, 'crashed');
-      return;
-    }
+    s.kind = plan.kind;
+    this.emit('launch', bot.id, { kind: plan.kind, command: plan.command });
+    if (plan.note) this.sys(bot.id, plan.note);
+    if (plan.chmod) { try { fs.chmodSync(plan.chmod, fs.statSync(plan.chmod).mode | 0o111); } catch { /* 読み取り専用 */ } }
 
     this.setStatus(bot.id, 'installing');
     try {
-      const ok = await this.install(bot, token);
+      const ok = await this.install(bot, token, plan);
       if (!ok) return; // 途中で止められた or 失敗 (メッセージは install の中で出します)
     } catch (e) {
-      this.sys(bot.id, `インストールに失敗しました: ${e.message}`);
+      this.sys(bot.id, `準備に失敗しました: ${e.message}`);
       this.setStatus(bot.id, 'crashed');
       return;
     }
     if (s.stopping || token !== s.runToken) return;
 
-    this.sys(bot.id, `起動します: ${argv.join(' ')}`);
-    const child = this.spawnIn(bot, argv, `bothost-${bot.id}`);
+    const label = launch.KINDS[plan.kind] ? ` (${launch.KINDS[plan.kind].label}${plan.auto ? '・自動で見つけた方法' : ''})` : '';
+    this.sys(bot.id, `起動します: ${plan.command}${label}`);
+    const child = this.spawnIn(bot, plan.argv, `bothost-${bot.id}`, plan.kind);
     s.child = child;
     s.startedAt = Date.now();
     s.exitCode = null;
@@ -353,63 +403,149 @@ class Runner extends EventEmitter {
     child.stdin.on('error', () => { /* 終わった後に書いた */ });
     child.on('error', (e) => {
       this.sys(bot.id, e.code === 'ENOENT'
-        ? `「${argv[0]}」が見つかりません。起動コマンドを確かめてください。`
+        ? `「${plan.argv[0]}」が見つかりません。起動コマンドを確かめてください。`
         : `起動できませんでした: ${e.message}`);
     });
     child.on('close', (code, signal) => this.onExit(bot, child, code, signal));
   }
 
-  // requirements.txt / package.json があれば、変わったときだけライブラリを入れ直します
-  async install(bot, token) {
+  // 起動の前の準備: ライブラリ (変わったときだけ入れ直す)・道具・ビルド
+  async install(bot, token, plan = this.plan(bot)) {
     const dir = this.dir(bot.id);
     const s = this.state(bot.id);
     const steps = [];
+    const exists = (f) => fs.existsSync(path.join(dir, f));
     const unchanged = (marker, hash) => readText(marker) === hash;
-    if (bot.runtime === 'python' && fs.existsSync(path.join(dir, 'requirements.txt'))) {
-      const hash = fileHash(path.join(dir, 'requirements.txt'));
-      const marker = path.join(dir, '.deps', '.requirements-hash');
-      const empty = !fs.readFileSync(path.join(dir, 'requirements.txt'), 'utf8').replace(/#.*$/gm, '').trim();
-      if (!empty && !unchanged(marker, hash)) {
-        const py = this.mode === 'docker' ? 'python3' : this.python;
-        const pip = [py, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--upgrade',
-          '--progress-bar', 'off', '--target', '.deps', '-r', 'requirements.txt'];
-        const useUv = this.mode !== 'docker' && this.hasUv(bot.id);
-        steps.push({
-          label: `requirements.txt のライブラリを入れています${useUv ? ' (uv)' : ''}…`,
-          argv: useUv ? ['uv', 'pip', 'install', '--quiet', '--target', '.deps', '--python', py, '--link-mode', 'copy', '-r', 'requirements.txt'] : pip,
-          fallback: useUv ? { label: 'uv で入れられなかったので、pip で入れ直します…', argv: pip } : null,
-          before: () => fs.rmSync(path.join(dir, '.deps'), { recursive: true, force: true }),
-          done: () => { fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, hash); },
-        });
+    const kinds = new Set(launch.installKinds(plan.kind));
+    const docker = this.mode === 'docker';
+    const usesBun = plan.kind === 'bun' || plan.argv[0] === 'bun' || plan.argv[0] === 'bunx' || exists('bun.lockb') || exists('bun.lock');
+    if (usesBun && !docker && this.tools && !this.tools.has('bun')) {
+      steps.push({ fn: () => this.tools.ensure('bun', (m) => this.sys(bot.id, m)) });
+    }
+    if (!docker && this.tools && this.tools.available('ffmpeg') && !this.tools.has('ffmpeg') && needsFfmpeg(dir)) {
+      steps.push({ fn: () => this.tools.ensure('ffmpeg', (m) => this.sys(bot.id, m)), optional: true });
+    }
+    // Python: requirements.txt (なければ pyproject.toml)
+    if (kinds.has('python')) {
+      const req = exists('requirements.txt') ? 'requirements.txt' : null;
+      const pyproject = !req && exists('pyproject.toml') && /^\s*dependencies\s*=/m.test(readText(path.join(dir, 'pyproject.toml')) || '') ? 'pyproject.toml' : null;
+      const file = req || pyproject;
+      const empty = req && !fs.readFileSync(path.join(dir, req), 'utf8').replace(/#.*$/gm, '').trim();
+      if (file && !empty) {
+        const hash = fileHash(path.join(dir, file));
+        const marker = path.join(dir, '.deps', `.${file}-hash`);
+        if (!unchanged(marker, hash)) {
+          const py = docker ? 'python3' : this.python;
+          const pip = [py, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--upgrade', '--progress-bar', 'off', '--target', '.deps',
+            ...(req ? ['-r', req] : ['.'])];
+          const useUv = !docker && this.hasUv(bot.id);
+          steps.push({
+            label: `${file} のライブラリを入れています${useUv ? ' (uv)' : ''}…`,
+            argv: useUv ? ['uv', 'pip', 'install', '--quiet', '--target', '.deps', '--python', py, '--link-mode', 'copy', '-r', file] : pip,
+            fallback: useUv ? { label: 'uv で入れられなかったので、pip で入れ直します…', argv: pip } : null,
+            before: () => fs.rmSync(path.join(dir, '.deps'), { recursive: true, force: true }),
+            done: () => { fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, hash); },
+          });
+        }
       }
     }
-    if (bot.runtime === 'node' && fs.existsSync(path.join(dir, 'package.json'))) {
-      const lock = fs.existsSync(path.join(dir, 'package-lock.json'));
-      const hash = fileHash(path.join(dir, 'package.json')) + (lock ? fileHash(path.join(dir, 'package-lock.json')) : '');
+    // Node.js / Bun: package.json (npm / yarn / pnpm / bun はロックファイルで決める)
+    if ((kinds.has('node') || kinds.has('bun') || usesBun) && exists('package.json')) {
+      const pkg = (() => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8').replace(/^﻿/, '')); } catch { return {}; } })();
+      const pm = usesBun ? 'bun' : exists('pnpm-lock.yaml') ? 'pnpm' : exists('yarn.lock') ? 'yarn' : 'npm';
+      // TypeScript をビルドする / ts-node などで動かすなら、開発用のライブラリも要る
+      const dev = !!plan.build || plan.kind === 'ts' || /\b(ts-node|tsx|tsc|nodemon|babel-node)\b/.test(String((pkg.scripts || {}).start || ''));
+      const locks = ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb'].filter(exists);
+      const hash = [pm, dev ? 'dev' : 'prod', fileHash(path.join(dir, 'package.json')), ...locks.map((l) => fileHash(path.join(dir, l)))].join(':');
       const marker = path.join(dir, 'node_modules', '.package-hash');
       if (!unchanged(marker, hash)) {
+        const npmLock = exists('package-lock.json') || exists('npm-shrinkwrap.json');
+        const argv = {
+          npm: ['npm', npmLock ? 'ci' : 'install', ...(dev ? [] : ['--omit=dev']), '--no-audit', '--no-fund', '--prefer-offline', '--loglevel=error'],
+          yarn: ['yarn', 'install', ...(dev ? [] : ['--production'])],
+          pnpm: ['pnpm', 'install', ...(dev ? [] : ['--prod'])],
+          bun: ['bun', 'install', ...(dev ? [] : ['--production'])],
+        }[pm];
         steps.push({
-          label: 'package.json のライブラリを入れています…',
-          // package-lock.json があれば npm ci (速くて、いつも同じものが入る)
-          argv: ['npm', lock ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund', '--prefer-offline', '--loglevel=error'],
+          label: `package.json のライブラリを入れています (${pm})…`,
+          argv,
+          // npm ci はロックファイルと package.json が合っていないと失敗するので、そのときは npm install
+          fallback: pm === 'npm' && npmLock ? { label: 'npm ci に失敗したので、npm install で入れ直します…', argv: ['npm', 'install', ...(dev ? [] : ['--omit=dev']), '--no-audit', '--no-fund', '--loglevel=error'] } : null,
           done: () => { fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, hash); },
         });
       }
     }
+    // Ruby: Gemfile
+    if (kinds.has('ruby') && exists('Gemfile')) {
+      const hash = [fileHash(path.join(dir, 'Gemfile')), exists('Gemfile.lock') ? fileHash(path.join(dir, 'Gemfile.lock')) : ''].join(':');
+      const marker = path.join(dir, '.gems', '.gemfile-hash');
+      if (!unchanged(marker, hash)) {
+        steps.push({
+          label: 'Gemfile のライブラリを入れています…',
+          argv: ['bundle', 'install', '--jobs', '2', '--retry', '2'],
+          done: () => { fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, hash); },
+        });
+      }
+    }
+    // PHP: composer.json
+    if (kinds.has('php') && exists('composer.json')) {
+      const hash = [fileHash(path.join(dir, 'composer.json')), exists('composer.lock') ? fileHash(path.join(dir, 'composer.lock')) : ''].join(':');
+      const marker = path.join(dir, 'vendor', '.composer-hash');
+      if (!unchanged(marker, hash)) {
+        steps.push({
+          label: 'composer.json のライブラリを入れています…',
+          argv: ['composer', 'install', '--no-dev', '--no-interaction', '--no-progress', '--prefer-dist'],
+          done: () => { fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, hash); },
+        });
+      }
+    }
+    // Windows (.exe): 最初の 1 回だけ、Wine の環境 (C ドライブなど) を作る
+    if (plan.kind === 'wine' && !exists('.wine/system.reg')) {
+      steps.push({
+        label: 'Windows の環境を準備しています (初回だけ・10〜30 秒)…',
+        // wineboot が終わっても裏で設定を書いているので、wineserver が終わるまで待つ (途中で止めると設定が壊れる)
+        argv: ['bash', '-c', 'wine64 wineboot --init >/dev/null 2>&1; timeout 120 wineserver -w; test -f "$WINEPREFIX/system.reg"'],
+        failMessage: 'Windows の環境を作れませんでした。',
+        quiet: true,
+      });
+    }
+    // ビルド (TypeScript など)。ファイルが変わったときだけ
+    if (plan.build) {
+      const sig = buildSignature(dir, plan.build);
+      const marker = path.join(dir, '.cache', 'bothost-build-hash');
+      if (!unchanged(marker, sig)) {
+        steps.push({
+          label: `ビルドしています: ${plan.build}`,
+          argv: ['bash', '-c', plan.build],
+          failMessage: 'ビルドに失敗しました。ログを見て直してください。',
+          done: () => { fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, buildSignature(dir, plan.build)); },
+        });
+      }
+    }
+
     for (const step of steps) {
       if (s.stopping || token !== s.runToken) return false;
+      if (step.fn) {
+        try { await step.fn(); } catch (e) {
+          if (step.optional) { this.sys(bot.id, `(準備できませんでした: ${e.message}。このまま起動します)`); continue; }
+          throw e;
+        }
+        continue;
+      }
       this.sys(bot.id, step.label);
       if (step.before) step.before();
       const started = Date.now();
       const runStep = (argv) => new Promise((resolve) => {
-        const child = this.spawnIn(bot, argv, `bothost-${bot.id}-install`);
+        const child = this.spawnIn(bot, argv, `bothost-${bot.id}-install`, plan.kind);
         s.child = child;
         if (child.pid) { this.pids[bot.id] = child.pid; this.savePids(); }
         child.stdout.setEncoding('utf8');
         child.stderr.setEncoding('utf8');
-        child.stdout.on('data', (d) => this.chunk(bot.id, 'out', d));
-        child.stderr.on('data', (d) => this.chunk(bot.id, 'err', d));
-        child.on('error', (e) => { this.sys(bot.id, e.message); });
+        if (!step.quiet) {
+          child.stdout.on('data', (d) => this.chunk(bot.id, 'out', d));
+          child.stderr.on('data', (d) => this.chunk(bot.id, 'err', d));
+        } else { child.stdout.resume(); child.stderr.resume(); }
+        child.on('error', (e) => { this.sys(bot.id, e.code === 'ENOENT' ? `「${argv[0]}」がこのサーバーにありません。` : e.message); });
         child.on('close', (c) => resolve(c));
       });
       let code = await runStep(step.argv);
@@ -421,13 +557,13 @@ class Runner extends EventEmitter {
       s.child = null;
       if (s.stopping || token !== s.runToken) { this.sys(bot.id, '停止しました。'); this.setStatus(bot.id, 'stopped'); return false; }
       if (code !== 0) {
-        this.sys(bot.id, `ライブラリのインストールに失敗しました (終了コード ${code})。ライブラリの名前やバージョンを確かめてください。`);
+        this.sys(bot.id, step.failMessage || `ライブラリのインストールに失敗しました (終了コード ${code})。ライブラリの名前やバージョンを確かめてください。`);
         this.setStatus(bot.id, 'crashed');
         this.emit('crash', bot.id, { reason: 'install', gaveUp: true, code, tail: this.tail(bot.id) });
         return false;
       }
-      step.done();
-      this.sys(bot.id, `インストールが終わりました (${Math.round((Date.now() - started) / 100) / 10} 秒)。`);
+      if (step.done) step.done();
+      this.sys(bot.id, `終わりました (${Math.round((Date.now() - started) / 100) / 10} 秒)。`);
     }
     return true;
   }
@@ -467,11 +603,13 @@ class Runner extends EventEmitter {
 
   // 入れたライブラリを消して、次の起動で入れ直す
   resetDeps(id) {
-    for (const d of ['.deps', 'node_modules']) fs.rmSync(path.join(this.dir(id), d), { recursive: true, force: true });
+    for (const d of ['.deps', 'node_modules', '.gems', '.wine', '.local', '.npm-global']) fs.rmSync(path.join(this.dir(id), d), { recursive: true, force: true });
+    fs.rmSync(path.join(this.dir(id), '.cache', 'bothost-build-hash'), { force: true });
   }
 
   envFor(bot, inDocker) {
     const dir = inDocker ? '/app' : this.dir(bot.id);
+    const mem = bot.memoryLimitMB || 256;
     const env = {
       PYTHONUNBUFFERED: '1',
       PYTHONPATH: path.posix.join(dir, '.deps'),
@@ -481,15 +619,43 @@ class Runner extends EventEmitter {
       FORCE_COLOR: '1',
       BOT_ID: bot.id,
       BOT_NAME: bot.name,
+      BOTHOST_BOT_DIR: dir,
+      BOTHOST_MEMORY_MB: String(mem),
+      BOTHOST_DEPS_READY: '1',
+      // Windows の .exe (Wine)
+      WINEPREFIX: path.posix.join(dir, '.wine'),
+      WINEDEBUG: '-all',
+      WINEDLLOVERRIDES: 'mscoree,mshtml=;winemenubuilder.exe=d',
+      WINEARCH: 'win64',
+      // .NET: 新しい .NET で古い版の bot も動かす。メモリの上限の 75% でガベージコレクション
+      DOTNET_ROLL_FORWARD: 'Major',
+      DOTNET_gcServer: '0',
+      DOTNET_GCHeapHardLimit: '0x' + Math.floor(mem * 0.75 * 1048576).toString(16),
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+      DOTNET_NOLOGO: '1',
+      DOTNET_CLI_HOME: dir,
+      // Ruby / PHP / yarn・pnpm
+      BUNDLE_PATH: path.posix.join(dir, '.gems'),
+      BUNDLE_APP_CONFIG: path.posix.join(dir, '.bundle'),
+      GEM_HOME: path.posix.join(dir, '.gems', 'gem'),
+      COMPOSER_HOME: path.posix.join(dir, '.cache', 'composer'),
+      COMPOSER_NO_INTERACTION: '1',
+      COREPACK_HOME: path.posix.join(dir, '.cache', 'corepack'),
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+      // npm install -g も bot のフォルダーに入れる
+      npm_config_prefix: path.posix.join(dir, '.npm-global'),
+      npm_config_update_notifier: 'false',
     };
+    if (bot.port) env.PORT = String(bot.port);
+    if (bot.timezone) env.TZ = bot.timezone;
     for (const [k, v] of Object.entries(bot.env || {})) env[k] = String(v);
     return env;
   }
 
-  spawnIn(bot, argv, containerName) {
+  spawnIn(bot, argv, containerName, kind) {
     const dir = this.dir(bot.id);
     if (this.mode === 'docker') {
-      const rt = RUNTIMES[bot.runtime] || RUNTIMES.python;
+      const image = this.dockerImage || DOCKER_IMAGES[kind] || DOCKER_IMAGES.python;
       const args = [
         'run', '--rm', '-i', '--init', '--name', containerName,
         '--memory', `${bot.memoryLimitMB || 256}m`,
@@ -502,14 +668,16 @@ class Runner extends EventEmitter {
         // システムのファイルは読み取り専用。書けるのは bot のフォルダー (/app) と /tmp だけ
         '--read-only', '--tmpfs', '/tmp:rw,size=64m',
         '-v', `${dir}:/app`, '-w', '/app',
+        // バッチ (.bat) を動かす cmd.js など
+        '-v', `${__dirname}:/opt/bothost:ro`,
       ];
       const env = { ...this.envFor(bot, true), HOME: '/app', PIP_NO_CACHE_DIR: '1' };
       for (const [k, v] of Object.entries(env)) args.push('-e', `${k}=${v}`);
-      args.push(rt.image, ...argv);
+      args.push(image, ...argv.map((a) => (a === launch.CMD_JS ? '/opt/bothost/cmd.js' : a)));
       return spawn('docker', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     }
     const env = {
-      PATH: process.env.PATH,
+      PATH: [this.tools && this.tools.bin, path.join(dir, 'node_modules', '.bin'), path.join(dir, '.npm-global', 'bin'), path.join(dir, '.gems', 'gem', 'bin'), process.env.PATH].filter(Boolean).join(':'),
       HOME: dir,
       // ライブラリのキャッシュは bot のフォルダーの中に (ほかの bot と混ざらないように)
       XDG_CACHE_HOME: path.join(dir, '.cache'),
@@ -728,4 +896,4 @@ class Runner extends EventEmitter {
   }
 }
 
-module.exports = { Runner, RUNTIMES, splitCommand, botUid };
+module.exports = { Runner, RUNTIMES, DOCKER_IMAGES, splitCommand: launch.splitCommand, botUid };

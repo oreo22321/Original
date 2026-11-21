@@ -3,6 +3,7 @@
 //   node server.js            → http://localhost:3000
 // 設定は環境変数で (README.md を参照)。
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
@@ -15,22 +16,41 @@ const files = require('./lib/files');
 const zip = require('./lib/zip');
 const discord = require('./lib/discord');
 const { Backup } = require('./lib/backup');
-const { Runner, RUNTIMES } = require('./lib/runner');
+const { Runner } = require('./lib/runner');
+const launch = require('./lib/launch');
 
 const ROOT = __dirname;
 const VERSION = require('./package.json').version;
+// テンプレート: kind (言語)・command (起動コマンド)・env (入れてもらう環境変数)・web (Web 公開を最初からオン)
 const TEMPLATES = {
-  'python-discord': { runtime: 'python', label: 'Discord bot (Python)', desc: '!ping に返事をする bot (discord.py)' },
-  'python-discord-slash': { runtime: 'python', label: 'スラッシュコマンド (Python)', desc: '/ping /dice など。特別な権限が要らない' },
-  'node-discord': { runtime: 'node', label: 'Discord bot (Node.js)', desc: '!ping に返事をする bot (discord.js)' },
-  'python-blank': { runtime: 'python', label: '空の Python', desc: 'main.py だけ' },
-  'node-blank': { runtime: 'node', label: '空の Node.js', desc: 'index.js だけ' },
+  'python-discord': { group: 'Discord', kind: 'python', command: 'python3 main.py', label: 'Discord bot (Python)', desc: '!ping に返事をする bot (discord.py)', env: ['DISCORD_TOKEN'] },
+  'python-discord-slash': { group: 'Discord', kind: 'python', command: 'python3 main.py', label: 'スラッシュコマンド (Python)', desc: '/ping /dice など。特別な権限が要らない', env: ['DISCORD_TOKEN'] },
+  'node-discord': { group: 'Discord', kind: 'node', command: 'node index.js', label: 'Discord bot (Node.js)', desc: '!ping に返事をする bot (discord.js)', env: ['DISCORD_TOKEN'] },
+  'node-discord-slash': { group: 'Discord', kind: 'node', command: 'node index.js', label: 'スラッシュコマンド (Node.js)', desc: '/ping /dice /say (discord.js)', env: ['DISCORD_TOKEN'] },
+  'python-telegram': { group: 'ほかのアプリ', kind: 'python', command: 'python3 main.py', label: 'Telegram bot', desc: '/start /dice とオウム返し (python-telegram-bot)', env: ['TELEGRAM_TOKEN'] },
+  'python-slack': { group: 'ほかのアプリ', kind: 'python', command: 'python3 main.py', label: 'Slack bot', desc: 'メンションに返事 (Bolt・公開 URL 不要)', env: ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'] },
+  'python-line': { group: 'ほかのアプリ', kind: 'python', command: 'python3 main.py', label: 'LINE bot', desc: 'オウム返し (Messaging API・Webhook)', env: ['LINE_CHANNEL_SECRET', 'LINE_CHANNEL_ACCESS_TOKEN'], web: true },
+  'node-twitch': { group: 'ほかのアプリ', kind: 'node', command: 'node index.js', label: 'Twitch のチャット bot', desc: '!hello !dice (tmi.js)', env: ['TWITCH_USERNAME', 'TWITCH_OAUTH', 'TWITCH_CHANNEL'] },
+  'python-web': { group: 'そのほか', kind: 'python', command: 'python3 main.py', label: 'Web サーバー・Webhook', desc: 'URL で受け取る bot の土台 (ライブラリなし)', web: true },
+  'bat-blank': { group: 'そのほか', kind: 'batch', command: 'start.bat', label: 'Windows のバッチ (.bat)', desc: 'start.bat から Python を起動する例' },
+  'python-blank': { group: 'そのほか', kind: 'python', command: 'python3 main.py', label: '空の Python', desc: 'main.py だけ' },
+  'node-blank': { group: 'そのほか', kind: 'node', command: 'node index.js', label: '空の Node.js', desc: 'index.js だけ' },
 };
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
   '.json': 'application/json', '.webmanifest': 'application/manifest+json',
 };
+// 画面で見られるようにするファイルの種類 (ダウンロード・プレビュー用)
+const FILE_TYPES = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.ico': 'image/x-icon',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/ogg', '.m4a': 'audio/mp4', '.flac': 'audio/flac',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.pdf': 'application/pdf',
+};
+const PORT_BASE = 30000;
+// 管理画面に出す「使える言語」
+const RUNTIME_CHECK = [['Python', 'python3'], ['Node.js', 'node'], ['TypeScript', 'tsx'], ['Java', 'java'], ['.NET', 'dotnet'],
+  ['Windows (.exe)', 'wine64'], ['Ruby', 'ruby'], ['PHP', 'php'], ['Lua', 'lua5.4'], ['Bun', 'bun'], ['ffmpeg', 'ffmpeg']]; // bot が待ち受ける番号 (環境変数 PORT) の始まり
 
 function createApp(config = {}) {
   const env = process.env;
@@ -40,6 +60,8 @@ function createApp(config = {}) {
     registration: config.registration || env.BOTHOST_REGISTRATION || 'first-only', // open | first-only
     maxBotsPerUser: Number(config.maxBotsPerUser || env.BOTHOST_MAX_BOTS || 5),
     maxDiskMB: Number(config.maxDiskMB || env.BOTHOST_MAX_DISK_MB || 500),
+    maxUploadMB: Number(config.maxUploadMB || env.BOTHOST_MAX_UPLOAD_MB || 100),
+    dockerImage: config.dockerImage || env.BOTHOST_DOCKER_IMAGE || null,
     secureCookie: config.secureCookie ?? env.BOTHOST_SECURE_COOKIE === '1',
     python: config.python || env.BOTHOST_PYTHON || 'python3',
     stopTimeoutMs: config.stopTimeoutMs,
@@ -65,14 +87,18 @@ function createApp(config = {}) {
   const dbFile = path.join(cfg.dataDir, 'db.json');
 
   const store = new Store(dbFile);
-  const backup = new Backup({ store, botsDir, ...cfg.backup });
+  const backup = new Backup({ store, botsDir, workDir: cfg.dataDir, ...cfg.backup });
   store.onSave = () => backup.markDirty();
   const runner = new Runner({
     botsDir, mode: cfg.mode, python: cfg.python, isolate: cfg.isolate,
     logsDir: path.join(cfg.dataDir, 'logs'), pidsFile: path.join(cfg.dataDir, 'pids.json'),
     stopTimeoutMs: cfg.stopTimeoutMs, statsIntervalMs: cfg.statsIntervalMs, crashLimit: cfg.crashLimit,
     initialBackoffMs: cfg.restartBackoffMs,
+    toolsDir: path.join(cfg.dataDir, 'tools'), dockerImage: cfg.dockerImage,
   });
+  const tmpDir = path.join(cfg.dataDir, 'tmp');
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
   const findBot = (id) => store.bots.find((b) => b.id === id);
   runner.getBot = findBot;
   // bot を別のユーザーで動かすには、データの場所まで、ほかのユーザーがたどれる必要がある
@@ -90,7 +116,7 @@ function createApp(config = {}) {
   }
   // bot を別のユーザーで動かすときは、サーバーのデータ (db.json・ログ・鍵) を bot から読めないようにする
   if (runner.isolate) {
-    for (const [p, mode] of [[cfg.dataDir, 0o711], [botsDir, 0o711], [path.join(cfg.dataDir, 'logs'), 0o700]]) {
+    for (const [p, mode] of [[cfg.dataDir, 0o711], [botsDir, 0o711], [path.join(cfg.dataDir, 'logs'), 0o700], [tmpDir, 0o700]]) {
       try { fs.chmodSync(p, mode); } catch { /* なくてもよい */ }
     }
     for (const f of ['db.json', 'db.json.bak', 'pids.json']) {
@@ -135,6 +161,11 @@ function createApp(config = {}) {
     const h = runner.history(id);
     sse(id, 'stats', { ...stats, point: h[h.length - 1] });
     toOwner(id, 'stats', stats);
+  });
+  // 起動したときの言語を覚えておく (一覧のアイコンなどに使う)
+  runner.on('launch', (id, { kind }) => {
+    const bot = findBot(id);
+    if (bot && kind && bot.runtime !== kind) { bot.runtime = kind; store.save(); }
   });
   runner.on('exit', (id, { manual }) => {
     const bot = findBot(id);
@@ -205,16 +236,43 @@ function createApp(config = {}) {
     || (store.settings.registrationOpen ?? cfg.registration === 'open');
 
   const publicUser = (u) => ({ id: u.id, username: u.username, admin: !!u.admin, createdAt: u.createdAt });
-  const maskEnv = (e) => Object.fromEntries(Object.keys(e || {}).map((k) => [k, true]));
+  // 環境変数の値は返さない (入っているかだけ)
+  const maskEnv = (e) => Object.fromEntries(Object.entries(e || {}).map(([k, v]) => [k, v !== '']));
   const publicBot = (b) => ({
     id: b.id, name: b.name, runtime: b.runtime, template: b.template,
-    startCommand: b.startCommand, autoRestart: b.autoRestart, keepRunning: b.desired === 'running',
+    startCommand: b.startCommand, commandMode: b.commandMode || 'manual', buildCommand: b.buildCommand || '',
+    timezone: b.timezone || '', port: b.port || null,
+    web: b.web && b.web.enabled ? { enabled: true, path: `/w/${b.web.slug}/` } : { enabled: false },
+    autoRestart: b.autoRestart, keepRunning: b.desired === 'running',
     memoryLimitMB: b.memoryLimitMB, cpuLimit: b.cpuLimit, restartEveryHours: b.restartEveryHours || 0,
     notify: !!b.notifyWebhook, discord: b.discord || null,
     crashCount: b.crashCount || 0, lastCrashAt: b.lastCrashAt || null,
     env: maskEnv(b.env), createdAt: b.createdAt, ownerId: b.ownerId,
     ...runner.info(b.id),
   });
+
+  // どう起動するか (画面に出す): 自動で見つけた方法・候補・動かせない理由
+  const launchInfo = (bot) => {
+    const plan = runner.plan(bot);
+    const found = launch.detect(runner.dir(bot.id));
+    return {
+      command: plan.command || null, auto: bot.commandMode === 'auto', kind: plan.kind || null,
+      label: launch.KINDS[plan.kind] ? launch.KINDS[plan.kind].label : null,
+      problem: plan.problem || null, note: plan.note || null, build: plan.build || null,
+      candidates: found.candidates,
+    };
+  };
+
+  // bot ごとに、待ち受ける番号 (PORT) を決める (ほかの bot と重ならないように)
+  const assignPort = (bot) => {
+    if (bot.port) return false;
+    const used = new Set(store.bots.filter((b) => b !== bot).map((b) => b.port).filter(Boolean));
+    let p = PORT_BASE + (parseInt(bot.id.slice(0, 4), 16) % 5000 || 0);
+    while (used.has(p) || p === Number(env.PORT || 3000)) p++;
+    bot.port = p;
+    return true;
+  };
+  const newSlug = () => crypto.randomBytes(12).toString('base64url');
 
   const ownedBot = (user, id) => {
     const bot = findBot(id);
@@ -229,10 +287,16 @@ function createApp(config = {}) {
   };
   const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
-  const checkDisk = () => {
-    const mb = files.dirSize(botsDir) / 1048576;
-    if (mb > cfg.maxDiskMB) fail(507, 'サーバーの保存容量がいっぱいです');
+  // 保存容量 (数えるのに時間がかかるので、15 秒は覚えておく。書いた分は足しておく)
+  const disk = { at: 0, mb: 0 };
+  const diskMB = () => {
+    if (Date.now() - disk.at > 15e3) { disk.mb = files.dirSize(botsDir) / 1048576; disk.at = Date.now(); }
+    return disk.mb;
   };
+  const checkDisk = () => {
+    if (diskMB() > cfg.maxDiskMB) fail(507, 'サーバーの保存容量がいっぱいです');
+  };
+  const addDisk = (bytes) => { disk.mb += bytes / 1048576; };
 
   // ----- ルート -----
   const routes = [];
@@ -259,8 +323,9 @@ function createApp(config = {}) {
     registrationOpen: registrationOpen(),
     firstUser: store.users.length === 0,
     templates: Object.entries(TEMPLATES).map(([id, t]) => ({ id, ...t })),
-    runtimes: Object.fromEntries(Object.entries(RUNTIMES).map(([k, v]) => [k, { defaultCommand: v.defaultCommand }])),
+    kinds: launch.KINDS,
     maxBotsPerUser: cfg.maxBotsPerUser,
+    maxUploadMB: cfg.maxUploadMB,
   }), { auth: false });
 
   route('POST', '/api/register', async ({ req, res, ip }) => {
@@ -325,7 +390,8 @@ function createApp(config = {}) {
     server: {
       version: VERSION, mode: cfg.mode, uptime: Math.round(process.uptime()),
       node: process.version, memoryMB: Math.round(process.memoryUsage().rss / 1048576),
-      diskMB: Math.round(files.dirSize(botsDir) / 1048576 * 10) / 10, maxDiskMB: cfg.maxDiskMB,
+      diskMB: Math.round(diskMB() * 10) / 10, maxDiskMB: cfg.maxDiskMB,
+      runtimes: RUNTIME_CHECK.map(([label, cmd]) => ({ label, ok: runner.hasCommand(cmd) })),
       bots: store.bots.length, running: [...runner.states.values()].filter((s) => s.status === 'running').length,
     },
   }), { admin: true });
@@ -365,13 +431,17 @@ function createApp(config = {}) {
       fail(403, `bot は 1 人 ${cfg.maxBotsPerUser} 個までです`);
     }
     const template = TEMPLATES[body.template] ? body.template : null;
-    const runtime = template ? TEMPLATES[template].runtime : (RUNTIMES[body.runtime] ? body.runtime : 'python');
+    const t = template ? TEMPLATES[template] : null;
     const bot = {
-      id: auth.newId(6), ownerId: user.id, name, runtime, template,
-      startCommand: RUNTIMES[runtime].defaultCommand,
-      env: {}, autoRestart: true, desired: 'stopped',
+      id: auth.newId(6), ownerId: user.id, name, runtime: t ? t.kind : 'python', template,
+      // 起動方法は、ファイルから自動で見つける (自分のファイルを入れたときもそのまま動くように)
+      startCommand: t ? t.command : 'python3 main.py', commandMode: 'auto',
+      env: Object.fromEntries((t && t.env ? t.env : []).map((k) => [k, ''])), autoRestart: true, desired: 'stopped',
       memoryLimitMB: 256, cpuLimit: 0.5, restartEveryHours: 0, createdAt: Date.now(),
+      timezone: /^[A-Za-z_]+\/[A-Za-z_]+$/.test(String(body.timezone || '')) ? body.timezone : null,
+      web: t && t.web ? { enabled: true, slug: newSlug() } : { enabled: false },
     };
+    assignPort(bot);
     files.copyTemplate(template && path.join(ROOT, 'templates', template), runner.dir(bot.id));
     runner.prepareDir(bot.id);
     store.bots.push(bot);
@@ -379,7 +449,10 @@ function createApp(config = {}) {
     return { bot: publicBot(bot) };
   });
 
-  route('GET', '/api/bots/:id', async ({ user, params }) => ({ bot: publicBot(ownedBot(user, params.id)) }));
+  route('GET', '/api/bots/:id', async ({ user, params }) => {
+    const bot = ownedBot(user, params.id);
+    return { bot: publicBot(bot), launch: launchInfo(bot) };
+  });
 
   route('PATCH', '/api/bots/:id', async ({ req, user, params }) => {
     const bot = ownedBot(user, params.id);
@@ -388,7 +461,27 @@ function createApp(config = {}) {
     if (body.startCommand !== undefined) {
       const c = String(body.startCommand).trim();
       if (!c || c.length > 300) fail(400, '起動コマンドは 1〜300 文字にしてください');
+      if (c !== bot.startCommand || body.commandMode === 'manual') bot.commandMode = 'manual';
       bot.startCommand = c;
+    }
+    if (body.commandMode === 'auto' || body.commandMode === 'manual') bot.commandMode = body.commandMode;
+    if (body.buildCommand !== undefined) {
+      const c = String(body.buildCommand || '').trim();
+      if (c.length > 300) fail(400, 'ビルドのコマンドは 300 文字までにしてください');
+      bot.buildCommand = c || null;
+    }
+    if (body.timezone !== undefined) {
+      const tz = String(body.timezone || '').trim();
+      if (tz) { try { new Intl.DateTimeFormat('en', { timeZone: tz }); } catch { fail(400, 'タイムゾーンが正しくありません (例: Asia/Tokyo)'); } }
+      bot.timezone = tz || null;
+    }
+    if (body.web && typeof body.web === 'object') {
+      if (body.web.enabled !== undefined) {
+        bot.web = { ...(bot.web || {}), enabled: !!body.web.enabled };
+        if (bot.web.enabled && !bot.web.slug) bot.web.slug = newSlug();
+      }
+      if (body.web.regenerate && bot.web && bot.web.enabled) bot.web.slug = newSlug();
+      assignPort(bot);
     }
     if (body.autoRestart !== undefined) bot.autoRestart = !!body.autoRestart;
     if (body.memoryLimitMB !== undefined) {
@@ -425,7 +518,7 @@ function createApp(config = {}) {
       if ('DISCORD_TOKEN' in body.env) bot.discord = null;
     }
     store.save();
-    return { bot: publicBot(bot) };
+    return { bot: publicBot(bot), launch: launchInfo(bot) };
   });
 
   const deleteBot = async (bot) => {
@@ -552,23 +645,49 @@ function createApp(config = {}) {
   // ----- ファイル -----
   route('GET', '/api/bots/:id/files', async ({ user, params }) => files.list(runner.dir(ownedBot(user, params.id).id)));
 
+  // 1 つのファイルを返す (?download=1 で保存。画像・音声などはそのまま表示できる種類で)
   route('GET', '/api/bots/:id/file', async ({ res, user, params, query }) => {
     const bot = ownedBot(user, params.id);
-    let buf;
-    try { buf = files.read(runner.dir(bot.id), query.get('path')); } catch (e) {
-      if (e.code === 'ENOENT') fail(404, 'ファイルがありません');
-      if (e.code === 'EISDIR') fail(400, 'フォルダーです');
-      throw e;
+    const full = files.resolveInside(runner.dir(bot.id), query.get('path') || '');
+    let st;
+    try { st = fs.statSync(full); } catch { fail(404, 'ファイルがありません'); }
+    if (st.isDirectory()) fail(400, 'フォルダーです');
+    const name = path.basename(full);
+    const type = query.get('download') === '1' ? 'application/octet-stream' : (FILE_TYPES[path.extname(name).toLowerCase()] || 'application/octet-stream');
+    res.writeHead(200, {
+      'Content-Type': type, 'Content-Length': st.size, 'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox",
+      ...(query.get('download') === '1' ? { 'Content-Disposition': `attachment; filename="${name.replace(/[^\w.-]+/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}` } : {}),
+    });
+    fs.createReadStream(full).pipe(res);
+    return undefined;
+  });
+
+  // ファイルの説明 (Windows の実行ファイル・.jar など) と、このファイルで起動するときのコマンド
+  route('GET', '/api/bots/:id/fileinfo', async ({ user, params, query }) => {
+    const bot = ownedBot(user, params.id);
+    const dir = runner.dir(bot.id);
+    const full = files.resolveInside(dir, query.get('path') || '');
+    if (!fs.existsSync(full)) fail(404, 'ファイルがありません');
+    const info = launch.describe(full);
+    const rel = path.relative(dir, full).split(path.sep).join('/');
+    let command = null;
+    if (info && info.runnable) {
+      const q = /\s/.test(rel) ? `"${rel}"` : rel;
+      command = /\.(py|pyw)$/i.test(rel) ? `python3 ${q}` : /\.(js|mjs|cjs)$/i.test(rel) ? `node ${q}` : /\.(ts|mts)$/i.test(rel) ? `tsx ${q}` : (info.kind === 'binary' && !rel.includes('/') ? `./${q}` : q);
+      if (/\.dll$/i.test(rel)) command = `dotnet ${q}`;
+      const r = launch.resolve(dir, command, { memoryMB: bot.memoryLimitMB });
+      if (r.problem) return { info, command: null, problem: r.problem };
     }
-    send(res, 200, buf, { 'Content-Type': 'application/octet-stream' });
+    return { info, command, size: fs.statSync(full).size };
   });
 
   route('PUT', '/api/bots/:id/file', async ({ req, user, params, query }) => {
     const bot = ownedBot(user, params.id);
     checkDisk();
-    const buf = await readBody(req, 10 * 1024 * 1024);
-    files.write(runner.dir(bot.id), query.get('path'), buf);
-    runner.adopt(bot.id, files.resolveInside(runner.dir(bot.id), query.get('path')));
+    const { full, size } = await files.writeStream(runner.dir(bot.id), query.get('path'), req, cfg.maxUploadMB * 1048576);
+    runner.adopt(bot.id, full);
+    addDisk(size);
     backup.markDirty();
     return { ok: true };
   });
@@ -576,6 +695,7 @@ function createApp(config = {}) {
   route('DELETE', '/api/bots/:id/file', async ({ user, params, query }) => {
     const bot = ownedBot(user, params.id);
     files.remove(runner.dir(bot.id), query.get('path'));
+    disk.at = 0;
     backup.markDirty();
     return { ok: true };
   });
@@ -589,29 +709,113 @@ function createApp(config = {}) {
     return { ok: true };
   });
 
+  // ZIP で保存 (1 ファイルずつ書きながら送る)
   route('GET', '/api/bots/:id/export', async ({ res, user, params }) => {
     const bot = ownedBot(user, params.id);
-    const buf = zip.createZip(files.collect(runner.dir(bot.id)));
     const safe = bot.name.replace(/[^\w.-]+/g, '_') || 'bot';
-    send(res, 200, buf, {
-      'Content-Type': 'application/zip',
+    res.writeHead(200, {
+      'Content-Type': 'application/zip', 'Cache-Control': 'no-store',
       'Content-Disposition': `attachment; filename="${safe}.zip"; filename*=UTF-8''${encodeURIComponent(bot.name)}.zip`,
     });
+    try { await zip.streamZip(res, files.collect(runner.dir(bot.id))); } catch { /* 途中で切れた */ }
+    res.end();
+    return undefined;
   });
 
+  // ZIP を読み込む (いったんディスクに置いて、1 つずつ取り出す)
   route('POST', '/api/bots/:id/import', async ({ req, user, params, query }) => {
     const bot = ownedBot(user, params.id);
     checkDisk();
-    const buf = await readBody(req, 30 * 1024 * 1024);
-    let entries;
-    try { entries = zip.readZip(buf, { maxTotal: 100 * 1024 * 1024 }); } catch (e) {
-      fail(400, e instanceof zip.ZipError ? e.message : 'ZIP を読めませんでした');
-    }
-    const count = files.importEntries(runner.dir(bot.id), entries, { replace: query.get('replace') === '1' });
+    const tmp = path.join(tmpDir, `import-${bot.id}-${Date.now()}.zip`);
+    let count;
+    try {
+      await files.writeStream(tmpDir, path.basename(tmp), req, cfg.maxUploadMB * 1048576);
+      let z;
+      try { z = zip.openZip(tmp, { maxTotal: Math.max(300, cfg.maxUploadMB * 3) * 1048576 }); } catch (e) {
+        fail(400, e instanceof zip.ZipError ? e.message : 'ZIP を読めませんでした');
+      }
+      try {
+        count = files.importEntries(runner.dir(bot.id), z.entries, { replace: query.get('replace') === '1' });
+      } catch (e) {
+        if (e instanceof zip.ZipError) fail(400, e.message);
+        throw e;
+      } finally { z.close(); }
+    } finally { fs.rmSync(tmp, { force: true }); }
     runner.prepareDir(bot.id);
+    disk.at = 0;
     backup.markDirty();
-    return { count };
+    return { count, launch: launchInfo(bot) };
   });
+
+  // Web 公開: https://(このサイト)/w/(秘密の文字)/… を、bot が待ち受けている番号 (PORT) に渡す
+  // LINE などの Webhook や、bot の「動いています」ページに使う
+  const webBot = (slug) => store.bots.find((b) => b.web && b.web.enabled && b.web.slug === slug && b.port);
+  const stripSession = (cookie) => (cookie || '').split(/;\s*/).filter((c) => c && !c.startsWith('bothost_session=')).join('; ');
+  const proxyWeb = (req, res, url) => {
+    const m = url.pathname.match(/^\/w\/([A-Za-z0-9_-]{8,64})(\/.*)?$/);
+    const bot = m && webBot(m[1]);
+    if (!bot) return send(res, 404, 'Not Found');
+    if (!m[2]) { res.writeHead(308, { Location: `/w/${m[1]}/${url.search}` }); return res.end(); }
+    const headers = { ...req.headers };
+    // 1 つの接続の中だけで使うヘッダーは渡さない
+    for (const k of ['host', 'connection', 'keep-alive', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'upgrade']) delete headers[k];
+    const cookie = stripSession(headers.cookie);
+    if (cookie) headers.cookie = cookie; else delete headers.cookie;
+    const fwdFor = (cfg.trustProxy && req.headers['x-forwarded-for']) || req.socket.remoteAddress || '';
+    headers['x-forwarded-for'] = fwdFor;
+    headers['x-forwarded-host'] = req.headers['x-forwarded-host'] || req.headers.host || '';
+    headers['x-forwarded-proto'] = (cfg.trustProxy && req.headers['x-forwarded-proto']) || (cfg.secureCookie ? 'https' : 'http');
+    headers['x-forwarded-prefix'] = `/w/${m[1]}`;
+    headers.host = `127.0.0.1:${bot.port}`;
+    const preq = http.request({ host: '127.0.0.1', port: bot.port, method: req.method, path: m[2] + url.search, headers, timeout: 120e3 }, (pres) => {
+      const h = { ...pres.headers };
+      // bot から BotHost のログインを書き換えられないように
+      if (h['set-cookie']) h['set-cookie'] = [].concat(h['set-cookie']).filter((c) => !/^\s*bothost_session=/i.test(c));
+      // サイト全体の cookie を消す・別の場所へ動かす、などはさせない
+      for (const k of ['clear-site-data', 'connection', 'keep-alive', 'transfer-encoding', 'service-worker-allowed']) delete h[k];
+      // bot のページは「別のサイト」として扱う (BotHost の画面やログインには触れられない)
+      h['content-security-policy'] = 'sandbox allow-scripts allow-forms allow-popups allow-downloads';
+      res.writeHead(pres.statusCode || 502, h);
+      pres.pipe(res);
+    });
+    preq.on('timeout', () => preq.destroy(new Error('timeout')));
+    preq.on('error', (e) => {
+      if (res.headersSent) { res.destroy(); return; }
+      const running = runner.state(bot.id).status === 'running';
+      send(res, 502, running
+        ? `bot が ${bot.port} 番で待ち受けていません。bot のプログラムを、環境変数 PORT の番号で待ち受けるようにしてください。(${e.code || e.message})`
+        : 'bot が動いていません。BotHost で起動してください。');
+    });
+    req.pipe(preq);
+    return undefined;
+  };
+  const proxyUpgrade = (req, socket, head) => {
+    const m = String(req.url || '').match(/^\/w\/([A-Za-z0-9_-]{8,64})(\/[^?]*)?(\?.*)?$/);
+    const bot = m && webBot(m[1]);
+    if (!bot) { socket.destroy(); return; }
+    const up = net.connect(bot.port, '127.0.0.1', () => {
+      const lines = [`${req.method} ${(m[2] || '/') + (m[3] || '')} HTTP/1.1`];
+      for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        const k = req.rawHeaders[i];
+        let v = req.rawHeaders[i + 1];
+        if (/^host$/i.test(k)) v = `127.0.0.1:${bot.port}`;
+        if (/^cookie$/i.test(k)) { v = stripSession(v); if (!v) continue; }
+        lines.push(`${k}: ${v}`);
+      }
+      up.write(lines.join('\r\n') + '\r\n\r\n');
+      if (head && head.length) up.write(head);
+      up.pipe(socket);
+      socket.pipe(up);
+    });
+    // 片方が切れたら、もう片方も切る (つなぎっぱなしで残らないように)
+    up.on('error', () => socket.destroy());
+    socket.on('error', () => up.destroy());
+    up.on('close', () => socket.destroy());
+    socket.on('close', () => up.destroy());
+    upgraded.add(socket);
+    socket.on('close', () => upgraded.delete(socket));
+  };
+  const upgraded = new Set();
 
   // ----- 画面 (public/ の静的ファイル。メモリに置いて gzip と ETag で返す) -----
   const staticCache = new Map();
@@ -645,7 +849,7 @@ function createApp(config = {}) {
       Vary: 'Accept-Encoding',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'same-origin',
-      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.discordapp.com; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.discordapp.com; media-src 'self' blob:; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     };
     if (req.headers['if-none-match'] === f.etag) { res.writeHead(304, headers); return res.end(); }
     const gzip = f.gz && /\bgzip\b/.test(req.headers['accept-encoding'] || '');
@@ -666,6 +870,7 @@ function createApp(config = {}) {
     try { url = new URL(req.url, 'http://localhost'); } catch { return send(res, 400, 'Bad Request'); }
     // リバースプロキシ (Render など) の後ろでは、本当の IP は X-Forwarded-For に入っています
     const ip = (cfg.trustProxy && (req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '';
+    if (url.pathname.startsWith('/w/')) return proxyWeb(req, res, url);
     if (!url.pathname.startsWith('/api/')) {
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
       return serveStatic(req, res, url.pathname);
@@ -691,7 +896,7 @@ function createApp(config = {}) {
       }
       fail(404, 'API が見つかりません');
     } catch (e) {
-      const status = e instanceof HttpError ? e.status : e instanceof files.PathError ? 400 : 500;
+      const status = e instanceof HttpError ? e.status : e instanceof files.PathError ? (e.status || 400) : 500;
       if (status === 500) console.error(e);
       if (!res.headersSent) send(res, status, { error: status === 500 ? 'サーバーでエラーが起きました' : e.message });
       else res.end();
@@ -699,6 +904,7 @@ function createApp(config = {}) {
   };
 
   const server = http.createServer((req, res) => { handler(req, res); });
+  server.on('upgrade', proxyUpgrade);
   server.keepAliveTimeout = 65e3; // リバースプロキシ (Render など) より長く
   server.headersTimeout = 70e3;
   server.requestTimeout = 5 * 60e3;
@@ -758,6 +964,10 @@ function createApp(config = {}) {
   // 動かしていた bot をまた動かす。一度に動かすとメモリと CPU が足りなくなるので、少しずつずらす
   const resume = () => {
     auth.pruneSessions(store);
+    // 前の版で作った bot にも、待ち受ける番号 (PORT) を決める
+    let changed = false;
+    for (const b of store.bots) if (assignPort(b)) changed = true;
+    if (changed) store.save();
     const list = store.bots.filter((b) => b.desired === 'running' && !runner.isActive(b.id));
     list.forEach((bot, i) => {
       const t = setTimeout(() => {
@@ -779,6 +989,7 @@ function createApp(config = {}) {
       await Promise.race([backup.run().catch(() => {}), new Promise((r) => setTimeout(r, 20e3))]);
     }
     for (const set of [...listeners.values(), ...userStreams.values()]) for (const res of set) res.end();
+    for (const sock of upgraded) sock.destroy();
     await new Promise((r) => server.close(() => r()));
   };
 

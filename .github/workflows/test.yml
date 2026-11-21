@@ -102,6 +102,13 @@ jobs:
           docker start bh
           node bothost/test/smoke.js http://localhost:3000 --resume
 
+      - name: いろいろな種類の bot を本当に動かす (.bat・Windows の .exe・.jar・.NET・TypeScript・Ruby・PHP・Lua・シェル・Web 公開・Bun・ffmpeg)
+        run: |
+          docker run -d --name bh3 -p 3002:3000 -e BOTHOST_SECURE_COOKIE=0 bothost
+          for i in $(seq 1 30); do curl -sf localhost:3002/api/health >/dev/null && break; sleep 1; done
+          node bothost/test/smoke-runtimes.js http://localhost:3002 --net
+          docker stats --no-stream bh3
+
       - name: 空のサーバーが、本物の GitHub のバックアップから戻る
         env:
           GH_TOKEN: ${{ github.token }}
@@ -117,5 +124,6 @@ jobs:
       - name: コンテナのログ
         if: always()
         run: |
+          echo '--- bh3'; docker logs bh3 2>&1 | tail -n 20 || true
           echo '--- bh'; docker logs bh 2>&1 | tail -n 40 || true
           echo '--- bh2'; docker logs bh2 2>&1 | tail -n 40 || true

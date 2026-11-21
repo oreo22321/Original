@@ -43,6 +43,22 @@ Safari の共有ボタン →「ホーム画面に追加」で、アプリのよ
 
 ## できること
 
+**いろいろなファイル・いろいろな bot (4.0)**
+- **ファイルを入れるだけで動く**: 起動方法をファイルから自動で見つけます (Procfile・.replit・package.json・start.bat・main.py・.exe・.jar など)。候補から選んだり、自分で決めたりもできます
+- 動かせるもの:
+  - **Python**・**Node.js**・**TypeScript** (tsx)・**Bun**
+  - **Java** (.jar)・**.NET** (C# の .dll。Windows 用にビルドした .exe も .NET で直接)
+  - **Windows の .exe** (Wine・64 ビット)・**Windows のバッチ** (.bat / .cmd)
+  - **シェル** (.sh)・**Ruby**・**PHP**・**Lua**・**Perl**・**Linux 用の実行ファイル** (Go・Rust などでビルドしたもの)
+- **.bat は小さな cmd で動かします**: echo・set (/a /p)・if・for (/l /f)・goto・call・setlocal・timeout・ping で待つ書き方・start・pause など。`py -3`・`python`・`pip`・`venv\Scripts\python.exe` も、このサーバーのものに置き換えます。Shift_JIS で保存したファイルも読めます
+- ライブラリを自動で入れる: requirements.txt・pyproject.toml・package.json (npm / yarn / pnpm / bun)・Gemfile・composer.json。TypeScript などのビルド (`npm run build`) も、ファイルが変わったときだけ
+- **音楽 bot**: ffmpeg を使いそうな bot には、起動の前に ffmpeg を自動で入れます (libopus も入っています)
+- **Web 公開 (Webhook)**: bot が環境変数 `PORT` で待ち受けると、`https://(サイト)/w/(秘密の文字)/` で開けます。LINE bot の Webhook や「keep alive」のページに。bot のページは別のサイトとして扱うので、BotHost のログインには触れません (WebSocket も通ります)
+- テンプレートを追加: Discord (Python / Node.js、スラッシュコマンド)・**Telegram**・**Slack**・**LINE**・**Twitch**・Web サーバー・Windows のバッチ
+- ファイル: 画像・音声・動画のプレビュー、.exe・.jar などの説明と「このファイルで起動」、1 ファイルのダウンロード、**100 MB までのファイル** (ストリームで送るのでメモリを使いすぎない)、日本語の Windows の ZIP (Shift_JIS の名前)、Windows の改行 (CRLF) をそのまま保存、20 くらいの言語の色分け
+- **大きなファイルもバックアップ**: 256 KB 以上のファイルは別に暗号化して置き、変わっていなければ送り直しません (前は 5 MB を超えるファイルが入っていませんでした)
+- bot ごとのタイムゾーン (例: 日本時間)
+
 **24 時間稼働・安全 (3.0)**
 - **サイトを閉じても止まりません**: bot はサーバーで動き続けます。Render の無料プランでも、数分ごとに自分にアクセスして眠らないようにします (bot がいないときも)。状態はダッシュボードと管理画面に出ます
 - **bot ごとに別のユーザーで動かす**: サーバーが root のとき (Docker・Render)、bot はそれぞれ別のユーザーで動き、サーバーの秘密 (環境変数・鍵)・データ・ほかの bot のファイルを読めません
@@ -125,6 +141,8 @@ docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless
 | `BOTHOST_KEEP_AWAKE_MINUTES` | `5` | 眠らせないためにアクセスする間隔 (1〜14 分) |
 | `BOTHOST_SECRET_KEY` | なし | バックアップを暗号化する鍵 (どんな文字列でも)。**なくすとバックアップを読めません** |
 | `BOTHOST_ISOLATE` | root なら自動 | `0` にすると、bot をユーザーごとに分けない |
+| `BOTHOST_MAX_UPLOAD_MB` | `100` | 1 つのファイル・ZIP の大きさの上限 |
+| `BOTHOST_DOCKER_IMAGE` | なし | docker モードで、どの bot にも使うイメージ (.exe・.bat も動かすなら BotHost のイメージを指定) |
 
 ## GitHub にバックアップ
 
@@ -135,7 +153,8 @@ docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless
 
 どちらでも:
 
-- 変更があれば **1 分ごと**、**最初のアカウントを作ったとき**、**サーバーを止めるとき** に、アカウント・bot の設定・bot のファイルを 1 つのファイル (gzip した JSON) にして GitHub に保存します。ライブラリのフォルダー (`.deps`・`node_modules`) とログは入れません。
+- 変更があれば **数秒後**、**最初のアカウントを作ったとき**、**サーバーを止めるとき** に、アカウント・bot の設定・bot のファイルを 1 つのファイル (gzip した JSON) にして GitHub に保存します。ライブラリのフォルダー (`.deps`・`node_modules`・`.wine` など) とログは入れません。
+- デプロイキーのときは、256 KB 以上のファイルを `blobs/` に分けて置きます (95 MB まで)。中身が同じなら同じものになるので、変わったファイルだけが送られます。トークンのときは 1 つのファイルに入れます (1 ファイル 20 MB まで)。
 - 起動したときに **データがなければ** (新しいサーバー・ファイルが消えた) GitHub から戻します。データがあるときは上書きしません。
 - 起動のときに GitHub から **戻せなかった** (ネットワークなど) ときは、何度か試し、それでもだめなら **古いバックアップを空のデータで上書きしないように保存を止めます**。管理画面の「今すぐバックアップ」で再開できます。
 - 状態は管理画面と `/api/health` (`backup.ok`) で見られます。
@@ -153,7 +172,10 @@ docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless
 cd bothost
 npm test                                   # Docker が使えれば docker モード、root ならユーザーの分離も確かめます
 node test/smoke.js http://localhost:3000   # 動いているサーバーを外から一通り触る (--net で PyPI・npm・Discord も)
+node test/smoke-runtimes.js http://localhost:3000   # .bat・.exe・.jar・.NET・TypeScript・Ruby・PHP・Lua・シェル・Web 公開を本当に動かす (--net で Bun・ffmpeg も)
 ```
+
+- `test/v4.test.js`: 起動方法の見つけ方 (Procfile・.replit・package.json・start.bat・.exe・fat jar など)、本物の Windows の .exe (64 / 32 ビット)・.jar・.NET の見分け方、小さな cmd (if・for・goto・call・set /a /p・遅延展開・パイプ・Shift_JIS・仮想環境の書き方)、日本語の名前の ZIP、大きなファイルのアップロードとダウンロード、Web 公開 (cookie を渡さない・別のサイト扱い・WebSocket)、テンプレート
 
 - `test/server.test.js` `test/features.test.js`: 実際にサーバーを立てて、登録と管理者、ほかの人の bot が見えないこと、フォルダーの外への拒否、起動 → ログ → 標準入力 → 停止、自動の再起動とあきらめ、Discord のトークン確認と招待リンク (偽物の Discord で)、落ちたときの通知、ZIP、GitHub へのバックアップと復元 (偽物の GitHub で)、ログの保存と間引き、取り残されたプロセスの片付けなど
 - `test/docker.test.js`: docker モードで、bot がコンテナで動くこと・フォルダーの外が見えないこと・システムのファイルが書けないこと・メモリの上限で止まること・残ったコンテナの片付け
@@ -167,6 +189,9 @@ bothost/
 ├── server.js          HTTP サーバー・API・リアルタイム配信 (Server-Sent Events)
 ├── lib/
 │   ├── runner.js      bot のプロセス管理 (インストール・起動・停止・自動再起動・ログ・使用量)
+│   ├── launch.js      起動方法 (ファイルから自動で見つける・.exe / .jar / .bat などを動かすコマンドに)
+│   ├── cmd.js         Windows のバッチ (.bat) を動かす小さな cmd
+│   ├── tools.js       使うときだけ入れる道具 (ffmpeg・Bun。ハッシュを確かめる)
 │   ├── files.js       bot のファイル操作 (フォルダーの外に出ない)
 │   ├── zip.js         ZIP の読み書き
 │   ├── backup.js      GitHub へのバックアップと復元
@@ -189,14 +214,16 @@ bothost/
 | POST | `/api/register` `/api/login` `/api/logout` | アカウント |
 | GET | `/api/bots` | 自分の bot の一覧 |
 | POST | `/api/bots` | 作る (`{ name, template }`) |
-| GET / PATCH / DELETE | `/api/bots/:id` | 見る / 設定を変える (`name` `startCommand` `autoRestart` `memoryLimitMB` `cpuLimit` `restartEveryHours` `notifyWebhook` `env`) / 削除 |
+| GET / PATCH / DELETE | `/api/bots/:id` | 見る (起動方法 `launch` つき) / 設定を変える (`name` `startCommand` `commandMode` (`auto` / `manual`) `buildCommand` `timezone` `web` (`{ enabled, regenerate }`) `autoRestart` `memoryLimitMB` `cpuLimit` `restartEveryHours` `notifyWebhook` `env`) / 削除 |
 | POST | `/api/bots/:id/start` `stop` `restart` `reinstall` | 起動・停止・再起動・ライブラリの入れ直し |
 | POST | `/api/bots/:id/stdin` | 標準入力に送る (`{ text }`) |
 | GET | `/api/bots/:id/events` | ログ・状態・使用量のリアルタイム配信 (SSE) |
 | GET / DELETE | `/api/bots/:id/logs.txt` `/api/bots/:id/logs` | ログのダウンロード / 消去 |
 | POST | `/api/bots/:id/discord-check` `notify-test` | トークンの確認 / テスト通知 |
 | GET | `/api/bots/:id/files` | ファイルの一覧 |
-| GET / PUT / DELETE | `/api/bots/:id/file?path=` | ファイルを読む / 書く (本文がそのまま中身) / 消す |
+| GET / PUT / DELETE | `/api/bots/:id/file?path=` | ファイルを読む (`&download=1` で保存) / 書く (本文がそのまま中身) / 消す |
+| GET | `/api/bots/:id/fileinfo?path=` | ファイルの説明 (Windows の .exe など) と、そのファイルで起動するときのコマンド |
+| * | `/w/(秘密の文字)/…` | Web 公開: bot が `PORT` で待ち受けているものに渡す (ログイン不要) |
 | POST | `/api/bots/:id/rename` | 名前を変える (`{ from, to }`) |
 | GET / POST | `/api/bots/:id/export` `/api/bots/:id/import?replace=1` | ZIP で書き出す / 読み込む |
 | GET / PATCH / DELETE / POST | `/api/admin` `/api/admin/settings` `/api/admin/users/:id` `/api/admin/backup` | 管理者 |
