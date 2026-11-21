@@ -1,0 +1,8 @@
+{
+  "name": "my-discord-bot",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "discord.js": "^14.16.0"
+  }
+}

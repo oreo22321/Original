@@ -34,6 +34,10 @@ jobs:
       - name: ユニットテスト
         run: node tests/run-all.mjs
 
+      - name: BotHost のテスト
+        working-directory: bothost
+        run: npm test
+
       - name: 配信用のファイルが最新か (node tools/build.mjs を実行してコミットしてください)
         run: |
           node tools/build.mjs
