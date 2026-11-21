@@ -43,6 +43,15 @@ Safari の共有ボタン →「ホーム画面に追加」で、アプリのよ
 
 ## できること
 
+**24 時間稼働・安全 (3.0)**
+- **サイトを閉じても止まりません**: bot はサーバーで動き続けます。Render の無料プランでも、数分ごとに自分にアクセスして眠らないようにします (bot がいないときも)。状態はダッシュボードと管理画面に出ます
+- **bot ごとに別のユーザーで動かす**: サーバーが root のとき (Docker・Render)、bot はそれぞれ別のユーザーで動き、サーバーの秘密 (環境変数・鍵)・データ・ほかの bot のファイルを読めません
+- **バックアップを暗号化** (AES-256-GCM, `BOTHOST_SECRET_KEY`): GitHub に置くファイルは鍵がないと読めません。古い暗号化なしのバックアップも読めます
+- **ログインの情報はハッシュで保存**: データやバックアップが漏れても、ログインには使えません。パスワードを変えるとほかの端末は切れます。同じユーザー名への総当たりも止めます
+- **ライブラリのインストールが速い**: Python は uv (pip の約 5 倍速い)、Node.js は package-lock.json があれば npm ci
+- サーバーが起動したら、bot を少しずつずらして起動 (メモリ不足を防ぐ)。変更は数秒後にバックアップ
+- 画面: ダッシュボード (稼働状況・24 時間稼働・バックアップ)、一覧から起動/停止、サイドバー (PC)・下のタブ (スマホ)、ライト/ダーク、ホーム画面に追加できるアイコン
+
 **bot**
 - テンプレートから作る: Discord bot (Python / discord.py)・**スラッシュコマンド** (Python)・Discord bot (Node.js / discord.js)・空の Python・空の Node.js
 - **ZIP で読み込み・書き出し** (自分のコードをまとめて入れる / バックアップ)。ファイルのドラッグ & ドロップも
@@ -113,6 +122,9 @@ docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless
 | `BOTHOST_BACKUP_FILE` | `bothost-backup.json.gz` | バックアップのファイル名 |
 | `BOTHOST_KEEP_AWAKE_URL` | `RENDER_EXTERNAL_URL` | bot を動かしている間、10 分ごとにアクセスする自分の URL |
 | `BOTHOST_KEEP_AWAKE` | なし | `0` にすると上をオフ |
+| `BOTHOST_KEEP_AWAKE_MINUTES` | `5` | 眠らせないためにアクセスする間隔 (1〜14 分) |
+| `BOTHOST_SECRET_KEY` | なし | バックアップを暗号化する鍵 (どんな文字列でも)。**なくすとバックアップを読めません** |
+| `BOTHOST_ISOLATE` | root なら自動 | `0` にすると、bot をユーザーごとに分けない |
 
 ## GitHub にバックアップ
 
@@ -139,7 +151,7 @@ docker run -d --name bothost -p 3000:3000 -v bothost-data:/data --restart unless
 
 ```sh
 cd bothost
-npm test                                   # 42 項目 (Docker が使えれば docker モードも)
+npm test                                   # Docker が使えれば docker モード、root ならユーザーの分離も確かめます
 node test/smoke.js http://localhost:3000   # 動いているサーバーを外から一通り触る (--net で PyPI・npm・Discord も)
 ```
 

@@ -38,7 +38,7 @@ class Store {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const tmp = this.file + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(this.data), { mode: 0o600 });
-    try { fs.copyFileSync(this.file, this.file + '.bak'); } catch { /* 初回 */ }
+    try { fs.copyFileSync(this.file, this.file + '.bak'); fs.chmodSync(this.file + '.bak', 0o600); } catch { /* 初回 */ }
     fs.renameSync(tmp, this.file);
   }
 

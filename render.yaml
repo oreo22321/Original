@@ -22,3 +22,6 @@ services:
       # 代わりに BOTHOST_BACKUP_TOKEN (Fine-grained token・Contents: Read and write) でもよい
       - key: BOTHOST_BACKUP_SSH_KEY
         sync: false
+      # バックアップを暗号化する鍵 (なくすとバックアップを読めなくなります)
+      - key: BOTHOST_SECRET_KEY
+        generateValue: true

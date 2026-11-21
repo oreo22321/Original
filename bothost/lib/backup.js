@@ -15,6 +15,7 @@ const path = require('path');
 const zlib = require('zlib');
 const { execFile } = require('child_process');
 const { HIDDEN_DIRS } = require('./files');
+const secret = require('./secret');
 
 const MAX_FILE = 5 * 1024 * 1024;
 // GitHub の SSH のホスト鍵 (起動のときに https://api.github.com/meta から取り直します。取れないときの予備)
@@ -52,8 +53,12 @@ class Backup {
     this.gitUrl = opts.gitUrl || ''; // テスト用 (file:// など)
     this.branch = opts.branch || '';
     this.file = opts.file || 'bothost-backup.json.gz';
+    this.key = secret.deriveKey(opts.secretKey); // あれば、バックアップを暗号化して置く
     this.api = (opts.api || 'https://api.github.com').replace(/\/$/, '');
     this.intervalMs = opts.intervalMs || 60e3;
+    this.debounceMs = opts.debounceMs ?? 5000;
+    this.minGapMs = opts.minGapMs ?? 15000;
+    this.soon = null;
     this.dirty = false;
     this.blocked = null; // 起動のときに戻せなかったら、上書きしないようにバックアップを止める
     this.running = null;
@@ -73,11 +78,22 @@ class Backup {
   info() {
     return {
       enabled: this.enabled, method: this.enabled ? this.method : null, repo: this.enabled ? this.repo || null : null,
+      encrypted: !!this.key,
       dirty: this.dirty, blocked: this.blocked, ...this.status,
     };
   }
 
-  markDirty() { this.dirty = true; }
+  // 変更があったら、少し待ってからすぐに保存する (続けて変わるときはまとめる。最短でも 15 秒あける)
+  markDirty() {
+    this.dirty = true;
+    if (!this.enabled || !this.timer || this.soon || this.blocked) return;
+    const wait = Math.max(this.debounceMs, this.minGapMs - (Date.now() - (this.status.lastAt || 0)));
+    this.soon = setTimeout(() => {
+      this.soon = null;
+      if (this.dirty && !this.blocked) this.run().catch(() => {});
+    }, wait);
+    this.soon.unref();
+  }
 
   start() {
     if (!this.enabled || this.timer) return;
@@ -88,7 +104,7 @@ class Backup {
     this.timer.unref();
   }
 
-  stop() { clearInterval(this.timer); this.timer = null; }
+  stop() { clearInterval(this.timer); this.timer = null; clearTimeout(this.soon); this.soon = null; }
 
   // ----- git (SSH の鍵) -----
   async sshEnv() {
@@ -251,7 +267,8 @@ class Backup {
       bots[bot.id] = files;
     }
     const json = JSON.stringify({ version: 1, createdAt: Date.now(), db: this.store.data, bots });
-    return zlib.gzipSync(json, { level: 9 });
+    const gz = zlib.gzipSync(json, { level: 9 });
+    return this.key ? secret.encrypt(this.key, gz) : gz;
   }
 
   // 繋がるか確かめる (起動のときにログに出す)
@@ -338,7 +355,8 @@ class Backup {
     return true;
   }
 
-  apply(gz) {
+  apply(buf) {
+    const gz = secret.isEncrypted(buf) ? secret.decrypt(this.key, buf) : buf;
     const data = JSON.parse(zlib.gunzipSync(gz).toString('utf8'));
     if (data.version !== 1 || !data.db) throw new Error('バックアップの形式が違います');
     for (const [id, files] of Object.entries(data.bots || {})) {

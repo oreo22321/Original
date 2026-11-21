@@ -13,7 +13,25 @@ const RUNTIMES = {
   node: { defaultCommand: 'node index.js', image: 'node:22-slim' },
 };
 
-const PASS_ENV = /^(https?_proxy|no_proxy|all_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|PIP_[A-Z_]+|npm_config_[a-z_]+)$/i;
+const PASS_ENV = /^(https?_proxy|no_proxy|all_proxy|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|PIP_[A-Z_]+|UV_[A-Z_]+|npm_config_[a-z_]+)$/i;
+
+// bot ごとのユーザー番号 (サーバーが root のとき、bot を別のユーザーで動かす)
+function botUid(id) { return 20000 + (parseInt(String(id).slice(0, 6), 16) % 30000 || 0); }
+
+// フォルダーの中を、まとめて持ち主を変える (もう合っているものは飛ばす)
+function chownTree(root, uid, gid) {
+  const walk = (p) => {
+    let st;
+    try { st = fs.lstatSync(p); } catch { return; }
+    if (st.uid !== uid || st.gid !== gid) { try { fs.lchownSync(p, uid, gid); } catch { /* 消えた */ } }
+    if (st.isDirectory()) {
+      let names;
+      try { names = fs.readdirSync(p); } catch { return; }
+      for (const n of names) walk(path.join(p, n));
+    }
+  };
+  walk(root);
+}
 
 const LOG_FILE_MAX = 1024 * 1024; // これを超えたら .1 に回す
 const HISTORY_MAX = 120; // メモリ・CPU の記録 (グラフ用)
@@ -64,6 +82,10 @@ class Runner extends EventEmitter {
     this.maxLogLines = opts.maxLogLines || 1000;
     this.maxLinesPerSec = opts.maxLinesPerSec || 200;
     this.python = opts.python || 'python3';
+    // サーバーが root なら、bot は bot ごとの別のユーザーで動かす
+    // (サーバーの秘密・データ・ほかの bot のファイルを読めないように)
+    this.isolate = opts.isolate ?? (typeof process.getuid === 'function' && process.getuid() === 0);
+    this.uv = null; // uv (速い pip) が使えるか。最初のインストールのときに調べる
     this.stopTimeoutMs = opts.stopTimeoutMs || 5000;
     this.crashLimit = opts.crashLimit || 5;
     this.initialBackoff = opts.initialBackoffMs || 2000;
@@ -167,7 +189,37 @@ class Runner extends EventEmitter {
     }
   }
 
-  sys(id, text) { this.log(id, 'sys', text); }
+  sys(id, text) { this.flushPartial(id); this.log(id, 'sys', text); }
+
+  // プロセスの出力は好きな所で区切られて届くので、改行が来るまで行をためる
+  // (改行のない出力 (input("名前: ") など) は、少し待ってから出す)
+  chunk(id, stream, data) {
+    const s = this.state(id);
+    if (!s.partial) s.partial = { out: '', err: '', timer: null };
+    const text = s.partial[stream] + data;
+    const cut = text.lastIndexOf('\n');
+    if (cut >= 0) {
+      s.partial[stream] = text.slice(cut + 1);
+      this.log(id, stream, text.slice(0, cut + 1));
+    } else {
+      s.partial[stream] = text;
+    }
+    if (s.partial[stream].length > 8192) { this.log(id, stream, s.partial[stream]); s.partial[stream] = ''; }
+    clearTimeout(s.partial.timer);
+    if (s.partial.out || s.partial.err) {
+      s.partial.timer = setTimeout(() => this.flushPartial(id), 150);
+      s.partial.timer.unref();
+    }
+  }
+
+  flushPartial(id) {
+    const s = this.states.get(id);
+    if (!s || !s.partial) return;
+    clearTimeout(s.partial.timer);
+    for (const stream of ['out', 'err']) {
+      if (s.partial[stream]) { const t = s.partial[stream]; s.partial[stream] = ''; this.log(id, stream, t); }
+    }
+  }
 
   flushLogs() {
     for (const [id, s] of this.states) {
@@ -220,7 +272,7 @@ class Runner extends EventEmitter {
   // ----- 取り残されたプロセスの後片付け (サーバーが突然落ちたとき) -----
   savePids() {
     if (!this.pidsFile) return;
-    try { fs.writeFileSync(this.pidsFile, JSON.stringify(this.pids)); } catch { /* 次の機会に */ }
+    try { fs.writeFileSync(this.pidsFile, JSON.stringify(this.pids), { mode: 0o600 }); } catch { /* 次の機会に */ }
   }
 
   cleanupOrphans() {
@@ -259,6 +311,7 @@ class Runner extends EventEmitter {
     const token = ++s.runToken;
     const dir = this.dir(bot.id);
     fs.mkdirSync(dir, { recursive: true });
+    this.prepareDir(bot.id);
 
     const rt = RUNTIMES[bot.runtime] || RUNTIMES.python;
     const argv = splitCommand(bot.startCommand || rt.defaultCommand);
@@ -295,8 +348,8 @@ class Runner extends EventEmitter {
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (d) => this.log(bot.id, 'out', d));
-    child.stderr.on('data', (d) => this.log(bot.id, 'err', d));
+    child.stdout.on('data', (d) => this.chunk(bot.id, 'out', d));
+    child.stderr.on('data', (d) => this.chunk(bot.id, 'err', d));
     child.stdin.on('error', () => { /* 終わった後に書いた */ });
     child.on('error', (e) => {
       this.sys(bot.id, e.code === 'ENOENT'
@@ -318,22 +371,27 @@ class Runner extends EventEmitter {
       const empty = !fs.readFileSync(path.join(dir, 'requirements.txt'), 'utf8').replace(/#.*$/gm, '').trim();
       if (!empty && !unchanged(marker, hash)) {
         const py = this.mode === 'docker' ? 'python3' : this.python;
+        const pip = [py, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--upgrade',
+          '--progress-bar', 'off', '--target', '.deps', '-r', 'requirements.txt'];
+        const useUv = this.mode !== 'docker' && this.hasUv(bot.id);
         steps.push({
-          label: 'requirements.txt のライブラリを入れています…',
-          argv: [py, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--upgrade',
-            '--progress-bar', 'off', '--target', '.deps', '-r', 'requirements.txt'],
+          label: `requirements.txt のライブラリを入れています${useUv ? ' (uv)' : ''}…`,
+          argv: useUv ? ['uv', 'pip', 'install', '--quiet', '--target', '.deps', '--python', py, '--link-mode', 'copy', '-r', 'requirements.txt'] : pip,
+          fallback: useUv ? { label: 'uv で入れられなかったので、pip で入れ直します…', argv: pip } : null,
           before: () => fs.rmSync(path.join(dir, '.deps'), { recursive: true, force: true }),
           done: () => { fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, hash); },
         });
       }
     }
     if (bot.runtime === 'node' && fs.existsSync(path.join(dir, 'package.json'))) {
-      const hash = fileHash(path.join(dir, 'package.json'));
+      const lock = fs.existsSync(path.join(dir, 'package-lock.json'));
+      const hash = fileHash(path.join(dir, 'package.json')) + (lock ? fileHash(path.join(dir, 'package-lock.json')) : '');
       const marker = path.join(dir, 'node_modules', '.package-hash');
       if (!unchanged(marker, hash)) {
         steps.push({
           label: 'package.json のライブラリを入れています…',
-          argv: ['npm', 'install', '--omit=dev', '--no-audit', '--no-fund', '--loglevel=error'],
+          // package-lock.json があれば npm ci (速くて、いつも同じものが入る)
+          argv: ['npm', lock ? 'ci' : 'install', '--omit=dev', '--no-audit', '--no-fund', '--prefer-offline', '--loglevel=error'],
           done: () => { fs.mkdirSync(path.dirname(marker), { recursive: true }); fs.writeFileSync(marker, hash); },
         });
       }
@@ -343,17 +401,23 @@ class Runner extends EventEmitter {
       this.sys(bot.id, step.label);
       if (step.before) step.before();
       const started = Date.now();
-      const code = await new Promise((resolve) => {
-        const child = this.spawnIn(bot, step.argv, `bothost-${bot.id}-install`);
+      const runStep = (argv) => new Promise((resolve) => {
+        const child = this.spawnIn(bot, argv, `bothost-${bot.id}-install`);
         s.child = child;
         if (child.pid) { this.pids[bot.id] = child.pid; this.savePids(); }
         child.stdout.setEncoding('utf8');
         child.stderr.setEncoding('utf8');
-        child.stdout.on('data', (d) => this.log(bot.id, 'out', d));
-        child.stderr.on('data', (d) => this.log(bot.id, 'err', d));
+        child.stdout.on('data', (d) => this.chunk(bot.id, 'out', d));
+        child.stderr.on('data', (d) => this.chunk(bot.id, 'err', d));
         child.on('error', (e) => { this.sys(bot.id, e.message); });
         child.on('close', (c) => resolve(c));
       });
+      let code = await runStep(step.argv);
+      if (code !== 0 && step.fallback && !s.stopping && token === s.runToken) {
+        this.sys(bot.id, step.fallback.label);
+        if (step.before) step.before();
+        code = await runStep(step.fallback.argv);
+      }
       s.child = null;
       if (s.stopping || token !== s.runToken) { this.sys(bot.id, '停止しました。'); this.setStatus(bot.id, 'stopped'); return false; }
       if (code !== 0) {
@@ -366,6 +430,39 @@ class Runner extends EventEmitter {
       this.sys(bot.id, `インストールが終わりました (${Math.round((Date.now() - started) / 100) / 10} 秒)。`);
     }
     return true;
+  }
+
+  // uv が bot のユーザーから使えるか (一度だけ調べる)
+  hasUv(id) {
+    if (this.uv === null) {
+      const opts = { stdio: 'ignore', timeout: 10000, env: { PATH: process.env.PATH } };
+      if (this.isolate) { opts.uid = botUid(id); opts.gid = botUid(id); }
+      try { this.uv = spawnSync('uv', ['--version'], opts).status === 0; } catch { this.uv = false; }
+    }
+    return this.uv;
+  }
+
+  // bot のフォルダーを bot のユーザーのものにする (起動の前・ファイルを書いた後)
+  prepareDir(id) {
+    if (!this.isolate) return;
+    const uid = botUid(id);
+    try { fs.chmodSync(this.botsDir, 0o711); } catch { /* なくてもよい */ }
+    const dir = this.dir(id);
+    chownTree(dir, uid, uid);
+    try { fs.chmodSync(dir, 0o700); } catch { /* なくてもよい */ }
+  }
+
+  // 1 つのファイル (とその上のフォルダー) を bot のユーザーのものにする
+  adopt(id, full) {
+    if (!this.isolate) return;
+    const uid = botUid(id);
+    const root = this.dir(id);
+    let p = full;
+    while (p.startsWith(root + path.sep)) {
+      try { fs.lchownSync(p, uid, uid); } catch { /* 消えた */ }
+      p = path.dirname(p);
+    }
+    try { fs.lchownSync(root, uid, uid); } catch { /* なくてもよい */ }
   }
 
   // 入れたライブラリを消して、次の起動で入れ直す
@@ -399,8 +496,9 @@ class Runner extends EventEmitter {
         '--cpus', String(bot.cpuLimit || 0.5),
         '--pids-limit', '256',
         '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-        // サーバーと同じユーザーで動かす (bot のフォルダーに書けるように。root にはしない)
-        ...(process.getuid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
+        // root にはしない: bot ごとのユーザー (サーバーが root のとき) か、サーバーと同じユーザー
+        ...(this.isolate ? ['--user', `${botUid(bot.id)}:${botUid(bot.id)}`]
+          : process.getuid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
         // システムのファイルは読み取り専用。書けるのは bot のフォルダー (/app) と /tmp だけ
         '--read-only', '--tmpfs', '/tmp:rw,size=64m',
         '-v', `${dir}:/app`, '-w', '/app',
@@ -413,6 +511,11 @@ class Runner extends EventEmitter {
     const env = {
       PATH: process.env.PATH,
       HOME: dir,
+      // ライブラリのキャッシュは bot のフォルダーの中に (ほかの bot と混ざらないように)
+      XDG_CACHE_HOME: path.join(dir, '.cache'),
+      UV_CACHE_DIR: path.join(dir, '.cache', 'uv'),
+      UV_NO_PROGRESS: '1',
+      npm_config_cache: path.join(dir, '.npm'),
       LANG: process.env.LANG || 'C.UTF-8',
       ...(process.env.TZ ? { TZ: process.env.TZ } : {}),
       ...this.envFor(bot, false),
@@ -422,7 +525,8 @@ class Runner extends EventEmitter {
       if (PASS_ENV.test(k) && !(k in env)) env[k] = v;
     }
     // detached: プロセスグループごと止められるように (npm start などが子プロセスを作っても残らない)
-    return spawn(argv[0], argv.slice(1), { cwd: dir, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const ids = this.isolate ? { uid: botUid(bot.id), gid: botUid(bot.id) } : {};
+    return spawn(argv[0], argv.slice(1), { cwd: dir, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'], ...ids });
   }
 
   tail(id, n = 15) {
@@ -432,6 +536,7 @@ class Runner extends EventEmitter {
   onExit(bot, child, code, signal) {
     const s = this.state(bot.id);
     if (s.child !== child) return;
+    this.flushPartial(bot.id);
     s.child = null;
     delete this.pids[bot.id];
     this.savePids();
@@ -623,4 +728,4 @@ class Runner extends EventEmitter {
   }
 }
 
-module.exports = { Runner, RUNTIMES, splitCommand };
+module.exports = { Runner, RUNTIMES, splitCommand, botUid };

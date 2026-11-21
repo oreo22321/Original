@@ -45,7 +45,7 @@ test('splitCommand', () => {
 
 test('BotHost の一通りの流れ', async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bothost-test-'));
-  const app = createApp({ dataDir, registration: 'first-only', stopTimeoutMs: 1500, statsIntervalMs: 300 });
+  const app = createApp({ dataDir, registration: 'first-only', stopTimeoutMs: 1500, statsIntervalMs: 300, isolate: false });
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await app.shutdown(); fs.rmSync(dataDir, { recursive: true, force: true }); });
@@ -200,10 +200,11 @@ test('BotHost の一通りの流れ', async (t) => {
     await until(() => app.runner.logs(botId).some((l) => l.l === 'alive'));
     await app.runner.stopAll();
     app.store.flush();
-    const app2 = createApp({ dataDir, stopTimeoutMs: 1500 });
+    const app2 = createApp({ dataDir, stopTimeoutMs: 1500, isolate: false });
     try {
+      const before = app2.runner.logs(botId).filter((l) => l.l === 'alive').length; // 前のサーバーのログも残っている
       app2.resume();
-      await until(() => app2.runner.logs(botId).some((l) => l.l === 'alive'));
+      await until(() => app2.runner.logs(botId).filter((l) => l.l === 'alive').length > before);
       assert.strictEqual(app2.runner.info(botId).status, 'running');
     } finally {
       await app2.runner.stopAll();

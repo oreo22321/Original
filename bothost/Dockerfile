@@ -2,7 +2,8 @@
 FROM node:22-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates tini git openssh-client \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && pip3 install --break-system-packages --no-cache-dir uv
 WORKDIR /app
 COPY . .
 # bot のライブラリは bot ごとのフォルダーに入れる (pip install --target) ので、システムの Python は汚しません
@@ -12,4 +13,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # tini: 止めるときのシグナルを node に渡し、bot のプロセスの後片付けもする
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "server.js"]
+# サーバー自体のメモリに上限を付けて、bot にメモリを残す (無料プランは全部で 512 MB)
+CMD ["node", "--max-old-space-size=192", "server.js"]

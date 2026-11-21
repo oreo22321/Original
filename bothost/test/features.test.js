@@ -383,3 +383,17 @@ test('サーバーが突然落ちて取り残された bot のプロセスを片
     // pid 1 (bot のフォルダーではない) には触れていない = このテストが動き続けている
   } finally { await app.runner.stopAll(); app.runner.close(); }
 });
+
+test('出力が途中で区切られて届いても、行は割れない (改行のない出力は少し待って出す)', async () => {
+  const { Runner } = require('../lib/runner');
+  const r = new Runner({ botsDir: tmp(), isolate: false });
+  r.chunk('a', 'out', 'env-sec');
+  r.chunk('a', 'out', 'ret None\nnext');
+  r.chunk('a', 'err', 'Trace');
+  r.chunk('a', 'out', ' line\n');
+  r.chunk('a', 'err', 'back\n');
+  r.chunk('a', 'out', '名前: ');
+  await sleep(300);
+  assert.deepStrictEqual(r.logs('a').map((l) => `${l.s}:${l.l}`), ['out:env-secret None', 'out:next line', 'err:Traceback', 'out:名前: ']);
+  r.close();
+});

@@ -47,11 +47,16 @@ function createApp(config = {}) {
     crashLimit: config.crashLimit,
     restartBackoffMs: config.restartBackoffMs,
     restoreRetry: config.restoreRetry,
+    // bot を bot ごとの別のユーザーで動かす (サーバーが root のときの既定。BOTHOST_ISOLATE=0 で切る)
+    isolate: config.isolate ?? (env.BOTHOST_ISOLATE === '0' ? false : undefined),
+    resumeGapMs: config.resumeGapMs ?? 3000,
     discordApi: config.discordApi,
     trustProxy: config.trustProxy ?? (env.BOTHOST_TRUST_PROXY === '1' || !!env.RENDER),
+    keepAwakeMinutes: Math.max(1, Math.min(14, Number(config.keepAwakeMinutes || env.BOTHOST_KEEP_AWAKE_MINUTES || 5))),
     keepAwakeUrl: config.keepAwakeUrl ?? (env.BOTHOST_KEEP_AWAKE === '0' ? '' : (env.BOTHOST_KEEP_AWAKE_URL || env.RENDER_EXTERNAL_URL || '')),
     backup: config.backup || {
       repo: env.BOTHOST_BACKUP_REPO, token: env.BOTHOST_BACKUP_TOKEN, sshKey: env.BOTHOST_BACKUP_SSH_KEY,
+      secretKey: env.BOTHOST_SECRET_KEY,
       branch: env.BOTHOST_BACKUP_BRANCH, file: env.BOTHOST_BACKUP_FILE,
     },
   };
@@ -63,14 +68,37 @@ function createApp(config = {}) {
   const backup = new Backup({ store, botsDir, ...cfg.backup });
   store.onSave = () => backup.markDirty();
   const runner = new Runner({
-    botsDir, mode: cfg.mode, python: cfg.python,
+    botsDir, mode: cfg.mode, python: cfg.python, isolate: cfg.isolate,
     logsDir: path.join(cfg.dataDir, 'logs'), pidsFile: path.join(cfg.dataDir, 'pids.json'),
     stopTimeoutMs: cfg.stopTimeoutMs, statsIntervalMs: cfg.statsIntervalMs, crashLimit: cfg.crashLimit,
     initialBackoffMs: cfg.restartBackoffMs,
   });
   const findBot = (id) => store.bots.find((b) => b.id === id);
   runner.getBot = findBot;
+  // bot を別のユーザーで動かすには、データの場所まで、ほかのユーザーがたどれる必要がある
+  if (runner.isolate) {
+    for (let p = path.dirname(cfg.dataDir); ; p = path.dirname(p)) {
+      let st;
+      try { st = fs.statSync(p); } catch { break; }
+      if (!(st.mode & 0o001)) {
+        console.warn(`注意: ${p} にほかのユーザーが入れないので、bot をユーザーごとに分けずに動かします (BOTHOST_DATA を別の場所にすると分けられます)`);
+        runner.isolate = false;
+        break;
+      }
+      if (p === path.dirname(p)) break;
+    }
+  }
+  // bot を別のユーザーで動かすときは、サーバーのデータ (db.json・ログ・鍵) を bot から読めないようにする
+  if (runner.isolate) {
+    for (const [p, mode] of [[cfg.dataDir, 0o711], [botsDir, 0o711], [path.join(cfg.dataDir, 'logs'), 0o700]]) {
+      try { fs.chmodSync(p, mode); } catch { /* なくてもよい */ }
+    }
+    for (const f of ['db.json', 'db.json.bak', 'pids.json']) {
+      try { fs.chmodSync(path.join(cfg.dataDir, f), 0o600); } catch { /* まだない */ }
+    }
+  }
   const timers = [];
+  const keepAwake = { lastAt: null, ok: null, error: null };
 
   // ----- リアルタイム (Server-Sent Events) -----
   // ログは 1 行ずつではなく 100ms ごとにまとめて送ります (大量に出す bot でも重くならないように)
@@ -93,10 +121,20 @@ function createApp(config = {}) {
       if (q.length) sse(id, 'logs', q.splice(0));
     }
   }, 100));
-  runner.on('status', (id, info) => sse(id, 'status', info));
+  // ユーザーごとの配信 (一覧の画面: 自分の bot の状態と使用量をまとめて)
+  const userStreams = new Map(); // userId -> Set(res)
+  const toOwner = (id, event, data) => {
+    const bot = findBot(id);
+    const set = bot && userStreams.get(bot.ownerId);
+    if (!set || !set.size) return;
+    const msg = `event: ${event}\ndata: ${JSON.stringify({ id, ...data })}\n\n`;
+    for (const res of set) res.write(msg);
+  };
+  runner.on('status', (id, info) => { sse(id, 'status', info); toOwner(id, 'status', info); });
   runner.on('stats', (id, stats) => {
     const h = runner.history(id);
     sse(id, 'stats', { ...stats, point: h[h.length - 1] });
+    toOwner(id, 'stats', stats);
   });
   runner.on('exit', (id, { manual }) => {
     const bot = findBot(id);
@@ -210,7 +248,8 @@ function createApp(config = {}) {
       ok: true, version: VERSION, uptime: Math.round(process.uptime()),
       running: [...runner.states.values()].filter((s) => s.status === 'running').length,
       // バックアップが動いているか (秘密は含めない)
-      backup: b.enabled ? { method: b.method, connected: b.connected, lastAt: b.lastAt, ok: !b.lastError && !b.blocked } : null,
+      backup: b.enabled ? { method: b.method, connected: b.connected, lastAt: b.lastAt, ok: !b.lastError && !b.blocked, encrypted: b.encrypted } : null,
+      keepAwake: cfg.keepAwakeUrl ? { lastAt: keepAwake.lastAt, ok: keepAwake.ok } : null,
     };
   }, { auth: false });
 
@@ -226,8 +265,8 @@ function createApp(config = {}) {
 
   route('POST', '/api/register', async ({ req, res, ip }) => {
     if (!registrationOpen()) fail(403, '新しい登録は受け付けていません。管理者に頼んでください');
-    if (!auth.allowAttempt(ip)) fail(429, '少し時間をおいてからもう一度お試しください');
     const { username, password } = await readJson(req);
+    if (!auth.allowLogin(ip, username)) fail(429, '少し時間をおいてからもう一度お試しください');
     const name = String(username || '').trim();
     if (!/^[A-Za-z0-9_.-]{3,24}$/.test(name)) fail(400, 'ユーザー名は半角英数字と _ . - で 3〜24 文字にしてください');
     if (typeof password !== 'string' || password.length < 8 || password.length > 200) fail(400, 'パスワードは 8 文字以上にしてください');
@@ -245,8 +284,8 @@ function createApp(config = {}) {
   }, { auth: false });
 
   route('POST', '/api/login', async ({ req, res, ip }) => {
-    if (!auth.allowAttempt(ip)) fail(429, '少し時間をおいてからもう一度お試しください');
     const { username, password } = await readJson(req);
+    if (!auth.allowLogin(ip, username)) fail(429, 'ログインの失敗が多いので、10 分ほど待ってからもう一度お試しください');
     const user = store.users.find((u) => u.username.toLowerCase() === String(username || '').trim().toLowerCase());
     if (!user || typeof password !== 'string' || !auth.verifyPassword(password, user.password)) {
       fail(401, 'ユーザー名かパスワードが違います');
@@ -264,11 +303,14 @@ function createApp(config = {}) {
 
   route('GET', '/api/me', async ({ user }) => ({ user: publicUser(user) }));
 
-  route('POST', '/api/me/password', async ({ req, user }) => {
+  route('POST', '/api/me/password', async ({ req, user, ip }) => {
     const { current, next } = await readJson(req);
+    if (!auth.allowLogin(ip, user.username)) fail(429, '少し時間をおいてからもう一度お試しください');
     if (typeof current !== 'string' || !auth.verifyPassword(current, user.password)) fail(400, '今のパスワードが違います');
-    if (typeof next !== 'string' || next.length < 8) fail(400, '新しいパスワードは 8 文字以上にしてください');
+    if (typeof next !== 'string' || next.length < 8 || next.length > 200) fail(400, '新しいパスワードは 8 文字以上にしてください');
     user.password = auth.hashPassword(next);
+    // ほかの端末のログインは切る (この端末はそのまま)
+    auth.destroyUserSessions(store, user.id, cookies(req).bothost_session);
     store.save();
     return { ok: true };
   });
@@ -278,7 +320,8 @@ function createApp(config = {}) {
     users: store.users.map((u) => ({ ...publicUser(u), bots: store.bots.filter((b) => b.ownerId === u.id).length })),
     settings: { registrationOpen: registrationOpen() },
     backup: backup.info(),
-    keepAwake: cfg.keepAwakeUrl || null,
+    keepAwake: cfg.keepAwakeUrl ? { url: cfg.keepAwakeUrl, ...keepAwake } : null,
+    security: { isolate: runner.isolate, encryptedBackup: backup.info().encrypted, secureCookie: cfg.secureCookie },
     server: {
       version: VERSION, mode: cfg.mode, uptime: Math.round(process.uptime()),
       node: process.version, memoryMB: Math.round(process.memoryUsage().rss / 1048576),
@@ -330,6 +373,7 @@ function createApp(config = {}) {
       memoryLimitMB: 256, cpuLimit: 0.5, restartEveryHours: 0, createdAt: Date.now(),
     };
     files.copyTemplate(template && path.join(ROOT, 'templates', template), runner.dir(bot.id));
+    runner.prepareDir(bot.id);
     store.bots.push(bot);
     store.save();
     return { bot: publicBot(bot) };
@@ -471,6 +515,20 @@ function createApp(config = {}) {
     return { ok: true };
   });
 
+  route('GET', '/api/stream', async ({ req, res, user }) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no',
+    });
+    res.write('retry: 3000\nevent: hello\ndata: {}\n\n');
+    let set = userStreams.get(user.id);
+    if (!set) userStreams.set(user.id, (set = new Set()));
+    if (set.size >= 10) { const oldest = set.values().next().value; set.delete(oldest); oldest.end(); }
+    set.add(res);
+    const ping = setInterval(() => res.write(': ping\n\n'), 25e3);
+    req.on('close', () => { clearInterval(ping); set.delete(res); });
+    return undefined;
+  });
+
   route('GET', '/api/bots/:id/events', async ({ req, res, user, params }) => {
     const bot = ownedBot(user, params.id);
     res.writeHead(200, {
@@ -484,6 +542,7 @@ function createApp(config = {}) {
     })}\n\n`);
     let set = listeners.get(bot.id);
     if (!set) listeners.set(bot.id, (set = new Set()));
+    if (set.size >= 10) { const oldest = set.values().next().value; set.delete(oldest); oldest.end(); }
     set.add(res);
     const ping = setInterval(() => res.write(': ping\n\n'), 25e3);
     req.on('close', () => { clearInterval(ping); set.delete(res); });
@@ -509,6 +568,7 @@ function createApp(config = {}) {
     checkDisk();
     const buf = await readBody(req, 10 * 1024 * 1024);
     files.write(runner.dir(bot.id), query.get('path'), buf);
+    runner.adopt(bot.id, files.resolveInside(runner.dir(bot.id), query.get('path')));
     backup.markDirty();
     return { ok: true };
   });
@@ -524,6 +584,7 @@ function createApp(config = {}) {
     const bot = ownedBot(user, params.id);
     const { from, to } = await readJson(req);
     files.rename(runner.dir(bot.id), from, to);
+    runner.adopt(bot.id, files.resolveInside(runner.dir(bot.id), to));
     backup.markDirty();
     return { ok: true };
   });
@@ -547,6 +608,7 @@ function createApp(config = {}) {
       fail(400, e instanceof zip.ZipError ? e.message : 'ZIP を読めませんでした');
     }
     const count = files.importEntries(runner.dir(bot.id), entries, { replace: query.get('replace') === '1' });
+    runner.prepareDir(bot.id);
     backup.markDirty();
     return { count };
   });
@@ -583,7 +645,7 @@ function createApp(config = {}) {
       Vary: 'Accept-Encoding',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'same-origin',
-      'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.discordapp.com; frame-ancestors 'none'",
+      'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.discordapp.com; connect-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     };
     if (req.headers['if-none-match'] === f.etag) { res.writeHead(304, headers); return res.end(); }
     const gzip = f.gz && /\bgzip\b/.test(req.headers['accept-encoding'] || '');
@@ -593,6 +655,13 @@ function createApp(config = {}) {
   };
 
   const handler = async (req, res) => {
+    // どの返事にも付ける安全のためのヘッダー
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'same-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    if (cfg.secureCookie) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     let url;
     try { url = new URL(req.url, 'http://localhost'); } catch { return send(res, 400, 'Bad Request'); }
     // リバースプロキシ (Render など) の後ろでは、本当の IP は X-Forwarded-For に入っています
@@ -647,13 +716,23 @@ function createApp(config = {}) {
     }
   }, 60e3));
 
-  // 眠らせない: Render の無料プランなどは、外からアクセスがないと 15 分で止まるので、
-  // bot を動かしている間は自分の公開 URL に 10 分ごとにアクセスします
+  // 眠らせない (24 時間稼働): Render の無料プランなどは、外からアクセスがないと 15 分で止まるので、
+  // サイトを閉じていても、自分の公開 URL に数分ごとにアクセスし続けます
   if (cfg.keepAwakeUrl) {
-    timers.push(setInterval(() => {
-      if (!store.bots.some((b) => b.desired === 'running')) return;
-      fetch(cfg.keepAwakeUrl.replace(/\/$/, '') + '/api/health', { signal: AbortSignal.timeout(15000) }).catch(() => {});
-    }, 10 * 60e3));
+    const ping = async () => {
+      try {
+        const res = await fetch(cfg.keepAwakeUrl.replace(/\/$/, '') + '/api/health?ping=1', { signal: AbortSignal.timeout(20000) });
+        keepAwake.lastAt = Date.now();
+        keepAwake.ok = res.ok;
+        keepAwake.error = res.ok ? null : `HTTP ${res.status}`;
+      } catch (e) {
+        keepAwake.lastAt = Date.now();
+        keepAwake.ok = false;
+        keepAwake.error = e.name === 'TimeoutError' ? '時間切れ' : e.message;
+      }
+    };
+    timers.push(setTimeout(ping, 30e3));
+    timers.push(setInterval(ping, cfg.keepAwakeMinutes * 60e3));
   }
   for (const t of timers) t.unref();
 
@@ -676,14 +755,18 @@ function createApp(config = {}) {
     resume();
   };
 
+  // 動かしていた bot をまた動かす。一度に動かすとメモリと CPU が足りなくなるので、少しずつずらす
   const resume = () => {
     auth.pruneSessions(store);
-    for (const bot of store.bots) {
-      if (bot.desired === 'running') {
+    const list = store.bots.filter((b) => b.desired === 'running' && !runner.isActive(b.id));
+    list.forEach((bot, i) => {
+      const t = setTimeout(() => {
+        if (bot.desired !== 'running' || !findBot(bot.id) || runner.isActive(bot.id)) return;
         runner.sys(bot.id, 'サーバーが起動したので、bot を起動します。');
         runner.start(bot);
-      }
-    }
+      }, i * cfg.resumeGapMs);
+      t.unref();
+    });
   };
 
   const shutdown = async () => {
@@ -695,7 +778,7 @@ function createApp(config = {}) {
     if (backup.enabled && backup.dirty && !backup.blocked) {
       await Promise.race([backup.run().catch(() => {}), new Promise((r) => setTimeout(r, 20e3))]);
     }
-    for (const set of listeners.values()) for (const res of set) res.end();
+    for (const set of [...listeners.values(), ...userStreams.values()]) for (const res of set) res.end();
     await new Promise((r) => server.close(() => r()));
   };
 

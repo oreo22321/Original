@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { createApp } = require('../server');
+const { botUid } = require('../lib/runner');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(fn, ms = 60000) {
@@ -70,7 +71,10 @@ test('docker モード', { skip: !hasImages && 'Docker (と python / node のイ
     await app.runner.start(bot);
     await until(() => logs(bot).some((l) => l.startsWith('hello')));
     const L = logs(bot);
-    assert.ok(L.includes(`hello やあ ${process.getuid()}`), L.join('\n'));
+    // サーバーが root なら bot ごとのユーザー、そうでなければサーバーと同じユーザー (どちらでも root ではない)
+    const uid = app.runner.isolate ? botUid(bot.id) : process.getuid();
+    assert.ok(L.includes(`hello やあ ${uid}`), L.join('\n'));
+    assert.notStrictEqual(uid, 0);
     assert.ok(L.some((l) => l.startsWith("cwd /app ['main.py']")), L.join('\n'));
     assert.ok(L.includes('secret? False'), 'bot のフォルダーの外は見えない');
     assert.ok(L.includes('rootfs: read-only'), 'システムのファイルは書けない');

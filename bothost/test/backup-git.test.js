@@ -148,3 +148,72 @@ test('止めている間も確かめ直し、鍵が使えるようになった�
   assert.strictEqual((await c('POST', '/api/admin/backup')).status, 200);
   assert.strictEqual(three.app.backup.info().blocked, null);
 });
+
+test('バックアップの暗号化: 鍵がないと読めず、古い (暗号化なし) バックアップも読める', async (t) => {
+  const zlib = require('zlib');
+  const bare = path.join(tmp('bothost-bare4-'), 'data.git');
+  git('init', '-q', '--bare', '-b', 'main', bare);
+  const backup = { gitUrl: `file://${bare}`, secretKey: 'correct horse battery staple' };
+  const one = await start(t, { backup });
+  const a = client(one.base);
+  await a('POST', '/api/register', { username: 'enc', password: 'password1' });
+  const id = (await a('POST', '/api/bots', { name: 'e', template: 'python-blank' })).body.bot.id;
+  await a('PATCH', `/api/bots/${id}`, { env: { DISCORD_TOKEN: 'super.secret.token' } });
+  assert.strictEqual((await a('POST', '/api/admin/backup')).status, 200);
+  assert.strictEqual(one.app.backup.info().encrypted, true);
+  await one.close();
+  // GitHub に置かれたファイルには、トークンもユーザー名も見えない
+  const raw = execFileSync('git', ['--git-dir', bare, 'show', 'main:bothost-backup.json.gz']);
+  assert.ok(raw.subarray(0, 6).toString() === 'BHENC1');
+  assert.ok(!raw.includes(Buffer.from('super.secret.token')) && !raw.includes(Buffer.from('enc')));
+  assert.throws(() => zlib.gunzipSync(raw));
+
+  // 正しい鍵なら戻る
+  const two = await start(t, { backup });
+  assert.ok(two.app.backup.info().restoredAt);
+  assert.strictEqual(two.app.store.bots[0].env.DISCORD_TOKEN, 'super.secret.token');
+  await two.close();
+  // 鍵が違うと戻せない (そして上書きもしない)
+  const three = await start(t, { backup: { ...backup, secretKey: 'wrong' }, restoreRetry: { tries: 1, waitMs: 1 } });
+  assert.ok(three.app.backup.info().blocked);
+  assert.match(three.app.backup.info().lastError, /復号できません/);
+  await three.close();
+
+  // 暗号化していない古いバックアップも、鍵を設定したあとで読める
+  const old = path.join(tmp('bothost-bare5-'), 'data.git');
+  git('init', '-q', '--bare', '-b', 'main', old);
+  const p1 = await start(t, { backup: { gitUrl: `file://${old}` } });
+  await client(p1.base)('POST', '/api/register', { username: 'plain', password: 'password1' });
+  await p1.app.backup.run();
+  await p1.close();
+  const p2 = await start(t, { backup: { gitUrl: `file://${old}`, secretKey: 'new-key' } });
+  assert.deepStrictEqual(p2.app.store.users.map((u) => u.username), ['plain']);
+  await p2.app.backup.run();
+  await p2.close();
+  assert.strictEqual(execFileSync('git', ['--git-dir', old, 'show', 'main:bothost-backup.json.gz']).subarray(0, 6).toString(), 'BHENC1', '次からは暗号化して置く');
+});
+
+test('セッション: トークンそのものは保存しない・パスワードを変えるとほかの端末は切れる', async (t) => {
+  const one = await start(t, { backup: {} });
+  const a = client(one.base);
+  const b = client(one.base);
+  await a('POST', '/api/register', { username: 'sess', password: 'password1' });
+  await b('POST', '/api/login', { username: 'sess', password: 'password1' });
+  one.app.store.flush();
+  const saved = fs.readFileSync(path.join(one.dataDir, 'db.json'), 'utf8');
+  // クッキーの値 (トークン) は、保存したデータの中にない
+  const res = await fetch(one.base + '/api/login', { method: 'POST', headers: { 'X-BotHost': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'sess', password: 'password1' }) });
+  const token = res.headers.get('set-cookie').split(';')[0].split('=')[1];
+  one.app.store.flush();
+  assert.ok(!fs.readFileSync(path.join(one.dataDir, 'db.json'), 'utf8').includes(token));
+  assert.ok(Object.keys(JSON.parse(saved).sessions).length >= 2);
+  // パスワードを変えると、ほかの端末 (b) は切れ、自分 (a) はそのまま
+  assert.strictEqual((await a('POST', '/api/me/password', { current: 'password1', next: 'password2' })).status, 200);
+  assert.strictEqual((await a('GET', '/api/me')).status, 200);
+  assert.strictEqual((await b('GET', '/api/me')).status, 401);
+  // 同じユーザー名への総当たりは止める
+  const c = client(one.base);
+  let last;
+  for (let i = 0; i < 12; i++) last = await c('POST', '/api/login', { username: 'sess', password: `wrong${i}` });
+  assert.strictEqual(last.status, 429);
+});
