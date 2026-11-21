@@ -142,7 +142,7 @@ export class Runner {
     })
     document.addEventListener('keydown', e => {
       // 実行画面で ⌘/Ctrl + Enter: もう一度実行
-      if (this.full && (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !this.running) { e.preventDefault(); this.rerun(); return }
+      if (this.full && (e.metaKey || e.ctrlKey) && e.key === 'Enter' && !this.running && !e.defaultPrevented && !(e.target && e.target.closest && e.target.closest('.nb, .pv'))) { e.preventDefault(); this.rerun(); return }
       if (!(this.full || this.termFull) || e.key !== 'Escape' || e.defaultPrevented) return
       if (document.querySelector('.modal-overlay, .menu-overlay, .sf-max')) return
       const t = e.target
@@ -381,8 +381,35 @@ export class Runner {
     return w
   }
 
+  // ---- Web アプリのプレビュー ----
+  setServing(v) {
+    if (!v && !this.serving) return
+    this.serving = v
+    if (!v && this.webWaits) { for (const fn of this.webWaits.values()) { try { fn({ status: 503, headers: [['Content-Type', 'text/plain; charset=utf-8']], body: new TextEncoder().encode('Web アプリは止まりました') }) } catch {} } this.webWaits.clear() }
+    emit('serving', v)
+    if (app.wb) app.wb.updateTop()
+  }
+  webRequest(req, body) {
+    const w = this.worker
+    if (!w) return Promise.resolve({ status: 503, headers: [['Content-Type', 'text/plain; charset=utf-8']], body: new TextEncoder().encode('Python が動いていません') })
+    this.webWaits = this.webWaits || new Map()
+    const id = 'w' + (this.webSeq = (this.webSeq || 0) + 1)
+    return new Promise(resolve => {
+      this.webWaits.set(id, resolve)
+      w.postMessage({ type: 'web', id, req, body }, body ? [body] : [])
+      setTimeout(() => { if (this.webWaits.delete(id)) resolve({ status: 504, headers: [['Content-Type', 'text/plain; charset=utf-8']], body: new TextEncoder().encode('Web アプリが答えませんでした (60 秒)') }) }, 60000)
+    })
+  }
+  webCard(title) {
+    const el = h('div', { class: 'out-html web-card' }, icon('globe', 18), h('div', { class: 'wc-text' }, h('b', null, title), h('span', null, 'アプリの中のブラウザで動いています (ポートは使いません)')),
+      h('button', { class: 'btn small primary', onclick: () => import('./preview.js').then(m => m.openPreview('/')) }, 'プレビューを開く'))
+    el.dataset.text = title
+    this.appendBlock(el)
+  }
+
   resetWorker() {
     if (this.worker) { try { this.worker.terminate() } catch {} this.worker = null }
+    this.setServing(null)
     this.pyReady = false
     this.inputPending = false
     this.removeInput()
@@ -404,7 +431,7 @@ export class Runner {
   }
   // 長い間使っていない: Python を休ませてメモリを空ける (戻ったら準備し直す)
   rest() {
-    if (!this.worker || this.running || this.evalBusy) return
+    if (!this.worker || this.running || this.evalBusy || this.serving) return
     try { this.worker.terminate() } catch {}
     this.worker = null
     this.pyReady = false
@@ -443,6 +470,9 @@ export class Runner {
   async run({ selection = false, path: forcePath = null, agent = false, debug = false, source: forceSource = null, term = null, argv = null, cwd = null, name = null, auto = false } = {}) {
     this.cancelRestart()
     const doc = app.editors.activeDoc()
+    // Web ページ (HTML) を開いているときの ▶: アプリの中のブラウザで表示
+    if (!forcePath && forceSource === null && !term && !selection && doc && /\.html?$/.test(doc.path) && !this.runTarget()) { import('./preview.js').then(m => m.openPreview('/' + doc.path)); return }
+    this.setServing(null)
     const s = getSettings()
     let path = null, source = null
     this.scratchId = 0
@@ -583,7 +613,7 @@ export class Runner {
   // ============================================================
   // ターミナルからの Python (対話モード・pip・Tab の補完)
   // ============================================================
-  termEval(code, { ns = 'repl', repl = false, complete = null, sink = null } = {}) {
+  termEval(code, { ns = 'repl', repl = false, complete = null, sink = null, files = null, keep = null, cwd = undefined } = {}) {
     if (this.running) return Promise.resolve({ ok: false, busy: true, error: '別のプログラムが実行中です' })
     const w = this.ensureWorker()
     if (!w) return Promise.resolve({ ok: false, error: 'Python を起動できませんでした' })
@@ -597,7 +627,9 @@ export class Runner {
       })
       if (sink) { this.sink = sink; this.sinkShown = false; this.evalBusy = id; busy('run', true) }
       if (this.shared) new Int32Array(this.shared.interrupt)[0] = 0
-      w.postMessage({ type: 'eval', id, code, ns, repl, complete: typeof complete === 'string' ? complete : undefined })
+      // ノートブック: 先にプロジェクトのファイルを渡す (変えたものだけ)
+      if (files) for (const [p, c] of Object.entries(files)) this.sent.set(p, c)
+      w.postMessage({ type: 'eval', id, code, ns, repl, complete: typeof complete === 'string' ? complete : undefined, files: files || undefined, keep: keep || undefined, cwd })
     })
   }
   // 対話モードの実行を止める (KeyboardInterrupt。止まらなければ Python ごと立ち上げ直す)
@@ -947,6 +979,9 @@ export class Runner {
       case 'frame': this.sinkVisual(); this.showFrame(m); break
       case 'surface': this.onSurface(m); break
       case 'rpc': handleRpc(m); break
+      case 'webResult': { const fn = this.webWaits && this.webWaits.get(m.id); if (fn) { this.webWaits.delete(m.id); fn({ status: m.head.status, headers: m.head.headers, body: m.body }) } break }
+      case 'webFiles': this.applyFiles(m.files); break
+      case 'event': { let data = null; try { data = JSON.parse(m.data) } catch {} emit('py-' + m.kind, data); break }
       case 'sound': this.sound.handle(m); break
       case 'tk': this.sinkVisual(); this.showTk(m.ops); break
       case 'pong': { const fn = this.pongs.get(m.id); if (fn) { this.pongs.delete(m.id); fn(true) } break }
@@ -1436,6 +1471,23 @@ export class Runner {
 }
 
 command('run', '実行', () => app.runner.run(), { icon: 'play' })
+// プロファイル: 時間のかかった関数・行を調べて実行 (結果は出力に表で出す)
+command('profileRun', '時間を計って実行 (プロファイル)', async () => {
+  const r = app.runner
+  const target = r.runTarget() || (app.editors.activeDoc() && app.editors.activeDoc().path)
+  if (!target || !/\.pyw?$/.test(target)) { toast('Python のファイルを開いてください'); return }
+  await r.run({ source: `import _fcprof\n_fcprof.run_file(${JSON.stringify(target)}, ${JSON.stringify([target])}, text=False)\n`, name: '<profile>', label: `${target} (プロファイル)` })
+}, { icon: 'gauge' })
+// Web アプリが動き始めた (app.run() など): プレビューを使えるように
+on('py-web', d => {
+  const r = app.runner
+  if (!d || !r || d.phase !== 'serve') return
+  const fromTerm = !!r.sink
+  r.setServing({ kind: d.kind, title: d.title })
+  if (!fromTerm) { r.webCard(d.title); setTimeout(() => import('./preview.js').then(m => m.openPreview('/')), 300) }
+})
+command('webPreview', 'Web ページをプレビュー', () => import('./preview.js').then(m => m.openPreview()), { icon: 'globe' })
+on('py-profile', d => { const r = app.runner; if (!d || !r || r.sink) return; import('./profile-view.js').then(m => r.appendBlock(m.profileBlock(d))) })
 command('runSelection', '選択範囲だけ実行', () => app.runner.run({ selection: true }), { icon: 'play' })
 command('stop', '停止', () => { if (!app.runner.running && app.runner.cancelRestart()) { app.runner.append([{ kind: 'meta', text: '自動の再実行をやめました' }]); return } app.runner.stop() }, { icon: 'stop' })
 command('restartPython', 'Python を再起動 (変数をすべて消す)', () => app.runner.restartPython(), { icon: 'refresh' })

@@ -16,6 +16,7 @@ import { refreshCorpus, loadEngine } from './ai-host.js'
 import { startAssist, noteLlmCrash } from './ai-assist.js'
 import { bootHealth } from './crash-guard.js'
 import { startKeepAlive } from './keep-alive.js'
+import { startUpdater, updateReady, applyUpdate } from './updater.js'
 import { warmComplete } from '../ai/complete.js'
 import './code-nav.js'
 import './github-sync.js'
@@ -57,6 +58,8 @@ function setupErrorHandling() {
   addEventListener('unhandledrejection', e => {
     const r = e.reason
     if (r && (r.name === 'AbortError' || /aborted|cancel/i.test(r.message || ''))) return
+    // 古い画面が、新しい版で消えた部品を読もうとした: 新しい版に切り替える
+    if (r && /dynamically imported module|Importing a module script failed|error loading dynamically/i.test(r.message || '') && updateReady()) { applyUpdate(); return }
     report(String(r && r.message || r), r && r.stack ? r.stack.split('\n').slice(0, 6).join('\n') : '')
   })
   app.commands.set('showErrors', { id: 'showErrors', title: '発生したエラーの記録を表示', run: async () => {
@@ -69,22 +72,18 @@ function setupErrorHandling() {
 // オフライン対応 (Service Worker)。はじめての画面の操作を待たずに、起動したらすぐ登録する
 function registerServiceWorker() {
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    // Web アプリのプレビュー: Service Worker が受けた __preview__/ の通信に答える (preview.js)
+    navigator.serviceWorker.addEventListener('message', e => {
+      if (e.data && e.data.type === 'fc-preview' && e.ports && e.ports[0]) import('./preview.js').then(m => m.handlePreview(e.data, e.ports[0]))
+    })
+    const hadController = !!navigator.serviceWorker.controller
     navigator.serviceWorker.register('sw.js').then(reg => {
-      reg.addEventListener('updatefound', () => {
-        const w = reg.installing
-        if (!w) return
-        w.addEventListener('statechange', () => {
-          if (w.state === 'installed' && navigator.serviceWorker.controller) {
-            toast('新しいバージョンがあります', { action: { label: '更新', run: () => { app.editors.flushDrafts(); location.reload() } }, duration: 12000 })
-          }
-        })
-      })
-      // 開きっぱなしでも 1 時間ごとに更新を確認
-      setInterval(() => reg.update().catch(() => {}), 3600000)
+      // 新しい版が入ったら、何も動いていないときに自動で切り替える (updater.js)
+      startUpdater(reg, hadController)
       // はじめて Service Worker が動き始めたら、1 回だけ読み込み直す
       // (Python の input() と停止に使う共有メモリは、Service Worker が付けるヘッダーのある状態で開き直すと使えるようになる)
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (self.crossOriginIsolated) return
+        if (self.crossOriginIsolated || hadController) return
         try { if (sessionStorage.getItem('forgecode.coi')) return; sessionStorage.setItem('forgecode.coi', '1') } catch { return }
         if (app.editors && app.editors.anyDirty && app.editors.anyDirty()) return
         try { if (app.editors) app.editors.flushDrafts() } catch {}
@@ -143,6 +142,8 @@ async function boot() {
     // Ctrl + ` : ターミナル (VS Code と同じ。エディタの中でも)
     if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === '`' || e.code === 'Backquote')) { e.preventDefault(); runCommand('toggleTerminal'); return }
     const mod = e.metaKey || e.ctrlKey
+    // エディタ・ノートブックなどが受け取ったキーは、ここでは扱わない
+    if (e.defaultPrevented || (e.target && e.target.closest && e.target.closest('.nb, .pv'))) return
     if (!mod) { if (e.key === 'F5') { e.preventDefault(); runCommand('run') } return }
     const k = e.key.toLowerCase()
     const inEditor = document.activeElement && document.activeElement.closest && document.activeElement.closest('.cm-editor')

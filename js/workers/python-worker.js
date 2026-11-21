@@ -17,6 +17,7 @@ const PYODIDE_VERSION = '314.0.8'
 const CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`
 const MICROPIP = 'micropip-0.11.1-py3-none-any.whl'
 
+let startedFromSnapshot = false
 let post = (m, transfer) => (transfer ? self.postMessage(m, transfer) : self.postMessage(m))
 let py = null
 let loading = null
@@ -93,6 +94,34 @@ function write(kind, bytes) {
 setInterval(() => flush(), 80)
 
 // ---- 読み込み ----
+// ---- 起動を速く: 準備が終わった Python の状態 (メモリのスナップショット) を保存して、次からそこから始める ----
+// ・ふつうに起動すると 2 秒ほど (Python の準備 + よく使う標準ライブラリの読み込み)。スナップショットからなら 0.2 秒ほど
+// ・保存するのは、まだプログラムを動かしていない・画面ともつながっていない状態だけ (毎回同じ)
+// ・30 MB ほどなので gzip で縮めて (7 MB ほど) Cache Storage に置く。Pyodide の版か PRELOAD が変わったら作り直す
+const SNAP_CACHE = 'forgecode-pysnap'
+const PRELOAD = 'json, ast, inspect, asyncio, re, traceback, typing, dataclasses, collections, functools, itertools, random, math, datetime, pathlib, io, base64, codeop, rlcompleter, linecache, tokenize, urllib.request, urllib.parse, zipfile, shutil, tempfile, textwrap, string, decimal, fractions, statistics, heapq, bisect, copy, pprint, enum, contextlib, glob, csv, html, uuid, hashlib, struct, weakref, operator, types, warnings, threading, queue, concurrent.futures, subprocess, email.utils, http.client, unittest, bdb, codecs, locale, calendar, time, os, sys'
+const SNAP_KEY = 'v1-' + PRELOAD.length
+const snapUrl = base => new URL(`__fc_pysnap__/${encodeURIComponent(base.replace(/[^\w.-]+/g, '_'))}/${SNAP_KEY}`, self.location && self.location.href ? self.location.href : 'http://localhost/').href
+const canSnap = () => typeof caches !== 'undefined' && typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined'
+async function readSnapshot(base) {
+  if (!canSnap()) return null
+  try {
+    const c = await caches.open(SNAP_CACHE)
+    const r = await c.match(snapUrl(base))
+    if (!r || !r.body) return null
+    return new Uint8Array(await new Response(r.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer())
+  } catch { return null }
+}
+async function saveSnapshot(base, buf) {
+  try {
+    const gz = await new Response(new Blob([buf]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer()
+    const c = await caches.open(SNAP_CACHE)
+    for (const k of await c.keys()) if (k.url !== snapUrl(base)) await c.delete(k)   // 古い版のもの
+    await c.put(snapUrl(base), new Response(gz, { headers: { 'Content-Type': 'application/octet-stream' } }))
+  } catch {}
+}
+async function dropSnapshot(base) { try { (await caches.open(SNAP_CACHE)).delete(snapUrl(base)) } catch {} }
+
 async function ensure() {
   if (py) return py
   if (!loading) {
@@ -100,7 +129,20 @@ async function ensure() {
       post({ type: 'status', state: 'loading', text: 'Python を準備しています…' })
       const u = new URL('../../vendor/pyodide/', import.meta.url)
       const base = u.protocol === 'file:' ? decodeURIComponent(u.pathname) : u.href // Node (テスト) ではファイルのパス
-      const p = await loadPyodide({ indexURL: base, lockFileURL: base + 'pyodide-lock.json', packageBaseUrl: CDN, env: { HOME: '/home/pyodide', MPLBACKEND: 'AGG', PYTHONUNBUFFERED: '1' } })
+      const opts = { indexURL: base, lockFileURL: base + 'pyodide-lock.json', packageBaseUrl: CDN, env: { HOME: '/home/pyodide', MPLBACKEND: 'AGG', PYTHONUNBUFFERED: '1' } }
+      let p = null, made = null
+      const snap = await readSnapshot(base)
+      if (snap) {
+        try { p = await loadPyodide({ ...opts, _loadSnapshot: snap }) } catch { p = null; dropSnapshot(base) }
+      }
+      if (!p) {
+        const make = canSnap()
+        p = await loadPyodide(make ? { ...opts, _makeSnapshot: true } : opts)
+        if (make) {
+          try { p.runPython('import ' + PRELOAD); made = p.makeMemorySnapshot() } catch { made = null }
+        }
+      }
+      startedFromSnapshot = !!snap && !made
       p.setStdout({ write: b => write('out', b) })
       p.setStderr({ write: b => write('err', b) })
       p.setStdin({ stdin: readLine, isatty: true })
@@ -115,7 +157,9 @@ async function ensure() {
       p.globals.set('__fc_dbg_src', DEBUGGER)
       p.runPython(SETUP)
       py = p
-      post({ type: 'status', state: 'ready', text: `Python ${p.runPython('import sys; sys.version.split()[0]')}` })
+      post({ type: 'status', state: 'ready', text: `Python ${p.runPython('import sys; sys.version.split()[0]')}`, snapshot: startedFromSnapshot })
+      // 次からすぐ起動できるように、手が空いたら保存する
+      if (made) { const buf = made; made = null; setTimeout(() => saveSnapshot(base, buf), 2500) }
       return p
     })().catch(e => { loading = null; throw e })
   }
@@ -431,6 +475,8 @@ sys.breakpointhook = __fc_breakpointhook
 self.__fc_image = (b64, key) => { flush(true); post({ type: 'image', data: b64, key: key || null }) }
 self.__fc_svg = svg => { flush(true); post({ type: 'image', data: btoa(unescape(encodeURIComponent(String(svg)))), mime: 'image/svg+xml' }) }
 self.__fc_html = (html, text) => { flush(true); post({ type: 'html', html: String(html).slice(0, 400000), text: String(text || '') }) }
+// 画面への知らせ (テストの結果・プロファイル・Web アプリなど): { type: 'event', kind, data (JSON) }
+self.__fc_event = (kind, json) => { flush(true); post({ type: 'event', kind: String(kind), data: String(json) }) }
 self.__fc_meta = text => { flush(true); post({ type: 'output', items: [{ kind: 'meta', text: String(text) }] }) }
 self.__fc_link = url => { flush(true); post({ type: 'link', url: String(url) }) }
 self.__fc_password = () => { passwordNext = true }
@@ -961,6 +1007,26 @@ async function run(m) {
   post({ type: 'done', id, ok, reason, error, files, ms: Math.round(performance.now() - t0) })
 }
 
+// ---- Web アプリのプレビュー: 1 回の通信に答える (_fcweb.handle) ----
+function web(m) {
+  const fail = (status, text) => post({ type: 'webResult', id: m.id, head: { status, headers: [['Content-Type', 'text/plain; charset=utf-8']] }, body: new TextEncoder().encode(text) })
+  if (!py) { fail(503, 'Python の準備ができていません'); return }
+  try {
+    resetBudget()
+    if (shared) shared.interrupt[0] = 0
+    py.FS.writeFile('/tmp/fcweb_req', m.body ? new Uint8Array(m.body) : new Uint8Array(0))
+    py.globals.set('__fc_web_req', JSON.stringify(m.req))
+    const head = JSON.parse(py.runPython('import _fcweb\n_fcweb.handle(__fc_web_req)'))
+    const body = py.FS.readFile('/tmp/fcweb_body')
+    flush(true)
+    post({ type: 'webResult', id: m.id, head, body }, [body.buffer])
+    // 通信の中で書いたファイル (データベースなど) をプロジェクトに戻す
+    let files = {}
+    try { files = changedFiles() } catch {}
+    if (Object.keys(files).length) post({ type: 'webFiles', files })
+  } catch (e) { flush(true); fail(500, String(e && e.message || e)) }
+}
+
 // ---- ライブラリ: Pyodide にあるものは読み込み、ないものは PyPI から入れる ----
 const outMsg = (kind, text) => { flush(true); post({ type: 'output', items: [{ kind, text }] }) }
 async function ensureImports(pyFiles, requirements) {
@@ -1076,7 +1142,19 @@ async function pipCommand(code) {
 
 // コンソール: 最後の実行の続きで、式や文を実行
 // ターミナルの python (対話モード) は、ns: 'repl' (続き) / 'repl-new' (新しく始める) / 'last' (python -i: 実行の続き)
+// ノートブックごとの名前空間 (nb:<パス>。nb-new:<パス> で作り直す)
+const nbSpaces = new Map()
 function namespace(ns) {
+  if (typeof ns === 'string' && /^nb(-new)?:/.test(ns)) {
+    const key = ns.slice(ns.indexOf(':') + 1)
+    let g = nbSpaces.get(key)
+    if (ns.startsWith('nb-new:') || !g) {
+      if (g) { try { g.destroy() } catch {} }
+      g = py.runPython('__fc_new_ns()')
+      nbSpaces.set(key, g)
+    }
+    return g
+  }
   if (ns === 'repl-new' || (ns === 'repl' && !replGlobals)) {
     if (replGlobals) { try { replGlobals.destroy() } catch {} }
     replGlobals = py.runPython('__fc_new_ns()')
@@ -1105,15 +1183,21 @@ async function evalCode(m) {
     }
     const pip = await pipCommand(m.code).catch(e => ({ ok: false, error: String(e && e.message || e).split('\n').slice(-1)[0] }))
     if (pip) { flush(true); post({ type: 'evalResult', id: m.id, ...pip }); return }
+    // ノートブック: プロジェクトのファイル・いる場所・input() を、ふつうの実行と同じに
+    if (m.files) writeProject(m.files, Array.isArray(m.keep) ? m.keep : null)
+    if (m.cwd !== undefined) { py.globals.set('__fc_cwd', m.cwd ? String(m.cwd) : null); py.runPython('__fc_chdir(__fc_cwd)') }
+    if (m.files) py.runPython(shared ? 'builtins.input = __fc_builtin_input' : 'builtins.input = __fc_no_input')
     const g = namespace(m.ns)
-    await ensureImports({ '<console>.py': m.code }).catch(() => {})
+    await ensureImports(m.files ? { ...Object.fromEntries([...snapshot].filter(([p, c]) => p.endsWith('.py') && typeof c === 'string')), '<console>.py': m.code } : { '<console>.py': m.code }).catch(() => {})
     py.globals.set('__fc_g', g)
     py.globals.set('__fc_code', m.code)
     const r = JSON.parse(py.runPython('__fc_eval(__fc_code, __fc_g)'))
     flush(true)
     try { py.runPython('__fc_show_figures()') } catch {}
-    if (r.ok) post({ type: 'evalResult', id: m.id, ok: true, value: r.value, html: r.html || null })
-    else post({ type: 'evalResult', id: m.id, ok: false, etype: r.type, error: r.type === 'KeyboardInterrupt' ? '停止しました' : r.error })
+    let files
+    if (m.files) { try { files = changedFiles() } catch {} }
+    if (r.ok) post({ type: 'evalResult', id: m.id, ok: true, value: r.value, html: r.html || null, files })
+    else post({ type: 'evalResult', id: m.id, ok: false, etype: r.type, error: r.type === 'KeyboardInterrupt' ? '停止しました' : r.error, files })
   } catch (e) {
     flush(true)
     post({ type: 'evalResult', id: m.id, ok: false, error: String(e && e.message || e) })
@@ -1134,4 +1218,5 @@ self.onmessage = e => {
   else if (m.type === 'eval') evalCode(m)
   // 生きているかの確認 (長い間裏にあった後など)
   else if (m.type === 'ping') post({ type: 'pong', id: m.id, ready: !!py })
+  else if (m.type === 'web') web(m)
 }

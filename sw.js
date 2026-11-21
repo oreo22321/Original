@@ -1,6 +1,6 @@
 // Service Worker: オフラインでも使えるようにアプリのファイルをキャッシュします
 // (tools/build-sw.mjs で VERSION と PRECACHE を更新します)
-const VERSION = '1dec3876ee'
+const VERSION = 'adee3ecabc'
 const CACHE = 'forgecode-' + VERSION
 const RUNTIME = 'forgecode-runtime'
 const PRECACHE = [
@@ -10,44 +10,52 @@ const PRECACHE = [
   "boot.js",
   "css/app.css",
   "dist/app/main.js",
-  "dist/chunks/ai-assist-XTNTCN76.js",
-  "dist/chunks/app-GYBABO2E.js",
+  "dist/chunks/ai-assist-DHLBO3DM.js",
+  "dist/chunks/app-G3VPYYDR.js",
   "dist/chunks/assist-Z6AZCOYT.js",
-  "dist/chunks/chunk-4AXLRMPC.js",
+  "dist/chunks/chunk-2F37GSQU.js",
+  "dist/chunks/chunk-3B4WXQCL.js",
   "dist/chunks/chunk-4MYTFDFL.js",
   "dist/chunks/chunk-5YFU3I5N.js",
   "dist/chunks/chunk-6YYWDLBJ.js",
-  "dist/chunks/chunk-A6S7RETE.js",
-  "dist/chunks/chunk-BB7CUXYB.js",
+  "dist/chunks/chunk-7GNSDBI4.js",
+  "dist/chunks/chunk-7QRXHPAS.js",
+  "dist/chunks/chunk-AGU3OMW5.js",
   "dist/chunks/chunk-CANPDHTU.js",
+  "dist/chunks/chunk-DAL56S24.js",
+  "dist/chunks/chunk-EV7RQ4TY.js",
   "dist/chunks/chunk-GFFV3COP.js",
-  "dist/chunks/chunk-IWRERTBV.js",
+  "dist/chunks/chunk-HLAUKS6A.js",
   "dist/chunks/chunk-JSS2YWBD.js",
-  "dist/chunks/chunk-LMAZ7UGJ.js",
-  "dist/chunks/chunk-MVLEP4PD.js",
-  "dist/chunks/chunk-MZT4OYFQ.js",
   "dist/chunks/chunk-OCXOK7H2.js",
   "dist/chunks/chunk-OGXIANOP.js",
+  "dist/chunks/chunk-Q5UKOYWD.js",
   "dist/chunks/chunk-Q6LWNVQE.js",
   "dist/chunks/chunk-QJPW3PIS.js",
-  "dist/chunks/chunk-TJNFSN6P.js",
+  "dist/chunks/chunk-QR6QNIQX.js",
   "dist/chunks/chunk-VLK6O2HE.js",
-  "dist/chunks/chunk-WGVHT4EI.js",
-  "dist/chunks/cloud-SYPFNQVA.js",
+  "dist/chunks/chunk-WYABCII2.js",
+  "dist/chunks/chunk-Z6M43OW4.js",
+  "dist/chunks/cloud-7H3OG6LP.js",
   "dist/chunks/cloud-core-DLVJ7J22.js",
   "dist/chunks/engine-KSS6D2WT.js",
   "dist/chunks/explain-OLE4ZNWD.js",
-  "dist/chunks/fflate-ECKODDUP.js",
-  "dist/chunks/file-preview-Z22Y5KCQ.js",
+  "dist/chunks/fflate-YZ6GXIB7.js",
+  "dist/chunks/file-preview-WRTESBB5.js",
   "dist/chunks/generate-GFHSBG4N.js",
-  "dist/chunks/github-sync-FMU4PVFI.js",
-  "dist/chunks/help-NRXIKVRM.js",
-  "dist/chunks/i18n-en-TSIMURZU.js",
+  "dist/chunks/github-sync-27SMMTPX.js",
+  "dist/chunks/help-4SJF4NH6.js",
+  "dist/chunks/i18n-en-46ZL5DCT.js",
   "dist/chunks/knowledge-3US6XSXY.js",
-  "dist/chunks/terminal-AWA3WXYG.js",
+  "dist/chunks/notebook-B52LMZIP.js",
+  "dist/chunks/preview-VRZ4WJN4.js",
+  "dist/chunks/profile-view-ZSELUOQH.js",
+  "dist/chunks/scm-LMLNLFW4.js",
+  "dist/chunks/terminal-BUJBDMIJ.js",
+  "dist/chunks/tests-view-MVHPQGN4.js",
   "dist/chunks/text-GPDYCE7D.js",
-  "dist/chunks/tk-view-76WG6IO7.js",
-  "dist/chunks/ui-KQUTBVGP.js",
+  "dist/chunks/tk-view-QOCV2VXO.js",
+  "dist/chunks/ui-CW7XABSM.js",
   "dist/workers/python-worker.js",
   "dist/workers/pytools-worker.js",
   "vendor/pywheels/autopep8-2.3.2-py2.py3-none-any.whl",
@@ -74,7 +82,12 @@ const LIB_CACHE = 'forgecode-libs'
 const LIB_URL = /^https:\/\/(cdn\.jsdelivr\.net\/pyodide\/v314\.0\.8\/full\/[^?#]+\.(whl|zip|json|tar)|files\.pythonhosted\.org\/packages\/[^?#]+\.whl)$/
 
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('forgecode-') && k !== CACHE && k !== RUNTIME && k !== PYODIDE_CACHE && k !== LIB_CACHE && !k.startsWith('forgecode-remote')).map(k => caches.delete(k)))).then(() => self.clients.claim()))
+  // ひとつ前の版のファイルは残す (開いたままの古い画面が、あとから読み込む部品を見つけられるように)
+  e.waitUntil(caches.keys().then(keys => {
+    const old = keys.filter(k => /^forgecode-[0-9a-f]{6,}$/.test(k) && k !== CACHE)
+    const keep = old[old.length - 1]
+    return Promise.all(keys.filter(k => k.startsWith('forgecode-') && k !== CACHE && k !== keep && k !== RUNTIME && k !== PYODIDE_CACHE && k !== LIB_CACHE && k !== 'forgecode-pysnap' && !k.startsWith('forgecode-remote')).map(k => caches.delete(k)))
+  }).then(() => self.clients.claim()))
 })
 
 // 共有メモリ (Python の input() と停止に使う) のための「クロスオリジン分離」: このアプリのファイルに必要なヘッダーを付ける
@@ -87,10 +100,46 @@ function isolate(res) {
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers })
 }
 
+// ---- Web アプリのプレビュー: __preview__/ の通信は、アプリの画面 (→ Python か プロジェクトのファイル) に答えてもらう ----
+const PREVIEW = '__preview__'
+const scopePath = () => new URL(self.registration.scope).pathname
+const isPreviewUrl = u => new URL(u).pathname.startsWith(scopePath() + PREVIEW + '/') || new URL(u).pathname === scopePath() + PREVIEW
+async function previewFetch(req, url, path) {
+  const wins = await self.clients.matchAll({ type: 'window' })
+  const appWin = wins.filter(c => !isPreviewUrl(c.url)).sort((a, b) => (b.focused - a.focused) || ((b.visibilityState === 'visible') - (a.visibilityState === 'visible')))[0]
+  const text = (status, msg) => new Response(msg, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', ...ISOLATION } })
+  if (!appWin) return text(503, 'ForgeCode のアプリを開いてから、もう一度読み込んでください')
+  const body = req.method === 'GET' || req.method === 'HEAD' ? null : await req.arrayBuffer()
+  const ch = new MessageChannel()
+  const res = await new Promise(resolve => {
+    const t = setTimeout(() => resolve(null), 60000)
+    ch.port1.onmessage = m => { clearTimeout(t); resolve(m.data) }
+    appWin.postMessage({ type: 'fc-preview', req: { method: req.method, path: path || '/', query: url.search.slice(1), headers: [...req.headers], prefix: scopePath() + PREVIEW, dest: req.destination }, body }, [ch.port2, ...(body ? [body] : [])])
+  })
+  if (!res) return text(504, '答えが返ってきませんでした (時間がかかりすぎました)')
+  const headers = new Headers()
+  for (const [k, v] of res.headers || []) { try { headers.append(k, v) } catch {} }
+  for (const [k, v] of Object.entries(ISOLATION)) headers.set(k, v)
+  // / から始まる転送先は、プレビューの中に
+  const loc = headers.get('Location')
+  if (loc && loc.startsWith('/') && !loc.startsWith('//') && !loc.startsWith(scopePath() + PREVIEW)) headers.set('Location', scopePath() + PREVIEW + loc)
+  const empty = req.method === 'HEAD' || res.status === 204 || res.status === 304
+  return new Response(empty ? null : res.body, { status: res.status, statusText: res.statusText || '', headers })
+}
+
 self.addEventListener('fetch', e => {
   const req = e.request
-  if (req.method !== 'GET') return
   const url = new URL(req.url)
+  if (url.origin === location.origin) {
+    const base = scopePath() + PREVIEW
+    if (url.pathname === base || url.pathname.startsWith(base + '/')) { e.respondWith(previewFetch(req, url, url.pathname.slice(base.length))); return }
+    // プレビューの中のページが「/」から始まる場所を読んだ (fetch('/api')・<img src="/static/a.png"> など)
+    if (!url.pathname.startsWith(scopePath()) && e.clientId) {
+      e.respondWith(self.clients.get(e.clientId).then(c => (c && isPreviewUrl(c.url) ? previewFetch(req, url, url.pathname) : fetch(req))))
+      return
+    }
+  }
+  if (req.method !== 'GET') return
   if (LIB_URL.test(req.url)) {
     // ファイル名に版が入っていて中身は変わらないので、保存したものを使う (Python のワーカーからの読み込み)
     e.respondWith(caches.open(LIB_CACHE).then(async c => {
@@ -118,7 +167,7 @@ self.addEventListener('fetch', e => {
   // アプリ本体は、このバージョン用にまとめて保存したものだけを返す
   // (ファイルごとに新旧が混ざると動かなくなるため、裏での個別更新はしない。新しい版は sw.js の更新で一括して切り替わる)
   e.respondWith(caches.open(CACHE).then(async c => {
-    const hit = await c.match(req, { ignoreSearch: true })
+    const hit = await c.match(req, { ignoreSearch: true }) || (rel.startsWith('dist/') ? await caches.match(req, { ignoreSearch: true }) : null)
     if (hit) return isolate(hit)
     try {
       const res = await fetch(req)

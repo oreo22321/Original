@@ -25,6 +25,12 @@ const P = {
   files: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
   outline: '<path d="M4 6h16M4 12h10M4 18h13"/>',
+  branch: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-11 7"/>',
+  beaker: '<path d="M9 3h6M10 3v6L4.5 18.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3"/><path d="M7.5 15h9"/>',
+  notebook: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3v18M12 8h4M12 12h4"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/>',
+  gauge: '<path d="M4.5 18a9 9 0 1 1 15 0"/><path d="m12 14 4-5"/><circle cx="12" cy="14" r="1.2"/>',
+  minus: '<path d="M5 12h14"/>',
   play: '<path d="M7 4.5v15l12-7.5z" fill="currentColor" stroke="none"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor" stroke="none"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
@@ -127,6 +133,8 @@ const FILE_KINDS = {
   package: ['cube', '#a493d6', 'パッケージ (__init__.py)'],
   test: ['check', '#6fae8a', 'テスト'],
   json: ['braces', '#b3a36e', 'JSON'],
+  nb: ['notebook', '#e8a33d', 'ノートブック (Jupyter)'],
+  html: ['globe', '#e37933', 'Web ページ (HTML)'],
   csv: ['layers', '#8fae6f', 'CSV (表のデータ)'],
   md: ['book', '#8d9097', 'メモ (Markdown)'],
   text: ['text', '#8d9097', 'テキスト'],
@@ -137,6 +145,8 @@ export function fileKind(path) {
   const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase()
   if (/\.(png|jpe?g|gif|webp|bmp|ico|svg|avif)$/.test(name)) return 'image'
   if (/\.(xlsx|xls|db|sqlite3?|pkl|pickle|npy|npz|zip|gz|pdf|mp3|wav|ogg|mp4|bin|parquet)$/.test(name)) return 'binary'
+  if (/\.ipynb$/.test(name)) return 'nb'
+  if (/\.html?$/.test(name)) return 'html'
   const m = /\.(pyw?|pyi|json|md|markdown|csv|tsv|txt)$/.exec(name)
   if (!m) return 'text'
   const ext = m[1]

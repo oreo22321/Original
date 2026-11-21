@@ -51,7 +51,7 @@ export function startKeepAlive() {
       clearTimeout(restTimer)
       restTimer = setTimeout(() => {
         if (!document.hidden || !r || getSettings().keepAwake === 'always') return
-        if (r.running || r.evalBusy || (r.terminals || []).some(t => t.busy || t.pending) || !r.worker) return
+        if (r.running || r.evalBusy || r.serving || (r.terminals || []).some(t => t.busy || t.pending) || !r.worker) return
         r.rest()
       }, 20 * 60 * 1000)
       return

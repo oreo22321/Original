@@ -60,12 +60,43 @@ ForgeCode は、iPhone・iPad・PC のブラウザで動く Python エディタ�
 - 色 (ANSI) と `\r` での書き換え (進み具合の表示) に対応 (色は VS Code のターミナルと同じ)。閉じても、次に開いたときに続きから始まります。
 - **スクリプト**: `for` / `while` / `until` / `if … elif … else … fi` / 関数 `名前() { … }` / `[ -f a ]` (`test`) / `$((計算))` / `read` / `break` `continue` `return` `local` `shift`。`sh run.sh` / `./run.sh` / `source` でシェルスクリプトも動きます。`do` や `then` の後で Enter すると続きの行 (`>`) を入力できます。
 - **便利に**: 履歴からの提案 (薄い文字。→ で確定)、`Ctrl + R` で履歴を検索、ターミナルを増やす (タブ)、`xargs` `watch` `zip` `unzip` `base64` `sha256sum` `file` `nl` `rev` `expr` `let`。
+- **データの加工 (v15)**: `awk` (パターン・列・変数・連想配列・関数・printf)・`jq` (パス・`select`・`map`・オブジェクトを作る・`-r -c`)・`sqlite3` (Python の sqlite3。`-header -column -csv -json -box`、対話モード)・`bc`・`column -t`・`paste`・`comm`・`fold`・`tac`・`shuf`・`split`・`cmp`。
+- **ファイル (v15)**: `tar -czf` / `-xzf` / `-tf`・`gzip` / `gunzip` / `zcat`・`xxd` (`-r`)・`hexdump -C`・`od`・`md5sum` / `sha1sum` / `sha512sum` (`-c`)・`mktemp`・`truncate`。
+- **書き方 (v15)**: `case … esac`・ヒアドキュメント (`<<EOF` `<<-EOF` `<<'EOF'`)・`<<< "文字"`・`${x:-既定}` `${x:=…}` `${#x}` `${x#…}` `${x%…}` `${x/a/b}` `${x:1:3}` `${x^^}`・`{a,b}` `{1..10}` `{01..05}`・`コマンド &` と `jobs` / `fg` / `wait` / `kill %1`・`eval`・`timeout`・`command -v`。
 - そのほか: `curl` / `wget` (相手が CORS を許可しているとき)、`date` `sleep` `time` `seq` `printf` `echo -e` `uptime` `free` `ps` `kill` `open` (エディタで開く)・`git push` / `git pull` (GitHub と同期)・`help`。
+
+### ノートブック (.ipynb)
+
+- 「その他」→「新しいノートブック」、または `.ipynb` を開くと、セルごとに書いて実行する画面になります (Jupyter・VS Code・Google Colab のノートブックも開けます)。
+- ▶ / `Shift + Enter` (実行して次へ)・`Ctrl/⌘ + Enter`・`Alt + Enter`。変数はセルをまたいで残り、「カーネルを再起動」で消えます。最後の式の値・`print`・pandas の表・matplotlib の図・エラーをセルの下に出し、`input()` もセルの中で答えられます。
+- Markdown のセル、セルの移動・種類の変更・削除、`.py` への書き出し。保存は nbformat 4 (出力も保存)。
+
+### Web アプリ・Web ページ
+
+- Flask (`app.run()`)・FastAPI (`uvicorn.run(app)`)・Bottle・`wsgiref`・`http.server` は、ポートを開く代わりに **アプリの中のブラウザ (プレビュー)** で動きます。通信は Service Worker (`__preview__/`) → 画面 → Python の順に届き、リンク・フォーム・`fetch`・転送もそのまま使えます。サーバーのエラーは Traceback の 500 ページに。
+- `.html` を開いて ▶ で、HTML・CSS・JavaScript をそのまま表示します (`console.log` とエラーはプレビューのコンソールに)。
+- ターミナル: `flask run`・`python -m http.server`・`preview ファイル.html`。
+
+### テスト
+
+- 左の「テスト」で `test_*.py` / `*_test.py` を一覧にし、すべて・ファイルごと・1 つだけ実行。✓ ✗・時間・失敗した行と値 (`assert 4 == 5`・`add(2, 2) の結果: 4`・リストのどこが違うか) を出し、タップでその行へ移動します。
+- pytest があれば pytest で、なければ同じ書き方の内蔵の実行役で動きます: フィクスチャ (`tmp_path`・`capsys`・`monkeypatch`・`@pytest.fixture`・`conftest.py`)・`parametrize`・`skip` / `skipif` / `xfail`・`raises`・`approx`・`unittest.TestCase`。ターミナルでは `pytest -k 名前 -x -v --lf`。
+
+### git (変更の記録)
+
+- 左の「ソース管理」: 変更の一覧 (新規・変更・削除)・ステージ・コミット・差分・履歴 (コミットの中身・revert・ここからブランチ・この時点に戻す)・ブランチの作成 / 切り替え / マージ / 削除・stash。
+- ターミナルの `git`: `init` `status` `add` `rm` `mv` `commit (-a --amend)` `log (--oneline --graph -n -p --stat)` `diff (--staged --stat)` `show` `restore` `reset (--soft --hard)` `branch` `switch` `checkout` `merge (3-way・衝突の印)` `revert` `cherry-pick` `stash` `tag` `blame` `rev-parse` `config`、`.gitignore`。ファイルの中身は Git と同じ SHA-1 で記録し、この端末 (IndexedDB) に保存します。`git push` / `pull` は「GitHub と同期」 (最後のコミットのメッセージで保存)。
+
+### 時間を計って実行 (プロファイル)
+
+- 「その他」→「時間を計って実行」: cProfile で関数ごとの回数・その中だけの時間・合計、`sys.monitoring` で行ごとの回数と時間の目安を表にします (タップでその場所へ)。ターミナルでは `profile ファイル.py` / `python -m cProfile ファイル.py`。
 
 ### 24 時間動かす
 
 - **クラウドで動かす (アプリを閉じても・電源を切っても)**: 「その他」→「クラウドで動かす」(ターミナルでは `cloud setup`) で、GitHub Actions のワークフロー (`.github/workflows/forgecode-cloud-<id>.yml`) と道具 (`.forgecode/cloud.py`) を同期先のリポジトリに置きます。GitHub のサーバーが 5 分ごと〜毎日 決まった時刻にプログラムを動かし、import しているライブラリは pip で入れ、`input()` には `input.txt` を渡します。プログラムが書いたファイルはリポジトリに保存 (次の実行はその続き)、出力と結果は `forgecode-cloud` ブランチに 1 つだけ残します (毎回置き換えるので増えません)。アプリでは実行の記録・最後の出力・「今すぐ実行」・「止める」が使え、ターミナルでも `cloud` / `cloud run` / `cloud log` / `cloud pull` / `cloud stop`。トークンには Contents に加えて Workflows と Actions の「Read and write」が要ります。公開リポジトリは無料・使い放題、非公開リポジトリは無料で月 2,000 分まで (1 回 1 分ほど) です。
 
+- **いつも最新**: 新しい版が出ると裏で入れておき、何も動いていないとき (アプリが裏に回った・しばらく触っていない) に自動で切り替えます。「その他」の一番下に今の版が出ます。
+- **起動を速く**: 1 回目に「準備が終わった Python の状態」(メモリのスナップショット) を保存し、2 回目からはそこから始めます (Python の準備が約 3 倍速く)。
 - **画面を消さない**: 実行中は画面が自動で消えないようにします (Screen Wake Lock。設定で「いつも」「使わない」も選べます)。
 - **ずっと動かす**: 設定 (または実行画面の「…」) で「エラーで止まったら自動で再実行」をオンにすると、止まったプログラムを 3 秒後に実行し直します (すぐ止まるのが続くと最大 60 秒まで間を延ばします)。実行画面に続けて動いている時間と再実行の回数、下のバーに経過時間を出します。
 - **止まらない出力**: 行数の上限をなくし、とても多いときだけ省いて知らせます (最後の 100 行は残します)。画面に残すのは新しい 3000 行 (ターミナルは 4000 行) なので、何時間動かしてもメモリが増え続けません。
@@ -189,9 +220,17 @@ css/, js/                    アプリ本体のソース (ES モジュール)
     themes.js                テーマ (VS Code の Dark Modern / Light Modern と同じ色)・エディタの外のコードの色付け
     semantic.js              意味による色分け (変数・関数・クラス・モジュール・定数。Pylance と同じ考え方)
   js/app/                    画面 (ファイル一覧・タブ・実行パネル・デバッグ・設定・初回案内など)
-    runner.js                実行 (Python ワーカーとの受け渡し・input()・停止・図・表・リンク・コンソール・自動の再実行)・ターミナルの表示
+    runner.js                実行 (Python ワーカーとの受け渡し・input()・停止・図・表・リンク・コンソール・自動の再実行・Web アプリへの通信)・ターミナルの表示
     terminal.js              ターミナルの画面 (入力・履歴・Tab の補完・Python の対話モード・実行の出力と input())
-    shell.js                 ターミナルのシェル (字句・構文・展開・パイプ・リダイレクト・コマンド)。画面から切り離してあり、Node でテストできます
+    shell.js                 ターミナルのシェル (展開・パイプ・リダイレクト・case・ヒアドキュメント・ジョブ)。画面から切り離してあり、Node でテストできます
+    shell/                   シェルの部品: parse.js (字句・構文・計算)・util.js (道具)・help.js (help の一覧)・awk.js (awk のインタプリタ)・
+                             cmd-files / cmd-text / cmd-sys / cmd-script / cmd-python / cmd-git / cmd-more.js (コマンドを種類ごとに)
+    git-core.js / scm.js     git (コミット・index・ブランチ・Myers の差分・3-way マージ・stash・blame) と、ソース管理の画面
+    tests-view.js            テストの画面 (一覧・実行・結果・ひな形)
+    notebook.js              ノートブック (.ipynb) の画面と実行
+    preview.js               Web アプリ・Web ページのプレビュー (Service Worker から届いた通信に答える・画面)
+    profile-view.js          プロファイルの表
+    updater.js               新しい版を自動で切り替える
     ansi.js                  ANSI の色 (VS Code のターミナルと同じ色) を画面の飾りに
     keep-alive.js            24 時間動かすための見張り (画面を消さない・Python の見守りと休ませる・データを消えにくく)
     cloud-core.js / cloud.js クラウド実行 (GitHub Actions のワークフローと cloud.py を作る・今すぐ実行・記録) と、その画面
@@ -223,7 +262,8 @@ css/, js/                    アプリ本体のソース (ES モジュール)
     assist.js                AI のエラー検知・実行エラーの修正・続きの提案・作ったコードの見直し (答えは必ず確かめる)
   js/workers/                Web Worker
     python-worker.js         実行用の Python (Pyodide)・デバッガー (bdb + sys.monitoring)・PyPI からのインストール (micropip)
-    py-runtime.js            ふつうの Python との違いを埋める道具 (time.sleep・スレッド・asyncio・urllib・display・multiprocessing・webbrowser)
+    py-runtime.js            ふつうの Python との違いを埋める道具 (time.sleep・スレッド・asyncio・urllib・display)。ほかは py-shell (subprocess) / py-mp (multiprocessing) / py-compat (webbrowser・winsound)
+    py-test.js / py-prof.js / py-web.js  テストの実行役 (_fctest)・プロファイラー (_fcprof)・Web アプリのプレビュー (_fcweb・uvicorn)
     py-turtle.js             ブラウザ用の turtle (描く命令を画面へ送る・キー操作やタイマーを受け取る)
     py-pygame.js / pg-canvas.js  pygame の互換版 (Python 側) と、ワーカーの中のキャンバスで描く部分
     py-tkinter.js            tkinter の互換版 (ウィジェットの木・命令を画面へ送る・操作を受け取る)
@@ -240,8 +280,8 @@ tools/                       ビルド・ローカルサーバー・ライブラ
 ```
 
 - テスト: `node tests/run-all.mjs` (すべてのユニットテスト。Python のワーカーも Node の中で動かします)
-  - `shell` (ターミナルのシェル) / `cloud` (クラウド実行。cloud.py を python3 と git で実際に動かします) / `python` (実行・ターミナルの対話モード) / `runtime` (asyncio・スレッド・turtle・urllib など。`NET=1` で PyPI からのインストールも) / `pydebug` (デバッガー) / `pytools` (補完・チェック・整形・参照・名前の変更) / `ai` (Forge AI) / `github` (GitHub 同期。偽の GitHub `tests/mock-github.mjs` を相手に)
-  - ブラウザでの通し確認: `node tests/e2e/run.mjs` (`cd tools && npm ci && npx playwright install chromium` が必要)
+  - `shell` (ターミナルのシェル・awk・jq など) / `git` (git-core とターミナルの git) / `devtools` (テストの実行役・プロファイラー・Web アプリ。Python の側) / `cloud` (クラウド実行。cloud.py を python3 と git で実際に動かします) / `python` (実行・ターミナルの対話モード) / `runtime` (asyncio・スレッド・turtle・urllib など。`NET=1` で PyPI からのインストールも) / `pydebug` (デバッガー) / `pytools` (補完・チェック・整形・参照・名前の変更) / `ai` (Forge AI) / `github` (GitHub 同期。偽の GitHub `tests/mock-github.mjs` を相手に)
+  - ブラウザでの通し確認: `node tests/e2e/run.mjs` と `node tests/e2e/v15.mjs` (git・テスト・プロファイル・Web プレビュー・ノートブック) (`cd tools && npm ci && npx playwright install chromium` が必要)
   - GitHub Actions (`.github/workflows/test.yml`) が、main へのプッシュとプルリクエストのたびに、ユニットテスト・配信用ファイルが最新か・ブラウザでの通し確認を行います
 - **ファイルを変更したら `node tools/build.mjs`** を実行してください (dist/ のまとめ直し・index.html の先読み・Service Worker のキャッシュ一覧を更新します。CI は dist/ が最新でないと失敗します)
 - 開発中は `node tools/serve.mjs` で配信し、`http://localhost:8080/?src` で開くと、まとめ直さずにソースのまま確認できます

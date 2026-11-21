@@ -44,7 +44,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: ブラウザでの通し確認 (E2E)
-        run: node tests/e2e/run.mjs
+        run: node tests/e2e/run.mjs && node tests/e2e/v15.mjs
 
       - name: 失敗したときの画面
         if: failure()

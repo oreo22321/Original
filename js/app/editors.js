@@ -127,7 +127,9 @@ export class EditorManager {
   activeDoc() { return this.active ? this.docs.get(this.active) : null }
   activeView() { return this.views[this.activePane] || this.views[0] || null }
 
-  async open(path, { activate = true, cursor, scroll, line, pane } = {}) {
+  async open(path, { activate = true, cursor, scroll, line, pane, raw = false } = {}) {
+    // ノートブック (.ipynb) は、セルの画面で開く (JSON のまま見るときは raw)
+    if (!raw && /\.ipynb$/i.test(path) && !this.docs.has(path)) { const m = await import('./notebook.js'); await m.openNotebook(path); return null }
     let doc = this.docs.get(path)
     if (!doc) {
       const pid = app.project.id

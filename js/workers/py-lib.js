@@ -7,7 +7,7 @@ import { tkinterFiles } from './py-tkinter.js'
 
 export { FC_LIB }
 // ForgeCode が用意しているので、Pyodide や PyPI から入れないもの
-export const SHIMS = new Set(['pygame', 'tkinter', '_tkinter', 'turtle', 'webbrowser', 'multiprocessing', 'winsound', 'playsound', 'msvcrt', '_fcshell'])
+export const SHIMS = new Set(['pygame', 'tkinter', '_tkinter', 'turtle', 'webbrowser', 'multiprocessing', 'winsound', 'playsound', 'msvcrt', '_fcshell', '_fctest', '_fcprof', '_fcweb', '_fcnb', 'uvicorn'])
 export function libFiles() {
   return { ...runtimeFiles(TURTLE), ...pygameFiles(), ...tkinterFiles() }
 }

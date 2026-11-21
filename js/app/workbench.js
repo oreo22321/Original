@@ -10,7 +10,8 @@ import { Explorer } from './explorer.js'
 import { Runner, fmtElapsed } from './runner.js'
 import { KeyBar } from './keybar.js'
 import { SearchView, OutlineView } from './views.js'
-import { SettingsView } from './settings-ui.js'
+import { SettingsView, APP_VERSION } from './settings-ui.js'
+import { updateReady, applyUpdate } from './updater.js'
 import { AiView } from './ai-panel.js'
 import { LANG_LABELS } from '../editor/setup.js'
 import { openSearchPanel, toggleComment, foldAll, unfoldAll, undo, redo, selectAll } from '../../vendor/codemirror.js'
@@ -19,6 +20,8 @@ const VIEWS = [
   ['files', 'files', 'ファイル'],
   ['search', 'search', '検索'],
   ['outline', 'outline', '構造'],
+  ['scm', 'branch', 'ソース管理'],
+  ['tests', 'beaker', 'テスト'],
   ['ai', 'sparkle', 'AI'],
   ['settings', 'gear', '設定'],
 ]
@@ -146,6 +149,8 @@ export class Workbench {
     if (id === 'search') this.views.search.focus()
     if (id === 'outline') this.views.outline.render()
     if (id === 'ai') this.views.ai.render()
+    // ソース管理・テストは、はじめて開いたときに読み込む (起動を軽く)
+    if (id === 'scm' || id === 'tests') { if (this.views[id]) this.views[id].render(); else this.loadView(id) }
     // AI の会話は文章が長いので、PC では少し広く表示する (ドラッグで変えた幅は変えない)
     if (this.layout === 'desktop') this.sidebar.style.width = (id === 'ai' ? Math.max(this.sidebarWidth, 380) : this.sidebarWidth) + 'px'
     if (id === 'settings') {
@@ -153,6 +158,17 @@ export class Workbench {
       if (focusText) { this.views.settings.search.value = focusText; this.views.settings.filter = focusText.toLowerCase(); this.views.settings.render() }
     }
     this.applySidebar()
+  }
+
+  // あとから読み込む画面 (ソース管理・テスト)
+  loadView(id) {
+    if (this.views[id]) return Promise.resolve(this.views[id])
+    this.viewLoads = this.viewLoads || {}
+    if (!this.viewLoads[id]) {
+      const make = id === 'scm' ? import('./scm.js').then(m => new m.ScmView(this.viewEls.scm)) : import('./tests-view.js').then(m => new m.TestsView(this.viewEls.tests))
+      this.viewLoads[id] = make.then(v => (this.views[id] = v))
+    }
+    return this.viewLoads[id]
   }
 
   applyPanel() {
@@ -231,9 +247,11 @@ export class Workbench {
     const runner = app.runner
     const running = runner && runner.running
     const target = runner && runner.runTarget()
-    const runnable = !!target || (doc && doc.lang === 'python') || app.files.some(f => !f.dir && /\.pyw?$/.test(f.path))
+    const runnable = !!target || (doc && (doc.lang === 'python' || /\.html?$/.test(doc.path))) || app.files.some(f => !f.dir && /\.pyw?$/.test(f.path))
     const btn = (ic, title, fn, on) => h('button', { class: 'icon-btn' + (on ? ' on' : ''), title, 'aria-label': title, onclick: fn }, icon(ic, 20))
     if (doc && doc.lang === 'markdown') a.append(btn('eye', 'プレビュー', () => { app.editors.togglePreview(); this.updateTop() }, app.editors.preview))
+    // Web ページ (HTML) / 動いている Web アプリ: アプリの中のブラウザで見る
+    if ((doc && /\.html?$/.test(doc.path)) || (runner && runner.serving)) a.append(btn('globe', runner && runner.serving ? `プレビュー (${runner.serving.title})` : 'Web ページをプレビュー', () => runCommand('webPreview'), !!(runner && runner.serving)))
     if (this.layout === 'desktop' && app.editors.order.length > 1) a.append(btn('split', 'エディタを分割', () => { app.editors.toggleSplit(); this.updateTop() }, app.editors.split))
     // スマホ: ターミナル (全画面) / PC・タブレット: 下のパネル (出力・ターミナル・問題・デバッグ)
     if (this.layout === 'mobile') a.append(btn('terminal', 'ターミナル', () => runCommand('terminal')))
@@ -268,6 +286,9 @@ export class Workbench {
       hasSel && py ? { label: '選択範囲だけ実行', icon: 'play', run: () => runCommand('runSelection') } : null,
       { label: 'ターミナル', icon: 'terminal', hint: '⌃`', run: () => runCommand('terminal') },
       { label: '実行画面を開く', icon: 'play', run: () => runCommand('openRunScreen') },
+      { label: 'テストを実行', icon: 'beaker', run: () => runCommand('runTests') },
+      { label: '新しいノートブック', icon: 'notebook', run: () => runCommand('newNotebook') },
+      { label: '時間を計って実行 (プロファイル)', icon: 'gauge', run: () => runCommand('profileRun'), disabled: !(py || (app.runner && app.runner.runTarget())) },
       { label: 'Python を再起動', icon: 'refresh', run: () => runCommand('restartPython') },
       { label: 'クラウドで動かす (24 時間)', icon: 'cloud', run: () => runCommand('cloud') },
       { section: 'コード' },
@@ -284,6 +305,7 @@ export class Workbench {
       { label: 'プロジェクト一覧', icon: 'folder', run: () => runCommand('projects') },
       { label: '設定', icon: 'gear', run: () => runCommand('settings') },
       { label: '使い方', icon: 'book', run: () => runCommand('help') },
+      updateReady() ? { label: `新しいバージョンに更新`, icon: 'download', hint: '今すぐ', run: () => applyUpdate() } : { label: `ForgeCode ${APP_VERSION}`, icon: 'info', hint: '最新', run: () => runCommand('whatsNew') },
     ], anchor)
   }
 
@@ -400,6 +422,19 @@ command('redo', 'やり直し', () => { const v = app.editors.activeView(); if (
 command('selectAll', 'すべて選択', () => { const v = app.editors.activeView(); if (v) { selectAll(v); v.focus() } }, { key: '⌘A' })
 command('closeTab', 'タブを閉じる', () => app.editors.close(app.editors.active), { icon: 'close', key: '⌘W' })
 command('closeAll', 'すべてのタブを閉じる', () => app.editors.closeAll())
+command('newNotebook', '新しいノートブック (.ipynb)', async () => {
+  if (!app.project) return
+  const { newFile } = await import('./app.js')
+  const { EMPTY_NOTEBOOK } = await import('./notebook.js')
+  let n = 1, path = 'notebook.ipynb'
+  while (app.files.some(f => f.path === path)) path = `notebook${++n}.ipynb`
+  await newFile(path, EMPTY_NOTEBOOK())
+  await app.editors.open(path)
+}, { icon: 'notebook' })
+command('sourceControl', 'ソース管理 (git)', () => app.wb.showView('scm'), { icon: 'branch' })
+command('testsView', 'テストの一覧', () => app.wb.showView('tests'), { icon: 'beaker' })
+command('runTests', 'テストをすべて実行', async () => { const v = await app.wb.loadView('tests'); app.wb.showView('tests'); v.run([]) }, { icon: 'beaker' })
+command('gitCommit', 'git: コミット', () => app.wb.showView('scm'), { icon: 'branch' })
 command('toggleSplit', 'エディタを分割', () => app.editors.toggleSplit(), { icon: 'split' })
 command('togglePreview', 'プレビューの切り替え (Markdown)', () => { app.editors.togglePreview(); app.wb.updateTop() }, { icon: 'eye' })
 command('toggleWrap', '折り返しの切り替え', () => setSettings({ wordWrap: !getSettings().wordWrap }), { icon: 'wrap' })
